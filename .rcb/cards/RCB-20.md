@@ -1,6 +1,6 @@
 ---
 id: RCB-20
-title: P5.1 MCP server: rcb mcp
+title: "P5.1 MCP server: rcb mcp"
 status: backlog
 priority: high
 labels: [server, agents]

@@ -1,6 +1,6 @@
 ---
 id: RCB-18
-title: P4.3 Who is where: card files glow on the map
+title: "P4.3 Who is where: card files glow on the map"
 status: backlog
 priority: high
 labels: [web, viz]

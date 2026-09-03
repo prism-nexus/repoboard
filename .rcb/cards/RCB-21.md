@@ -1,6 +1,6 @@
 ---
 id: RCB-21
-title: P5.2 docs/AGENTS.md
+title: "P5.2 docs/AGENTS.md"
 status: backlog
 priority: medium
 labels: [docs, agents]

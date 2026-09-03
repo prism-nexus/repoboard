@@ -1,6 +1,6 @@
 ---
 id: RCB-24
-title: P6.3 Name, GitHub repo, v0.1.0 tag (owner decides)
+title: "P6.3 Name, GitHub repo, v0.1.0 tag (owner decides)"
 status: backlog
 priority: high
 labels: [owner]

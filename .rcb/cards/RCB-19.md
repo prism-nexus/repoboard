@@ -1,6 +1,6 @@
 ---
 id: RCB-19
-title: P4.4 Import graph for JS/TS
+title: "P4.4 Import graph for JS/TS"
 status: backlog
 priority: low
 labels: [web, viz]

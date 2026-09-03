@@ -12,3 +12,6 @@ coverage/
 .claude/scheduled_tasks.lock
 
 .DS_Store
+
+# build / tool output
+.vitest/

@@ -1,0 +1,16 @@
+{
+  "name": "@rcb/web",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "rcb web UI (Vite + React + d3). Stub until P3.",
+  "license": "MIT",
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "build": "echo '@rcb/web: vite build not implemented yet (P3.1)'",
+    "dev": "echo '@rcb/web: vite dev not implemented yet (P3.1)'"
+  },
+  "dependencies": {
+    "@rcb/core": "workspace:*"
+  }
+}

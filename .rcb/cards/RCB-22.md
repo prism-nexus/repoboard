@@ -1,6 +1,6 @@
 ---
 id: RCB-22
-title: P6.1 README with GIF
+title: "P6.1 README with GIF"
 status: backlog
 priority: medium
 labels: [docs]

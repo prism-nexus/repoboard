@@ -1,6 +1,6 @@
 ---
 id: RCB-23
-title: P6.2 npx rcb works from npm pack
+title: "P6.2 npx rcb works from npm pack"
 status: backlog
 priority: high
 labels: [infra]

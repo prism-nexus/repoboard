@@ -1,6 +1,6 @@
 ---
 id: RCB-17
-title: P4.2 Git activity heat overlay
+title: "P4.2 Git activity heat overlay"
 status: backlog
 priority: medium
 labels: [web, viz]

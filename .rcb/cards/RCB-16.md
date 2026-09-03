@@ -1,6 +1,6 @@
 ---
 id: RCB-16
-title: P4.1 Treemap of files by size and language
+title: "P4.1 Treemap of files by size and language"
 status: backlog
 priority: high
 labels: [web, viz]

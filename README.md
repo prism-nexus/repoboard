@@ -11,3 +11,8 @@ Git is the history. Any agent that can edit a file can move a card; the board up
 
 ## Known issues
 (numbered `K1` upward; a commit that closes one says `Closes K<n>` and edits this list)
+- **K1** A card whose `title:` contains a colon (`P3.1 Board view: columns`) is invalid YAML unless
+  quoted, and an agent writing frontmatter by hand will do this. Found on 7 of the first 24 cards
+  written by the orchestrator (2026-09-02). Options: (a) document "quote your titles" in
+  `AGENTS.md`; (b) a lenient fallback in `parseCard` for the `title` line only; (c) the CLI/MCP
+  always quote on serialize (they do, via `yaml`). Doing (a) and (c); (b) is open.

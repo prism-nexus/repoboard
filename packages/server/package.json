@@ -3,17 +3,33 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
-  "description": "rcb server: CLI, HTTP, WebSocket, file watcher, repo scanner, MCP. Stub until P2.",
+  "description": "rcb server: CLI (bin: rcb), HTTP, WebSocket, file watcher, repo scanner. MCP arrives in P5.",
   "license": "MIT",
+  "bin": {
+    "rcb": "./dist/cli.js"
+  },
+  "main": "./dist/index.js",
+  "exports": {
+    ".": "./dist/index.js"
+  },
+  "files": [
+    "dist"
+  ],
   "scripts": {
     "typecheck": "tsc --noEmit",
-    "build": "tsc -p tsconfig.build.json",
-    "dev": "echo '@rcb/server: dev server not implemented yet (P2.1)'"
-  },
-  "devDependencies": {
-    "@types/node": "^26.4.1"
+    "build": "tsup",
+    "dev": "tsup && node dist/cli.js serve"
   },
   "dependencies": {
-    "@rcb/core": "workspace:*"
+    "@rcb/core": "workspace:*",
+    "chokidar": "^5.0.0",
+    "ws": "^8.21.3",
+    "yaml": "^2.9.0",
+    "zod": "^4.5.4"
+  },
+  "devDependencies": {
+    "@types/node": "^26.4.1",
+    "@types/ws": "^8.18.1",
+    "tsup": "^8.5.1"
   }
 }

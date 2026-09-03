@@ -1,0 +1,73 @@
+/** Test helpers. Everything lives under os.tmpdir(); the repo's own .rcb is never touched. */
+import type { EventEmitter } from 'node:events';
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { defaultBoardConfig, serializeBoard } from '@rcb/core';
+
+export const NOW = new Date('2026-09-02T22:41:10Z');
+
+export function cardText(
+  id: string,
+  status: string,
+  extra: { title?: string; assignee?: string; body?: string } = {},
+): string {
+  const lines = [
+    '---',
+    `id: ${id}`,
+    `title: ${JSON.stringify(extra.title ?? `Card ${id}`)}`,
+    `status: ${status}`,
+  ];
+  if (extra.assignee) lines.push(`assignee: ${extra.assignee}`);
+  lines.push('created: 2026-09-02T22:00:00Z', 'updated: 2026-09-02T22:00:00Z', '---');
+  return `${lines.join('\n')}\n${extra.body ?? '\nBody.\n'}`;
+}
+
+export interface TempRepo {
+  root: string;
+  cardsDir: string;
+  cleanup(): Promise<void>;
+}
+
+/** A temp root with `.rcb/board.yml` (defaults) and the given cards. */
+export async function makeTempRcb(cards: Record<string, string> = {}): Promise<TempRepo> {
+  const root = await mkdtemp(join(tmpdir(), 'rcb-test-'));
+  const cardsDir = join(root, '.rcb', 'cards');
+  await mkdir(cardsDir, { recursive: true });
+  await writeFile(join(root, '.rcb', 'board.yml'), serializeBoard(defaultBoardConfig()));
+  for (const [name, text] of Object.entries(cards)) {
+    await writeFile(join(cardsDir, name), text);
+  }
+  return { root, cardsDir, cleanup: () => rm(root, { recursive: true, force: true }) };
+}
+
+export async function makeTempDir(prefix = 'rcb-test-'): Promise<string> {
+  return mkdtemp(join(tmpdir(), prefix));
+}
+
+/** Resolve with the first emission of `event` whose payload passes `pred`, or reject on timeout. */
+export function waitForEvent<T = unknown>(
+  emitter: EventEmitter,
+  event: string,
+  pred: (payload: T) => boolean = () => true,
+  timeoutMs = 4000,
+): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => {
+      emitter.off(event, handler);
+      reject(new Error(`timed out after ${timeoutMs}ms waiting for "${event}"`));
+    }, timeoutMs);
+    // biome-ignore lint/suspicious/noExplicitAny: EventEmitter listener payloads are untyped here
+    const handler = (payload: any): void => {
+      if (!pred(payload as T)) return;
+      clearTimeout(timer);
+      emitter.off(event, handler);
+      resolve(payload as T);
+    };
+    emitter.on(event, handler);
+  });
+}
+
+export function sleep(ms: number): Promise<void> {
+  return new Promise((r) => setTimeout(r, ms));
+}

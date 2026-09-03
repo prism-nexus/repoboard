@@ -10,7 +10,7 @@
     "node": ">=20"
   },
   "scripts": {
-    "test": "vitest run",
+    "test": "vitest run && pnpm --filter @rcb/web check:size",
     "typecheck": "pnpm -r typecheck",
     "lint": "biome check .",
     "format": "biome format --write .",

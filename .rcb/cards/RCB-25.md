@@ -6,8 +6,16 @@ priority: high
 labels:
   - infra
 created: 2026-09-03T18:43:31Z
-updated: 2026-09-03T18:43:31Z
+updated: 2026-09-03T18:50:00Z
 ---
 
 First step of `docs/P6-SHIP-BRIEF.md` §"P6.0 first". Blocks RCB-22, RCB-23, RCB-26.
-Package, bin, data dir `.rcb/` → `.repoboard/`, default prefix `RB`; this repo keeps `RCB`.
+
+Plan §11:
+
+> - **O1 — name: `repoboard`.** npm package `repoboard`, bin `repoboard`. Rename lands in P6 and
+>   also renames the data directory `.rcb/` → `.repoboard/`, the default prefix `RCB` → `RB`, and
+>   every doc; the old names must not survive in user-facing text. (Directory and prefix names are
+>   the orchestrator's proposal; the owner can override before P6 starts.)
+
+Brief: `@rcb/server` → `repoboard` (unscoped), `@rcb/core` → `@repoboard/core`, `@rcb/web` → `@repoboard/web`; bin `repoboard`; `git mv .rcb .repoboard`; events file, localStorage keys, wordmark, every doc and fixture. Final check: `grep -rni '\brcb\b'` returns only HANDOFF history and this repo's card ids.

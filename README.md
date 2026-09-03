@@ -28,3 +28,10 @@ Git is the history. Any agent that can edit a file can move a card; the board up
   because it includes every body. Agents will reach for `--json`. Make it compact by default
   (id, title, status, assignee, priority, labels, files, updated) with `--full` for bodies, and
   apply the same shape to the MCP `list_cards` result.
+- **K7** A card that points at a doc section (`Task P6.2 in docs/BUILD-PLAN.md §5`) shows only
+  the pointer; the reader has to leave the board to learn what the task is. Owner's note
+  (2026-09-03): cards should populate from the lines they reference so the drawer shows what the
+  card actually contains. Not in the plan. Two shapes: (a) convention — the orchestrator quotes
+  the referenced lines into the body (done for RCB-22..26 as the interim); (b) feature — a
+  `refs:` field (`path#heading` or `path:L10-L20`) that the drawer renders live from the file.
+  (b) is post-v0.1 unless the owner says otherwise.

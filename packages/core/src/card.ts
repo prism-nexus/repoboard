@@ -19,13 +19,14 @@ export const CardFrontmatterSchema = z.looseObject({
   priority: PrioritySchema.optional(),
   labels: z.array(z.string()).optional(),
   files: z.array(z.string()).optional(),
+  refs: z.array(z.string()).optional(),
 });
 
 /** Frontmatter + body = a Card. */
 export const CardSchema = CardFrontmatterSchema.extend({ body: z.string() });
 
 export const REQUIRED_CARD_KEYS = ['id', 'title', 'status', 'created', 'updated'] as const;
-export const OPTIONAL_CARD_KEYS = ['assignee', 'priority', 'labels', 'files'] as const;
+export const OPTIONAL_CARD_KEYS = ['assignee', 'priority', 'labels', 'files', 'refs'] as const;
 /** Canonical frontmatter order on serialize; unknown keys follow in their original order. */
 const KNOWN_ORDER = [
   'id',
@@ -35,6 +36,7 @@ const KNOWN_ORDER = [
   'priority',
   'labels',
   'files',
+  'refs',
   'created',
   'updated',
 ] as const;

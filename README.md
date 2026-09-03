@@ -50,7 +50,9 @@ page an agent needs, including a paragraph to paste into a `CLAUDE.md`.
 
 - **Board** — one column per `board.yml` entry with its card count and WIP limit; each card
   shows its assignee as an avatar (emoji and color hashed from the `assignee` string), labels,
-  and how many files it names. Drag and drop writes the card file.
+  and how many files and refs it names. Drag and drop writes the card file. A card's `refs:`
+  (`docs/BUILD-PLAN.md@P6.2`, `README.md#Known issues`, `src/x.ts:L10-L20`) render in the
+  drawer as the referenced lines, read from the file on every open — point, don't paste.
 - **Map** — a treemap of the repo (files by size, colored by language; this repo: 127 files,
   layout under 1.2 ms on every run recorded in `docs/HANDOFF.md`), heat modes for churn over 30 and 90 days and for
   recent edits, an import graph for JS/TS (117 edges here), and *who is where*: files named on
@@ -89,7 +91,7 @@ columns:
 
 ```sh
 pnpm install
-pnpm test        # vitest (145 tests) + a gzipped-bundle size check (134.6 KB JS, limit 600 KB)
+pnpm test        # vitest (191 tests) + a gzipped-bundle size check (134.6 KB JS, limit 600 KB)
 pnpm typecheck && pnpm lint
 pnpm dev         # server + web with hot reload
 pnpm build       # packages/server/dist/cli.js, self-contained with the built web app
@@ -129,13 +131,15 @@ repo until after v1 (O2).
   `list_cards` uses the same rows and formatter, with `full: true` for bodies. Measured on this
   repo's 27 cards, bytes: CLI `--json` 18,290 → 6,433; `--json --full` 16,240; table 2,149;
   MCP `list_cards` result 8,506 → 6,432 (`full: true` 16,239).
-- **K7** A card that points at a doc section (`Task P6.2 in docs/BUILD-PLAN.md §5`) shows only
-  the pointer; the reader has to leave the board to learn what the task is. Owner's note
-  (2026-09-03): cards should populate from the lines they reference so the drawer shows what the
-  card actually contains. Not in the plan. Two shapes: (a) convention — the orchestrator quotes
-  the referenced lines into the body (done for RCB-22..26 as the interim); (b) feature — a
-  `refs:` field (`path#heading` or `path:L10-L20`) that the drawer renders live from the file.
-  (b) is post-v0.1 unless the owner says otherwise.
+- ~~**K7** A card that points at a doc section (`Task P6.2 in docs/BUILD-PLAN.md §5`) shows only
+  the pointer; the reader has to leave the board to learn what the task is.~~ Closed (plan §11
+  O5, 2026-09-03): cards carry `refs:` (`path#Heading`, `path@Token`, `path:L10-L20`, `path`;
+  `docs/AGENTS.md` §4) and the drawer, `card show --resolve` and MCP `get_card`
+  (`resolveRefs: true`) render the lines live from the file through `GET /api/cards/:id/refs`,
+  never cached; caps 200 lines / 16 KB per ref; an unresolvable ref is `text: null` plus an
+  error. One path guard (`resolveRepoPath`) rejects absolute, `..`, `.git/` and symlinks out of
+  the repo. Measured: RCB-22..26 converted from quoted blocks to refs, 5,306 → 3,895 body-file
+  bytes (12 refs); tests 145 → 191.
 - **K8** A CLI `card move` followed by a hand edit of the same card's frontmatter (no status
   change) puts two entries in the ticker: `ship-agent moved RCB-22 → doing` and, from the
   watcher, `file moved RCB-22 → doing`. Observed 2026-09-03 during P6.1; not measured further.

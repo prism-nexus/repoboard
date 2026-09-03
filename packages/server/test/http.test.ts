@@ -322,3 +322,120 @@ describe('WebSocket', () => {
     ).rejects.toThrow();
   });
 });
+
+describe('GET /api/cards/:id/refs (K7)', () => {
+  const PLAN = '# Plan\n\n## §5 Phases\n- **P6.1** README.\n\n## §6 Layout\nx\n';
+  const REFS_CARD = [
+    '---',
+    'id: RB-9',
+    'title: Refs',
+    'status: todo',
+    'refs:',
+    '  - docs/plan.md#§5 Phases',
+    '  - ../../etc/hosts',
+    '  - docs/../docs/plan.md',
+    '  - .git/config',
+    '  - docs/plan.md#Nope',
+    'created: 2026-09-02T22:00:00Z',
+    'updated: 2026-09-02T22:00:00Z',
+    '---',
+    'Points, does not paste.',
+    '',
+  ].join('\n');
+
+  async function refsRig() {
+    const r = await rig({ 'RB-9.md': REFS_CARD, 'RB-1.md': cardText('RB-1', 'todo') });
+    await mkdir(join(r.repo.root, 'docs'));
+    await mkdir(join(r.repo.root, '.git'));
+    await writeFile(join(r.repo.root, 'docs', 'plan.md'), PLAN);
+    await writeFile(join(r.repo.root, '.git', 'config'), '[core]\n\tsecret = yes\n');
+    return r;
+  }
+
+  it('resolves the good ref and returns text null with the reason for every rejected path', async () => {
+    const r = await refsRig();
+    const res = await fetch(`${r.url}/api/cards/RB-9/refs`);
+    expect(res.status).toBe(200);
+    expect(res.headers.get('cache-control')).toBe('no-store');
+    const refs = (await json(res)) as {
+      spec: string;
+      path: string | null;
+      start: number | null;
+      end: number | null;
+      text: string | null;
+      truncated: boolean;
+      error: string | null;
+    }[];
+    expect(refs.map((x) => x.spec)).toEqual([
+      'docs/plan.md#§5 Phases',
+      '../../etc/hosts',
+      'docs/../docs/plan.md',
+      '.git/config',
+      'docs/plan.md#Nope',
+    ]);
+    expect(refs[0]).toEqual({
+      spec: 'docs/plan.md#§5 Phases',
+      path: 'docs/plan.md',
+      start: 3,
+      end: 5,
+      text: '## §5 Phases\n- **P6.1** README.\n',
+      truncated: false,
+      error: null,
+    });
+    // The path guard: `..` anywhere (even when the realpath would stay inside), and .git/.
+    expect(refs[1]).toMatchObject({
+      text: null,
+      error: '".." not allowed in path: ../../etc/hosts',
+    });
+    expect(refs[2]).toMatchObject({
+      text: null,
+      error: '".." not allowed in path: docs/../docs/plan.md',
+    });
+    expect(refs[3]).toMatchObject({ text: null, error: '.git/ not allowed: .git/config' });
+    expect(JSON.stringify(refs)).not.toContain('secret = yes');
+    expect(JSON.stringify(refs)).not.toContain('localhost');
+    expect(refs[4]).toMatchObject({
+      text: null,
+      error: 'heading "Nope" not found in docs/plan.md',
+    });
+  });
+
+  it('reads the file on every request: an appended line shows up without touching the card', async () => {
+    const r = await refsRig();
+    const before = (await json(await fetch(`${r.url}/api/cards/RB-9/refs`))) as { text: string }[];
+    expect(before[0]?.text).not.toContain('appended');
+    await writeFile(
+      join(r.repo.root, 'docs', 'plan.md'),
+      PLAN.replace('README.\n', 'README.\n- appended\n'),
+    );
+    const after = (await json(await fetch(`${r.url}/api/cards/RB-9/refs`))) as {
+      text: string;
+      end: number;
+    }[];
+    expect(after[0]?.text).toContain('- appended');
+    expect(after[0]?.end).toBe(6);
+  });
+
+  it('a card without refs is [], an unknown card is 404, and PATCH can set refs', async () => {
+    const r = await refsRig();
+    expect(await json(await fetch(`${r.url}/api/cards/RB-1/refs`))).toEqual([]);
+    expect((await fetch(`${r.url}/api/cards/RB-77/refs`)).status).toBe(404);
+    const patched = await fetch(`${r.url}/api/cards/RB-1`, {
+      method: 'PATCH',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ refs: ['docs/plan.md:L1'] }),
+    });
+    expect(patched.status).toBe(200);
+    expect(((await json(patched)) as Card).refs).toEqual(['docs/plan.md:L1']);
+    const resolved = (await json(await fetch(`${r.url}/api/cards/RB-1/refs`))) as {
+      text: string;
+    }[];
+    expect(resolved.map((x) => x.text)).toEqual(['# Plan']);
+    const bad = await fetch(`${r.url}/api/cards/RB-1`, {
+      method: 'PATCH',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ refs: 'docs/plan.md' }),
+    });
+    expect(bad.status).toBe(400);
+  });
+});

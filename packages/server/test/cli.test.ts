@@ -1,4 +1,4 @@
-import { readdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { formatTable, run } from '../src/cli.js';
@@ -292,5 +292,53 @@ describe('repoboard serve', () => {
 describe('formatTable', () => {
   it('renders an empty board as just the header', () => {
     expect(formatTable([])).toBe('ID  STATUS  ASSIGNEE  TITLE');
+  });
+});
+
+describe('repoboard card show --resolve and card add --ref (K7)', () => {
+  it('prints the card file, then each ref as a fenced block headed path:start-end', async () => {
+    const root = await freshRepo({
+      'RB-1.md': cardText('RB-1', 'todo').replace(
+        'status: todo\n',
+        'status: todo\nrefs:\n  - docs/plan.md#§5 Phases\n  - docs/nope.md\n',
+      ),
+    });
+    await mkdir(join(root, 'docs'));
+    await writeFile(
+      join(root, 'docs', 'plan.md'),
+      '# Plan\n\n## §5 Phases\n- **P6.1** README.\n\n## §6\n',
+    );
+    const plain = await repoboard(root, 'card', 'show', 'RB-1');
+    expect(plain.code).toBe(0);
+    expect(plain.out).not.toContain('```');
+    const r = await repoboard(root, 'card', 'show', 'RB-1', '--resolve');
+    expect(r.code).toBe(0);
+    expect(r.out.startsWith('---\nid: RB-1\n')).toBe(true);
+    expect(r.out).toContain(
+      '\ndocs/plan.md:3-5\n```\n## §5 Phases\n- **P6.1** README.\n\n```\n\ndocs/nope.md — unresolved: not found: docs/nope.md\n',
+    );
+    const none = await repoboard(root, 'card', 'show', 'RB-1', '--resolve');
+    expect(none.out).not.toContain('(no refs)');
+  });
+
+  it('add --ref writes refs: and show --resolve on a card without refs says so', async () => {
+    const root = await freshRepo();
+    const added = await repoboard(
+      root,
+      'card',
+      'add',
+      'Pointed',
+      '--ref',
+      'README.md:L1',
+      '--ref',
+      'docs/x.md#Y',
+    );
+    expect(added.code).toBe(0);
+    const file = await readFile(join(root, '.repoboard', 'cards', 'RB-1.md'), 'utf8');
+    expect(file).toContain('refs:\n  - README.md:L1\n  - docs/x.md#Y\n');
+    const bare = await repoboard(root, 'card', 'add', 'Plain');
+    expect(bare.code).toBe(0);
+    const shown = await repoboard(root, 'card', 'show', 'RB-2', '--resolve');
+    expect(shown.out.endsWith('\n(no refs)\n')).toBe(true);
   });
 });

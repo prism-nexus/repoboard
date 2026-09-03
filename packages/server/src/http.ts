@@ -13,6 +13,7 @@ import { fileURLToPath } from 'node:url';
 import type { Card, CardPatch, CreateCardInput, Priority } from '@repoboard/core';
 import { watch as chokidarWatch, type FSWatcher } from 'chokidar';
 import { type WebSocket, WebSocketServer } from 'ws';
+import { resolveCardRefs } from './refs.js';
 import { type ScanResult, scanRepo } from './scanner.js';
 import type { CardStore } from './store.js';
 
@@ -54,6 +55,7 @@ const PATCH_FIELDS: ReadonlySet<string> = new Set([
   'priority',
   'labels',
   'files',
+  'refs',
   'body',
   'actor',
 ]);
@@ -64,6 +66,7 @@ const CREATE_FIELDS: ReadonlySet<string> = new Set([
   'priority',
   'labels',
   'files',
+  'refs',
   'body',
   'actor',
 ]);
@@ -159,6 +162,10 @@ function toCreateInput(body: Json): CreateCardInput {
     if (!isStringArray(body.files)) throw new HttpError(400, 'files must be string[]');
     input.files = body.files;
   }
+  if (body.refs !== undefined) {
+    if (!isStringArray(body.refs)) throw new HttpError(400, 'refs must be string[]');
+    input.refs = body.refs;
+  }
   return input;
 }
 
@@ -176,6 +183,8 @@ function toPatch(body: Json): CardPatch {
   if (labels !== undefined) patch.labels = labels;
   const files = nullable(body, 'files', isStringArray, 'string[]');
   if (files !== undefined) patch.files = files;
+  const refs = nullable(body, 'refs', isStringArray, 'string[]');
+  if (refs !== undefined) patch.refs = refs;
   return patch;
 }
 
@@ -506,6 +515,15 @@ export async function startServer(opts: ServerOptions): Promise<RunningServer> {
       const created = await store.create(input, actor);
       if (!created.ok) throw new HttpError(400, created.error);
       return sendJson(res, 201, created.card);
+    }
+    // K7: the referenced lines, read from the files on every request (never cached). The only
+    // path from a spec to the filesystem is resolveRepoPath, inside resolveCardRefs.
+    const refsMatch = /^\/api\/cards\/([^/]+)\/refs$/.exec(path);
+    if (method === 'GET' && refsMatch?.[1] !== undefined) {
+      const id = decodeURIComponent(refsMatch[1]);
+      const card = store.get(id);
+      if (!card) throw new HttpError(404, `unknown card "${id}"`);
+      return sendJson(res, 200, await resolveCardRefs(root, card));
     }
     const m = /^\/api\/cards\/([^/]+)$/.exec(path);
     if (m?.[1] !== undefined) {

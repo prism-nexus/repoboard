@@ -20,6 +20,7 @@ import {
 } from '@repoboard/core';
 import { type RunningServer, startServer } from './http.js';
 import { formatRows, serveMcp, toRow } from './mcp.js';
+import { formatResolvedRefs, resolveCardRefs } from './refs.js';
 import { openStore } from './store.js';
 import { VERSION } from './version.js';
 
@@ -48,11 +49,13 @@ const HELP = `repoboard — Remember · Connect · Build
 Usage:
   repoboard init                              create .repoboard/ with a default board and a first card
   repoboard card add "<title>" [options]      --status s --assignee a --priority high|medium|low
-                                        --label l (repeatable) --file f (repeatable) --as actor
+                                        --label l (repeatable) --file f (repeatable) --ref r (repeatable)
+                                        --as actor
   repoboard card move <id> <status> [--as a]  move a card to a column
   repoboard card list [--status s] [--json]   list cards; --json is compact (id, title, status,
                                         assignee, priority, labels, files, updated); add --full for bodies
-  repoboard card show <id>                    print the card file
+  repoboard card show <id> [--resolve]        print the card file; --resolve appends the lines each
+                                        refs: entry points at, read live from the file
   repoboard serve [--port 4242] [--open] [--no-fun]
                                         start the dashboard (binds 127.0.0.1)
   repoboard mcp [--root <dir>]                MCP server over stdio (for Claude Code etc.)
@@ -150,6 +153,7 @@ async function cmdCardAdd(args: string[], io: CliIO): Promise<number> {
     priority: { type: 'string' },
     label: { type: 'string', multiple: true },
     file: { type: 'string', multiple: true },
+    ref: { type: 'string', multiple: true },
     body: { type: 'string' },
     as: { type: 'string' },
   });
@@ -164,6 +168,7 @@ async function cmdCardAdd(args: string[], io: CliIO): Promise<number> {
   if (priority !== undefined) input.priority = priority;
   if (values.label !== undefined) input.labels = values.label;
   if (values.file !== undefined) input.files = values.file;
+  if (values.ref !== undefined) input.refs = values.ref;
   if (values.body !== undefined) input.body = values.body;
   const res = await store.create(input, actorFrom(values.as, io));
   if (!res.ok) throw new UserError(res.error);
@@ -229,13 +234,19 @@ async function cmdCardList(args: string[], io: CliIO): Promise<number> {
 }
 
 async function cmdCardShow(args: string[], io: CliIO): Promise<number> {
-  const { positionals } = parse(args, {});
+  const { values, positionals } = parse(args, { resolve: { type: 'boolean', default: false } });
   const [id] = positionals;
-  if (!id) throw new UserError('usage: repoboard card show <id>');
+  if (!id) throw new UserError('usage: repoboard card show <id> [--resolve]');
   const root = await requireRoot(io);
   const store = await openStore(root, { watch: false, now: io.now });
-  if (!store.get(id)) throw new UserError(`unknown card "${id}"`);
+  const card = store.get(id);
+  if (!card) throw new UserError(`unknown card "${id}"`);
   io.stdout.write(await readFile(store.filePath(id), 'utf8'));
+  if (values.resolve) {
+    // K7: each ref as a fenced block headed path:start-end, resolved now from the file.
+    const refs = await resolveCardRefs(store.root, card);
+    io.stdout.write(refs.length === 0 ? '\n(no refs)\n' : `\n${formatResolvedRefs(refs)}`);
+  }
   return 0;
 }
 

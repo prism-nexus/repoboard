@@ -2,7 +2,7 @@
  * P5.1: drive the MCP server in-process through the SDK's InMemoryTransport pair against a
  * temp `.repoboard/`. The repo's own board is never touched.
  */
-import { readFile } from 'node:fs/promises';
+import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
@@ -246,5 +246,60 @@ describe('repoboard mcp: errors', () => {
     const badPriority = await r.call('create_card', { title: 'x', priority: 'urgent' });
     expect(badPriority.isError).toBe(true);
     expect(textOf(badPriority)).toMatch(/priority/);
+  });
+});
+
+describe('repoboard mcp: get_card resolveRefs and refs on create/update (K7)', () => {
+  it('resolves refs live under `refs` only when asked, and create/update carry refs', async () => {
+    const r = await rig({
+      'RB-1.md': cardText('RB-1', 'todo').replace(
+        'status: todo\n',
+        'status: todo\nrefs:\n  - docs/plan.md@P6.1\n  - .git/config\n',
+      ),
+    });
+    await mkdir(join(r.repo.root, 'docs'));
+    await writeFile(
+      join(r.repo.root, 'docs', 'plan.md'),
+      '# Plan\n- **P6.1** README.\n  more\n- **P6.2** next\n',
+    );
+    const plain = await r.json<Card>('get_card', { id: 'RB-1' });
+    expect(plain.refs).toEqual(['docs/plan.md@P6.1', '.git/config']);
+    const resolved = await r.json<{
+      refs: {
+        spec: string;
+        text: string | null;
+        error: string | null;
+        start: number | null;
+        end: number | null;
+      }[];
+    }>('get_card', { id: 'RB-1', resolveRefs: true });
+    expect(resolved.refs).toEqual([
+      {
+        spec: 'docs/plan.md@P6.1',
+        path: 'docs/plan.md',
+        start: 2,
+        end: 3,
+        text: '- **P6.1** README.\n  more',
+        truncated: false,
+        error: null,
+      },
+      {
+        spec: '.git/config',
+        path: '.git/config',
+        start: null,
+        end: null,
+        text: null,
+        truncated: false,
+        error: '.git/ not allowed: .git/config',
+      },
+    ]);
+    const created = await r.json<Card>('create_card', {
+      title: 'Pointed',
+      refs: ['docs/plan.md:L1'],
+    });
+    expect(created.refs).toEqual(['docs/plan.md:L1']);
+    const updated = await r.json<Card>('update_card', { id: created.id, refs: null });
+    expect('refs' in updated).toBe(false);
+    expect(updated.body).toContain('updated refs');
   });
 });

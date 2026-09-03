@@ -11,6 +11,7 @@ import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import { type Card, type CardPatch, computeBoardSummary } from '@repoboard/core';
 import { z } from 'zod';
+import { resolveCardRefs } from './refs.js';
 import { type CardStore, openStore } from './store.js';
 import { VERSION } from './version.js';
 
@@ -85,7 +86,7 @@ function nameField(error: string): string {
 
 const CARD_INTRO =
   "A card is one task on this repository's Kanban board: the file `.repoboard/cards/<id>.md`, " +
-  'YAML frontmatter (id, title, status, assignee, priority, labels, files, created, updated) ' +
+  'YAML frontmatter (id, title, status, assignee, priority, labels, files, refs, created, updated) ' +
   'plus a markdown body with a `## Log` section. `status` is always a column id from ' +
   '`.repoboard/board.yml`. ';
 
@@ -152,16 +153,23 @@ export function createMcpServer(opts: McpServerOptions): McpServer {
       title: 'Get one card',
       description:
         `${CARD_INTRO}Returns the full card as JSON, including its markdown body and ` +
-        '`## Log` history. Use list_cards to find ids.',
+        '`## Log` history. Use list_cards to find ids. With resolveRefs: true, `refs` becomes ' +
+        'the referenced lines read live from each file: [{spec, path, start, end, text, ' +
+        'truncated, error}], text null with an error when a ref does not resolve.',
       inputSchema: {
         id: z.string().describe('The card id from its frontmatter, e.g. RB-12.'),
+        resolveRefs: z
+          .boolean()
+          .optional()
+          .describe('Replace the refs: specs with their resolved lines. Default false.'),
       },
       annotations: { readOnlyHint: true },
     },
-    ({ id }) => {
+    async ({ id, resolveRefs }) => {
       const card = store.get(id);
       if (!card) return fail(`id: unknown card "${id}" (list_cards shows the ids)`);
-      return ok(card);
+      if (!resolveRefs) return ok(card);
+      return ok({ ...card, refs: await resolveCardRefs(store.root, card) });
     },
   );
 
@@ -183,6 +191,13 @@ export function createMcpServer(opts: McpServerOptions): McpServer {
         priority: PRIORITY.optional(),
         labels: z.array(z.string()).optional(),
         files: z.array(z.string()).optional().describe('Repo-relative paths the task touches.'),
+        refs: z
+          .array(z.string())
+          .optional()
+          .describe(
+            'Pointers the board renders live: path#Heading, path@Token, path:L10-L20, or path. ' +
+              'Point at where a note lives instead of pasting it into the body.',
+          ),
         body: z
           .string()
           .optional()
@@ -242,6 +257,13 @@ export function createMcpServer(opts: McpServerOptions): McpServer {
           .nullable()
           .optional()
           .describe('Replaces the list; null clears it.'),
+        refs: z
+          .array(z.string())
+          .nullable()
+          .optional()
+          .describe(
+            'Replaces the refs: list (path#Heading, path@Token, path:L10-L20, path); null clears it.',
+          ),
         actor: z.string().optional().describe(ACTOR_DESC),
       },
     },
@@ -252,6 +274,7 @@ export function createMcpServer(opts: McpServerOptions): McpServer {
       if (fields.priority !== undefined) patch.priority = fields.priority;
       if (fields.labels !== undefined) patch.labels = fields.labels;
       if (fields.files !== undefined) patch.files = fields.files;
+      if (fields.refs !== undefined) patch.refs = fields.refs;
       const res = await store.update(id, patch, actor ?? defaultActor);
       if (!res.ok) return fail(nameField(res.error));
       return ok(res.card);

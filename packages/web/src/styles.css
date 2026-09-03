@@ -796,6 +796,42 @@ button {
   text-decoration: underline;
 }
 
+/* K7: referenced lines, live from the file */
+.drawer__ref {
+  margin: 8px 0 0;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--bg);
+  overflow: hidden;
+}
+.drawer__ref-head {
+  padding: 4px 8px;
+  font-size: 11px;
+  color: var(--muted);
+  border-bottom: 1px solid var(--line);
+  background: var(--surface-2);
+  word-break: break-all;
+}
+.drawer__ref-body {
+  padding: 6px 8px;
+  margin: 0;
+  font-size: 12.5px;
+  line-height: 1.45;
+  overflow-x: auto;
+  max-width: none;
+}
+.drawer__ref-body.prose :is(h1, h2, h3) {
+  margin-top: 4px;
+}
+.drawer__ref--error .drawer__ref-head {
+  color: var(--coral);
+}
+.drawer__ref-error {
+  padding: 6px 8px;
+  font-size: 12px;
+  color: var(--coral);
+}
+
 /* ---- map (P4) ---- */
 .map-empty {
   height: 100%;

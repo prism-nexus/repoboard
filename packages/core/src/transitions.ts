@@ -60,6 +60,7 @@ export interface CreateCardInput {
   priority?: Priority;
   labels?: string[];
   files?: string[];
+  refs?: string[];
   body?: string;
 }
 
@@ -113,6 +114,7 @@ export function createCard(input: CreateCardInput, opts: CreateCardOptions): Cre
   if (input.priority !== undefined) card.priority = input.priority;
   if (input.labels !== undefined) card.labels = [...input.labels];
   if (input.files !== undefined) card.files = [...input.files];
+  if (input.refs !== undefined) card.refs = [...input.refs];
   return { ok: true, card };
 }
 
@@ -123,6 +125,7 @@ export interface CardPatch {
   priority?: Priority | null;
   labels?: string[] | null;
   files?: string[] | null;
+  refs?: string[] | null;
   /** Replaces the whole body. The update's own log line is appended afterwards. */
   body?: string;
 }
@@ -134,7 +137,7 @@ export interface UpdateOptions {
 
 export type UpdateResult = { ok: true; card: Card } | { ok: false; error: string };
 
-const PATCH_KEYS = ['title', 'assignee', 'priority', 'labels', 'files', 'body'] as const;
+const PATCH_KEYS = ['title', 'assignee', 'priority', 'labels', 'files', 'refs', 'body'] as const;
 
 /**
  * Change non-status fields. `null` clears an optional field. Sets `updated` and appends a
@@ -162,6 +165,7 @@ export function updateCard(card: Card, patch: CardPatch, opts: UpdateOptions): U
   applyOptional(next, 'priority', patch.priority);
   applyOptional(next, 'labels', patch.labels === null ? null : patch.labels?.slice());
   applyOptional(next, 'files', patch.files === null ? null : patch.files?.slice());
+  applyOptional(next, 'refs', patch.refs === null ? null : patch.refs?.slice());
   const ts = toIso(opts.now);
   next.updated = ts;
   next.body = appendLogLine(
@@ -171,7 +175,7 @@ export function updateCard(card: Card, patch: CardPatch, opts: UpdateOptions): U
   return { ok: true, card: next };
 }
 
-type OptionalCardKey = 'assignee' | 'priority' | 'labels' | 'files';
+type OptionalCardKey = 'assignee' | 'priority' | 'labels' | 'files' | 'refs';
 
 /** `undefined` = leave alone, `null` = clear, anything else = set. */
 function applyOptional<K extends OptionalCardKey>(

@@ -95,7 +95,7 @@ export function CardItem({
         <button type="button" className="card__title" onClick={() => onOpen(card.id)}>
           {card.title}
         </button>
-        {(card.labels?.length || card.files?.length) && (
+        {(card.labels?.length || card.files?.length || card.refs?.length) && (
           <div className="card__meta">
             {card.labels?.map((l) => (
               <span key={l} className="chip">
@@ -105,6 +105,11 @@ export function CardItem({
             {card.files?.length ? (
               <span className="card__files" title={card.files.join('\n')}>
                 {card.files.length} {card.files.length === 1 ? 'file' : 'files'}
+              </span>
+            ) : null}
+            {card.refs?.length ? (
+              <span className="card__files" title={card.refs.join('\n')} data-testid="ref-count">
+                {card.refs.length} {card.refs.length === 1 ? 'ref' : 'refs'}
               </span>
             ) : null}
           </div>

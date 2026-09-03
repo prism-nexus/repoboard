@@ -166,11 +166,24 @@ export function langOf(path: string): string {
   return (ext && LANG_BY_EXT[ext]) || 'other';
 }
 
+/**
+ * Why a file is not readable as text, or null when it is: a binary extension or more than
+ * `maxBytes` (2 MB by default). The one rule shared by the line counter (K3) and refs (K7).
+ */
+export function textFileReason(
+  path: string,
+  bytes: number,
+  maxBytes: number = MAX_LINE_COUNT_BYTES,
+): string | null {
+  if (bytes > maxBytes) return `file is ${bytes} bytes (limit ${maxBytes})`;
+  const ext = extname(basename(path).toLowerCase()).slice(1);
+  if (BINARY_EXT.has(ext)) return `binary file (.${ext})`;
+  return null;
+}
+
 function shouldCountLines(path: string, bytes: number, maxBytes: number): boolean {
-  if (bytes > maxBytes) return false;
-  const base = basename(path).toLowerCase();
-  if (LOCK_FILES.has(base)) return false;
-  return !BINARY_EXT.has(extname(base).slice(1));
+  if (textFileReason(path, bytes, maxBytes) !== null) return false;
+  return !LOCK_FILES.has(basename(path).toLowerCase());
 }
 
 function countNewlines(path: string): Promise<number> {

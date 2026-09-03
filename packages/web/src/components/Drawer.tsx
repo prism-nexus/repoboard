@@ -1,4 +1,4 @@
-import type { Card } from '@repoboard/core';
+import type { Card, ResolvedRef } from '@repoboard/core';
 import { useEffect, useMemo, useState } from 'react';
 import { renderMarkdown, splitBody } from '../markdown.js';
 import type { ColumnCards } from '../store.js';
@@ -44,6 +44,7 @@ export function Drawer({
 
   const { description, log } = useMemo(() => splitBody(card.body), [card.body]);
   const html = useMemo(() => renderMarkdown(description), [description]);
+  const refs = useRefs(card);
 
   const commitTitle = () => {
     const t = title.trim();
@@ -163,6 +164,7 @@ export function Drawer({
         {/* biome-ignore lint/security/noDangerouslySetInnerHtml: sanitized by DOMPurify in renderMarkdown */}
         <div className="prose" dangerouslySetInnerHTML={{ __html: html }} />
       </section>
+      {card.refs?.length ? <References refs={refs} specs={card.refs} /> : null}
       {log.length ? (
         <section className="drawer__section">
           <h3>Log</h3>
@@ -192,5 +194,106 @@ export function Drawer({
         </section>
       ) : null}
     </aside>
+  );
+}
+
+type RefsState =
+  | { kind: 'loading' }
+  | { kind: 'ok'; refs: ResolvedRef[] }
+  | { kind: 'error'; message: string };
+
+/**
+ * K7: the referenced lines, fetched from the server when the drawer opens and again on every
+ * `card` echo for this id (the store replaces the card object, so its identity is the trigger).
+ * Never cached across cards: a new card id starts from `loading`.
+ */
+function useRefs(card: Card): RefsState {
+  const [state, setState] = useState<RefsState>({ kind: 'loading' });
+  const specs = card.refs;
+  // biome-ignore lint/correctness/useExhaustiveDependencies: `card` identity is the refetch trigger (every card WS message), by design
+  useEffect(() => {
+    if (!specs?.length) return;
+    let alive = true;
+    setState({ kind: 'loading' });
+    const url = `/api/cards/${encodeURIComponent(card.id)}/refs`;
+    const load = async (): Promise<RefsState> => {
+      if (typeof fetch !== 'function') return { kind: 'error', message: 'fetch unavailable' };
+      const res = await fetch(url);
+      if (!res.ok) return { kind: 'error', message: `${url} → HTTP ${res.status}` };
+      const data: unknown = await res.json();
+      if (!Array.isArray(data)) return { kind: 'error', message: `${url} → not an array` };
+      return { kind: 'ok', refs: data as ResolvedRef[] };
+    };
+    load()
+      .catch(
+        (e: unknown): RefsState => ({
+          kind: 'error',
+          message: e instanceof Error ? e.message : String(e),
+        }),
+      )
+      .then((next) => {
+        if (alive) setState(next);
+      });
+    return () => {
+      alive = false;
+    };
+  }, [card]);
+  return state;
+}
+
+function refRange(r: ResolvedRef): string {
+  if (r.start === null || r.end === null) return r.spec;
+  const range = r.start === r.end ? `${r.start}` : `${r.start}–${r.end}`;
+  return `${r.path ?? r.spec}:${range}`;
+}
+
+function References({ refs, specs }: { refs: RefsState; specs: string[] }) {
+  return (
+    <section className="drawer__section" data-testid="drawer-refs">
+      <h3>References</h3>
+      {refs.kind === 'loading' ? (
+        <ul className="drawer__files mono muted">
+          {specs.map((s) => (
+            <li key={s}>{s}</li>
+          ))}
+        </ul>
+      ) : refs.kind === 'error' ? (
+        <div className="drawer__ref drawer__ref--error" role="alert">
+          <div className="drawer__ref-head mono">could not load references</div>
+          <div className="drawer__ref-error">{refs.message}</div>
+        </div>
+      ) : (
+        refs.refs.map((r, i) => <Reference key={`${r.spec}-${i.toString()}`} r={r} />)
+      )}
+    </section>
+  );
+}
+
+function Reference({ r }: { r: ResolvedRef }) {
+  if (r.text === null) {
+    return (
+      <div className="drawer__ref drawer__ref--error" data-testid="ref-error">
+        <div className="drawer__ref-head mono">{r.spec}</div>
+        <div className="drawer__ref-error">{r.error ?? 'unresolved'}</div>
+      </div>
+    );
+  }
+  const isMarkdown = /\.(md|markdown)$/i.test(r.path ?? '');
+  return (
+    <div className="drawer__ref" data-testid="ref">
+      <div className="drawer__ref-head mono">
+        {refRange(r)}
+        {r.truncated ? <span className="muted"> (truncated)</span> : null}
+      </div>
+      {isMarkdown ? (
+        <div
+          className="prose drawer__ref-body"
+          // biome-ignore lint/security/noDangerouslySetInnerHtml: sanitized by DOMPurify in renderMarkdown
+          dangerouslySetInnerHTML={{ __html: renderMarkdown(r.text) }}
+        />
+      ) : (
+        <pre className="drawer__ref-body mono">{r.text}</pre>
+      )}
+    </div>
   );
 }

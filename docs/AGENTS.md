@@ -80,11 +80,33 @@ tool-level mistake (unknown card, unknown column, empty patch) comes back as an 
 naming the field; a WIP breach comes back as a warning with the moved card. The tool actor
 defaults to `$REPOBOARD_ACTOR`, then `mcp`.
 
-## 4. Editing the file directly (the escape hatch)
+## 4. `refs:` — point, don't paste
+
+A card can carry `refs:`, a list of pointers into files in the repo. Every surface renders the
+referenced lines **live from the file** — the drawer (References, under the description),
+`repoboard card show <id> --resolve`, and the MCP `get_card` tool with `resolveRefs: true` —
+nothing is cached, so the file stays the only copy. Write the note where it lives (the plan, a
+brief, a source file) and reference it from the card; do not quote it into the body.
+
+| Form | Means | Span |
+|---|---|---|
+| `docs/BUILD-PLAN.md#§11 Owner decisions` | the first heading whose text starts with that (case, spacing and `#` ignored) | to the line before the next heading of the same or higher level |
+| `docs/BUILD-PLAN.md@P6.2` | the first list item or paragraph line that starts with the token, after `- ` and `**` | to the line before the next blank line, heading, or list item at the same or lesser indent |
+| `packages/web/src/store.ts:L10-L20` | 1-based inclusive lines; `:L10` is one line | exactly those lines |
+| `README.md` | the whole file | all lines |
+
+Caps: 200 lines or 16 KB per ref, whichever comes first (`truncated: true` says so). A ref that
+does not resolve — heading or token not found, range past the end, file missing, binary, over
+2 MB, or a path that is absolute, contains `..`, is under `.git/`, or leaves the repo through a
+symlink — comes back as `text: null` with an `error` string, never a guess. Paths are
+repo-relative. Set it with `card add --ref <spec>` (repeatable), `refs` on the MCP
+`create_card` / `update_card` tools, or `refs:` in the file.
+
+## 5. Editing the file directly (the escape hatch)
 
 The card file is the source of truth, so `sed`, an editor, or a heredoc all work; the watcher
 picks the change up and synthesizes an event with `actor: file`. Do three things the CLI would
-have done for you: set `status:`, bump `updated:`, and append a `## Log` line (section 5).
+have done for you: set `status:`, bump `updated:`, and append a `## Log` line (section 6).
 
 ```markdown
 ---
@@ -96,6 +118,8 @@ priority: high          # high | medium | low, optional
 labels: [web, viz]
 files:
   - packages/web/src/views/Treemap.tsx
+refs:
+  - docs/BUILD-PLAN.md@P4.1   # optional, rendered live (section 4)
 created: 2026-09-02T22:00:00Z
 updated: 2026-09-02T22:41:10Z
 ---
@@ -117,10 +141,11 @@ Rules:
 - Unknown frontmatter keys are kept on round-trip. The body is preserved byte-for-byte except
   when a surface appends under `## Log`.
 - Timestamps are ISO 8601 UTC with seconds, as above.
+- `refs:` are pointers into repo files (section 4); every surface renders those lines live.
 - `files:` are repo-relative paths; while the card is in an `active` column and `updated` is
   within `activeWindowMinutes`, they glow with the assignee's color on the map.
 
-## 5. The `## Log` convention
+## 6. The `## Log` convention
 
 Every surface appends the same shape under the card's `## Log` heading, one bullet per event,
 newest last:
@@ -135,7 +160,7 @@ writes your text. When you edit a file by hand, add the same line yourself. Writ
 identical across calls: the board's avatar (emoji + color) is a hash of the exact string, so
 `claude/web-agent` and `Claude/web-agent` are two different people.
 
-## 6. Paste this into a CLAUDE.md
+## 7. Paste this into a CLAUDE.md
 
 > This repo has a `.repoboard/` board. Before starting a task, move its card to `doing` with your
 > actor name; when done, move it to `review` and append what you verified.

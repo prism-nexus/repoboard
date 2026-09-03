@@ -112,6 +112,9 @@ HTTP, JSON, localhost only:
 - `PATCH /api/cards/:id` `{status?, assignee?, title?, ...}` → `Card`
 - `GET /api/repo` → `RepoSnapshot` (§4)
 - `GET /api/events?since=<ts>` → `Event[]`
+- `GET /api/cards/:id/refs` → `{spec, path, start, end, text, truncated, error}[]` — the card's
+  `refs:` resolved from the files on every request, never cached (K7, O5); a ref that does not
+  resolve has `text: null` and an `error`
 
 WebSocket `/ws`, server → client:
 - `{type:"snapshot", board, repo}` on connect

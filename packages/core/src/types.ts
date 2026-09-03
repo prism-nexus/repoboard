@@ -20,6 +20,8 @@ export interface Card {
   priority?: Priority;
   labels?: string[];
   files?: string[];
+  /** K7: pointers into repo files, rendered live (`refs.ts`). */
+  refs?: string[];
   body: string;
   [key: string]: unknown;
 }

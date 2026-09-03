@@ -27,6 +27,17 @@ export {
   fnv1a,
   isActive,
 } from './presence.js';
+export type { ParseRefResult, Ref, RefSpan, ResolvedRef, ResolveRefResult } from './refs.js';
+export {
+  normalizeHeading,
+  parseRef,
+  REF_MAX_BYTES,
+  REF_MAX_LINES,
+  refError,
+  resolveRef,
+  resolveRefText,
+  splitLines,
+} from './refs.js';
 export { toIso } from './time.js';
 export type {
   CardPatch,

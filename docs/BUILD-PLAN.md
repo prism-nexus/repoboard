@@ -79,6 +79,10 @@ priority: high          # high | medium | low, optional
 labels: [web, viz]
 files:
   - packages/web/src/views/Treemap.tsx
+refs:                   # optional; rendered live from the file (O5). See K7 brief for forms.
+  - docs/BUILD-PLAN.md@P4.1
+  - docs/BUILD-PLAN.md#§11 Owner decisions
+  - packages/web/src/views/Treemap.tsx:L1-L20
 created: 2026-09-02T22:00:00Z
 updated: 2026-09-02T22:41:10Z
 ---
@@ -243,3 +247,10 @@ Answered 2026-09-03:
   Decided 2026-09-03. Core stays `private`; only `repoboard` publishes. Before the repo is made
   public, either build core to JS and publish `@repoboard/core`, or document it as internal.
   Gate on P6.3.
+- **O5 — K7 pulled into v0.1 (2026-09-03).** The owner: "the repo should be looking at where all
+  notes are being written so it is more directly pulling from the repo, more than agents having
+  to fully write to cards." Measured state before O5: the board reads only `.repoboard/cards/`;
+  the server serves no repo file content; the map reads files only for line counts and imports.
+  Decision: cards get an optional `refs:` list; the drawer, `card show --resolve` and MCP
+  `get_card` render the referenced lines live from the file. Agents point, they do not paste.
+  Brief: `docs/K7-REFS-BRIEF.md`.

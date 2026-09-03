@@ -4,6 +4,18 @@
 Orchestrator writes briefs, dispatches subagents, verifies independently, commits. One commit per
 task with verification output in the message. Subagents never commit. See `CLAUDE.md`.
 
+Practicalities that are not in the plan:
+- `pnpm build` before using the CLI (`node packages/server/dist/cli.js …`); `dist/` is gitignored.
+- Parallel agents work by file ownership stated in the brief; two agents may share a file only
+  by named regions (§7.8) and both should expect the other's mid-flight typecheck failures.
+- Every brief ends with a Definition of done that runs the built artifact, not just the tests
+  (§7.4 and §7.5 were both caught only that way), and a protective-test control verified the
+  CLAUDE.md way (perturbation read back, compiles, fails in the feared direction).
+- The rate limit can kill agents mid-task (2026-09-03, two at once). Their files stay on disk
+  and `SendMessage` to the same agent id resumes with full context; check `git status` and
+  run the suite first to see what landed.
+- `.repoboard/events.jsonl` (`.rcb/` until P6.0) is gitignored and ephemeral; the cards are not.
+
 ## §1 What has landed
 (append-only; newest at the bottom)
 

@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { defaultBoardConfig, findColumn, parseBoard, serializeBoard } from '../src/board.js';
 
-const SPEC_BOARD = `prefix: RCB
+const SPEC_BOARD = `prefix: RB
 activeWindowMinutes: 30
 columns:
   - id: backlog
@@ -21,10 +21,14 @@ columns:
 `;
 
 describe('defaultBoardConfig', () => {
+  it('defaults the prefix to RB (plan §11 O1)', () => {
+    expect(defaultBoardConfig().prefix).toBe('RB');
+  });
+
   it('is exactly the §2 default and a fresh object each call', () => {
     const a = defaultBoardConfig();
     expect(a).toEqual({
-      prefix: 'RCB',
+      prefix: 'RB',
       activeWindowMinutes: 30,
       columns: [
         { id: 'backlog', title: 'Backlog' },
@@ -54,7 +58,7 @@ describe('parseBoard', () => {
     const r = parseBoard('columns:\n  - id: a\n');
     expect(r).toEqual({
       ok: true,
-      config: { prefix: 'RCB', activeWindowMinutes: 30, columns: [{ id: 'a' }] },
+      config: { prefix: 'RB', activeWindowMinutes: 30, columns: [{ id: 'a' }] },
     });
   });
 

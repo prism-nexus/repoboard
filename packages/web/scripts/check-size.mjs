@@ -1,10 +1,10 @@
 // Bundle control (P3.5): fail if the gzipped JS in dist/assets exceeds the limit.
-// Limit in KB from RCB_SIZE_LIMIT_KB (default 600). Run after `vite build`.
+// Limit in KB from REPOBOARD_SIZE_LIMIT_KB (default 600). Run after `vite build`.
 import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { gzipSync } from 'node:zlib';
 
-const LIMIT_KB = Number(process.env.RCB_SIZE_LIMIT_KB ?? 600);
+const LIMIT_KB = Number(process.env.REPOBOARD_SIZE_LIMIT_KB ?? 600);
 const dir = join(process.cwd(), 'dist', 'assets');
 
 function walk(d) {

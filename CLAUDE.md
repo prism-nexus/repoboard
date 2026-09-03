@@ -1,4 +1,4 @@
-# rcb (Remember · Connect · Build) — routing anchor
+# repoboard (Remember · Connect · Build) — routing anchor
 
 **This file routes; it does not restate.** It carries no test counts, commit hashes, or task
 status, because those move and a stale router is worse than none. Every fact lives in one place

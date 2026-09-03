@@ -33,7 +33,7 @@ async function git(cwd: string, ...args: string[]): Promise<string> {
 }
 
 async function tempDir(): Promise<string> {
-  const d = await makeTempDir('rcb-scan-');
+  const d = await makeTempDir('repoboard-scan-');
   dirs.push(d);
   return d;
 }
@@ -186,7 +186,7 @@ describe('import graph (P4.4)', () => {
       "const p = import('./dyn');",
       "const q = require('./req');",
       "import bare from 'react';",
-      "import scoped from '@rcb/core';",
+      "import scoped from '@repoboard/core';",
       "require('node:fs');",
       'export const notAnImport = 1;',
     ].join('\n');

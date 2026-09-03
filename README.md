@@ -1,12 +1,12 @@
-# rcb — see your repo, watch the work move
+# repoboard — see your repo, watch the work move
 
-*Working name. A local dashboard that shows a codebase as pictures a human can read at a glance,
+*A local dashboard that shows a codebase as pictures a human can read at a glance,
 and shows the work as cards on a board that move while agents work on them.*
 
 **Status:** pre-alpha, nothing runs yet. Plan: `docs/BUILD-PLAN.md`.
 
 ## Thesis
-Plain files are the database. Cards are markdown files in `.rcb/cards/`. Columns are a YAML file.
+Plain files are the database. Cards are markdown files in `.repoboard/cards/`. Columns are a YAML file.
 Git is the history. Any agent that can edit a file can move a card; the board updates live.
 
 ## Known issues
@@ -22,11 +22,11 @@ Git is the history. Any agent that can edit a file can move a card; the board up
   scanner emits null (1 file in this repo), map shows "—".
 - ~~**K4** `createCard` throws on an unknown status.~~ Closed: returns `{ok:false, error}` like
   `moveCard`; CLI and HTTP use the result.
-- **K5** `@rcb/core` exports TS source only. The server bundles core with tsup, so this only
-  bites a third party importing `@rcb/core` on plain Node. Owner decided 2026-09-03: leave it for
+- **K5** `@repoboard/core` exports TS source only. The server bundles core with tsup, so this only
+  bites a third party importing `@repoboard/core` on plain Node. Owner decided 2026-09-03: leave it for
   v0.1 (core stays private, only `repoboard` publishes); **must be resolved before the GitHub
   repo goes public** (plan §11 O4). Gate on P6.3.
-- **K6** `rcb card list --json` is 14.1 KB against 1.9 KB for the table (2026-09-03, 24 cards)
+- **K6** `repoboard card list --json` is 14.1 KB against 1.9 KB for the table (2026-09-03, 24 cards)
   because it includes every body. Agents will reach for `--json`. Make it compact by default
   (id, title, status, assignee, priority, labels, files, updated) with `--full` for bodies, and
   apply the same shape to the MCP `list_cards` result.

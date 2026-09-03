@@ -1,4 +1,4 @@
-import { isActive } from '@rcb/core';
+import { isActive } from '@repoboard/core';
 import { useCallback, useEffect, useMemo } from 'react';
 import { Drawer } from './components/Drawer.jsx';
 import { Ticker } from './components/Ticker.jsx';

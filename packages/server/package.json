@@ -1,12 +1,12 @@
 {
-  "name": "@rcb/server",
+  "name": "repoboard",
   "version": "0.0.0",
   "private": true,
   "type": "module",
-  "description": "rcb server: CLI (bin: rcb), HTTP, WebSocket, file watcher, repo scanner. MCP arrives in P5.",
+  "description": "repoboard server: CLI (bin: repoboard), HTTP, WebSocket, file watcher, repo scanner. MCP arrives in P5.",
   "license": "MIT",
   "bin": {
-    "rcb": "./dist/cli.js"
+    "repoboard": "./dist/cli.js"
   },
   "main": "./dist/index.js",
   "exports": {
@@ -22,7 +22,7 @@
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.30.0",
-    "@rcb/core": "workspace:*",
+    "@repoboard/core": "workspace:*",
     "chokidar": "^5.0.0",
     "ws": "^8.21.3",
     "yaml": "^2.9.0",

@@ -3,7 +3,13 @@
  * this computes: the file tree (with aggregation and ghost tiles), the language palette, the
  * heat modes, and the "who is where" index from cards to paths.
  */
-import { avatarFor, type BoardConfig, type Card, isActive, type RepoSnapshot } from '@rcb/core';
+import {
+  avatarFor,
+  type BoardConfig,
+  type Card,
+  isActive,
+  type RepoSnapshot,
+} from '@repoboard/core';
 
 export type RepoFile = RepoSnapshot['files'][number];
 

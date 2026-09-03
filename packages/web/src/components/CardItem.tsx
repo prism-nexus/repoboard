@@ -1,6 +1,6 @@
 import { useSortable } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
-import type { Card } from '@rcb/core';
+import type { Card } from '@repoboard/core';
 import type { Arrival } from '../hooks.js';
 import { Avatar } from './Avatar.jsx';
 

@@ -1,4 +1,4 @@
-import type { Card } from '@rcb/core';
+import type { Card } from '@repoboard/core';
 import { useEffect, useMemo, useState } from 'react';
 import { renderMarkdown, splitBody } from '../markdown.js';
 import type { ColumnCards } from '../store.js';

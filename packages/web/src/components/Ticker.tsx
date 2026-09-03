@@ -1,4 +1,4 @@
-import { avatarFor, type Event } from '@rcb/core';
+import { avatarFor, type Event } from '@repoboard/core';
 import { relTime, shortActor } from '../time.js';
 
 interface Props {

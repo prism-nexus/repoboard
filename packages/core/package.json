@@ -1,9 +1,9 @@
 {
-  "name": "@rcb/core",
+  "name": "@repoboard/core",
   "version": "0.0.0",
   "private": true,
   "type": "module",
-  "description": "rcb domain logic: cards, board config, transitions, presence. I/O-free.",
+  "description": "repoboard domain logic: cards, board config, transitions, presence. I/O-free.",
   "license": "MIT",
   "main": "./src/index.ts",
   "types": "./src/index.ts",
@@ -16,7 +16,7 @@
   "scripts": {
     "typecheck": "tsc --noEmit && tsc -p tsconfig.build.json --noEmit",
     "build": "tsc -p tsconfig.build.json",
-    "dev": "echo '@rcb/core: nothing to run (library)'"
+    "dev": "echo '@repoboard/core: nothing to run (library)'"
   },
   "dependencies": {
     "yaml": "^2.9.0",

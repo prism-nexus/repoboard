@@ -1,11 +1,11 @@
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import type { Card } from '@rcb/core';
+import type { Card } from '@repoboard/core';
 import { afterEach, describe, expect, it } from 'vitest';
 import { WebSocket } from 'ws';
 import { type RunningServer, startServer } from '../src/http.js';
 import { type CardStore, openStore } from '../src/store.js';
-import { cardText, makeTempDir, makeTempRcb, NOW, type TempRepo } from './helpers.js';
+import { cardText, makeTempDir, makeTempRepoboard, NOW, type TempRepo } from './helpers.js';
 
 const cleanups: Array<() => Promise<void>> = [];
 afterEach(async () => {
@@ -23,7 +23,7 @@ async function rig(
   cards: Record<string, string>,
   opts: { scan?: boolean; webDir?: string; fun?: boolean } = {},
 ): Promise<Rig> {
-  const repo = await makeTempRcb(cards);
+  const repo = await makeTempRepoboard(cards);
   cleanups.push(repo.cleanup);
   const store = await openStore(repo.root, { watch: true, now: () => NOW });
   cleanups.push(() => store.close());
@@ -114,17 +114,17 @@ function nextMessage<T = Msg>(
 
 describe('HTTP routes', () => {
   it('binds 127.0.0.1 and GET /api/board returns config, cards and invalid', async () => {
-    const r = await rig({ 'RCB-1.md': cardText('RCB-1', 'todo'), 'RCB-2.md': 'nope' });
+    const r = await rig({ 'RB-1.md': cardText('RB-1', 'todo'), 'RB-2.md': 'nope' });
     expect(r.server.host).toBe('127.0.0.1');
     const body = (await json(await fetch(`${r.url}/api/board`))) as {
       config: { prefix: string; fun: boolean };
       cards: Card[];
       invalid: { path: string }[];
     };
-    expect(body.config.prefix).toBe('RCB');
+    expect(body.config.prefix).toBe('RB');
     expect(body.config.fun).toBe(true);
-    expect(body.cards.map((c) => c.id)).toEqual(['RCB-1']);
-    expect(body.invalid[0]?.path).toBe(join('.rcb', 'cards', 'RCB-2.md'));
+    expect(body.cards.map((c) => c.id)).toEqual(['RB-1']);
+    expect(body.invalid[0]?.path).toBe(join('.repoboard', 'cards', 'RB-2.md'));
   });
 
   it('--no-fun surfaces as config.fun=false', async () => {
@@ -134,7 +134,7 @@ describe('HTTP routes', () => {
   });
 
   it('POST /api/cards creates via core; bad input is 400', async () => {
-    const r = await rig({ 'RCB-1.md': cardText('RCB-1', 'todo') });
+    const r = await rig({ 'RB-1.md': cardText('RB-1', 'todo') });
     const res = await fetch(`${r.url}/api/cards`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
@@ -142,9 +142,9 @@ describe('HTTP routes', () => {
     });
     expect(res.status).toBe(201);
     const card = (await json(res)) as Card;
-    expect(card.id).toBe('RCB-2');
+    expect(card.id).toBe('RB-2');
     expect(card.status).toBe('doing');
-    expect(await readFile(join(r.repo.cardsDir, 'RCB-2.md'), 'utf8')).toContain('Made by http');
+    expect(await readFile(join(r.repo.cardsDir, 'RB-2.md'), 'utf8')).toContain('Made by http');
 
     const bad = await fetch(`${r.url}/api/cards`, {
       method: 'POST',
@@ -160,8 +160,8 @@ describe('HTTP routes', () => {
   });
 
   it('PATCH /api/cards/:id moves (status) and updates (other fields)', async () => {
-    const r = await rig({ 'RCB-1.md': cardText('RCB-1', 'todo') });
-    const res = await fetch(`${r.url}/api/cards/RCB-1`, {
+    const r = await rig({ 'RB-1.md': cardText('RB-1', 'todo') });
+    const res = await fetch(`${r.url}/api/cards/RB-1`, {
       method: 'PATCH',
       body: JSON.stringify({ status: 'doing', assignee: 'claude/x', actor: 'tester' }),
     });
@@ -169,7 +169,7 @@ describe('HTTP routes', () => {
     const card = (await json(res)) as Card;
     expect(card.status).toBe('doing');
     expect(card.assignee).toBe('claude/x');
-    const text = await readFile(join(r.repo.cardsDir, 'RCB-1.md'), 'utf8');
+    const text = await readFile(join(r.repo.cardsDir, 'RB-1.md'), 'utf8');
     expect(text).toContain('status: doing');
     expect(text).toContain('tester — moved todo → doing');
     expect(text).toContain('tester — updated assignee');
@@ -179,17 +179,17 @@ describe('HTTP routes', () => {
     const none = (await json(await fetch(`${r.url}/api/events?since=2030-01-01T00:00:00Z`))) as [];
     expect(none).toEqual([]);
 
-    expect((await fetch(`${r.url}/api/cards/RCB-9`, { method: 'PATCH', body: '{}' })).status).toBe(
+    expect((await fetch(`${r.url}/api/cards/RB-9`, { method: 'PATCH', body: '{}' })).status).toBe(
       404,
     );
-    const badCol = await fetch(`${r.url}/api/cards/RCB-1`, {
+    const badCol = await fetch(`${r.url}/api/cards/RB-1`, {
       method: 'PATCH',
       body: JSON.stringify({ status: 'nope' }),
     });
     expect(badCol.status).toBe(400);
-    const unknownField = await fetch(`${r.url}/api/cards/RCB-1`, {
+    const unknownField = await fetch(`${r.url}/api/cards/RB-1`, {
       method: 'PATCH',
-      body: JSON.stringify({ id: 'RCB-5' }),
+      body: JSON.stringify({ id: 'RB-5' }),
     });
     expect(unknownField.status).toBe(400);
     expect(((await json(unknownField)) as { error: string }).error).toMatch(/unknown field "id"/);
@@ -199,14 +199,14 @@ describe('HTTP routes', () => {
     const off = await rig({});
     expect((await fetch(`${off.url}/api/repo`)).status).toBe(404);
 
-    const on = await rig({ 'RCB-1.md': cardText('RCB-1', 'todo') }, { scan: true });
+    const on = await rig({ 'RB-1.md': cardText('RB-1', 'todo') }, { scan: true });
     const snap = (await json(await fetch(`${on.url}/api/repo`))) as {
       files: { path: string }[];
       edges: [];
       head: null;
       truncated: boolean;
     };
-    expect(snap.files.map((f) => f.path)).toContain('.rcb/cards/RCB-1.md');
+    expect(snap.files.map((f) => f.path)).toContain('.repoboard/cards/RB-1.md');
     expect(snap.edges).toEqual([]);
     expect(snap.head).toBeNull();
     expect(snap.truncated).toBe(false);
@@ -222,7 +222,7 @@ describe('HTTP routes', () => {
 
 describe('static files', () => {
   it('serves "web not built" when no bundle exists', async () => {
-    const empty = await makeTempDir('rcb-noweb-');
+    const empty = await makeTempDir('repoboard-noweb-');
     const r = await rig({}, { webDir: join(empty, 'missing') });
     // The rig's webDir override does not exist and the dev fallback (packages/web/dist)
     // may or may not exist on this machine, so accept either outcome but require HTML.
@@ -233,7 +233,7 @@ describe('static files', () => {
   });
 
   it('serves a built web dir with content types and SPA fallback', async () => {
-    const web = await makeTempDir('rcb-web-');
+    const web = await makeTempDir('repoboard-web-');
     await mkdir(join(web, 'assets'), { recursive: true });
     await writeFile(join(web, 'index.html'), '<!doctype html><title>t</title>');
     await writeFile(join(web, 'assets', 'app.js'), 'console.log(1)');
@@ -259,13 +259,13 @@ describe('static files', () => {
 
 describe('WebSocket', () => {
   it('sends a snapshot on connect and a card message after a direct file write', async () => {
-    const r = await rig({ 'RCB-1.md': cardText('RCB-1', 'todo') });
+    const r = await rig({ 'RB-1.md': cardText('RB-1', 'todo') });
     const ws = await connect(r.url);
     cleanups.push(async () => ws.close());
 
     const snap = await nextMessage<{ type: string; board: { cards: Card[] }; repo: null }>(ws);
     expect(snap.type).toBe('snapshot');
-    expect(snap.board.cards.map((c) => c.id)).toEqual(['RCB-1']);
+    expect(snap.board.cards.map((c) => c.id)).toEqual(['RB-1']);
     expect(snap.repo).toBeNull();
 
     const cardMsg = nextMessage<{ type: string; card: Card }>(ws, (m) => m.type === 'card');
@@ -273,7 +273,7 @@ describe('WebSocket', () => {
       ws,
       (m) => m.type === 'event',
     );
-    const path = join(r.repo.cardsDir, 'RCB-1.md');
+    const path = join(r.repo.cardsDir, 'RB-1.md');
     const text = await readFile(path, 'utf8');
     await writeFile(path, text.replace('status: todo', 'status: review'));
 
@@ -282,7 +282,7 @@ describe('WebSocket', () => {
   });
 
   it('card:move and card:update write through the store; bad messages get an error', async () => {
-    const r = await rig({ 'RCB-1.md': cardText('RCB-1', 'todo') });
+    const r = await rig({ 'RB-1.md': cardText('RB-1', 'todo') });
     const ws = await connect(r.url);
     cleanups.push(async () => ws.close());
     await nextMessage(ws, (m) => m.type === 'snapshot');
@@ -291,19 +291,19 @@ describe('WebSocket', () => {
       ws,
       (m) => m.type === 'card' && (m.card as Card).status === 'doing',
     );
-    ws.send(JSON.stringify({ type: 'card:move', id: 'RCB-1', status: 'doing', actor: 'ui' }));
+    ws.send(JSON.stringify({ type: 'card:move', id: 'RB-1', status: 'doing', actor: 'ui' }));
     expect((await moved).card.status).toBe('doing');
-    expect(await readFile(join(r.repo.cardsDir, 'RCB-1.md'), 'utf8')).toContain('ui — moved');
+    expect(await readFile(join(r.repo.cardsDir, 'RB-1.md'), 'utf8')).toContain('ui — moved');
 
     const updated = nextMessage<{ type: string; card: Card }>(
       ws,
       (m) => m.type === 'card' && (m.card as Card).title === 'Renamed',
     );
-    ws.send(JSON.stringify({ type: 'card:update', id: 'RCB-1', patch: { title: 'Renamed' } }));
+    ws.send(JSON.stringify({ type: 'card:update', id: 'RB-1', patch: { title: 'Renamed' } }));
     expect((await updated).card.title).toBe('Renamed');
 
     const err = nextMessage<{ type: string; message: string }>(ws, (m) => m.type === 'error');
-    ws.send(JSON.stringify({ type: 'card:move', id: 'RCB-1', status: 'nope' }));
+    ws.send(JSON.stringify({ type: 'card:move', id: 'RB-1', status: 'nope' }));
     expect((await err).message).toMatch(/unknown column/);
 
     const err2 = nextMessage<{ type: string; message: string }>(ws, (m) => m.type === 'error');

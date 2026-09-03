@@ -5,11 +5,11 @@ import { card, renderApp, snapshot, testStore } from './helpers.jsx';
 describe('card WS message', () => {
   it('moves the card element to the new status column', () => {
     const store = testStore();
-    const c = card('RCB-7', 'todo');
-    snapshot(store, [c, card('RCB-8', 'backlog')]);
+    const c = card('RB-7', 'todo');
+    snapshot(store, [c, card('RB-8', 'backlog')]);
     renderApp(store);
 
-    const el = () => screen.getByTestId('card-RCB-7');
+    const el = () => screen.getByTestId('card-RB-7');
     expect(el().closest('[data-column]')?.getAttribute('data-column')).toBe('todo');
 
     act(() =>
@@ -24,13 +24,13 @@ describe('card WS message', () => {
 
   it('removes a card on card:removed and adds an unseen card on card', () => {
     const store = testStore();
-    snapshot(store, [card('RCB-1', 'todo')]);
+    snapshot(store, [card('RB-1', 'todo')]);
     renderApp(store);
-    act(() => store.dispatch({ type: 'card', card: card('RCB-2', 'doing') }));
+    act(() => store.dispatch({ type: 'card', card: card('RB-2', 'doing') }));
     expect(
-      screen.getByTestId('card-RCB-2').closest('[data-column]')?.getAttribute('data-column'),
+      screen.getByTestId('card-RB-2').closest('[data-column]')?.getAttribute('data-column'),
     ).toBe('doing');
-    act(() => store.dispatch({ type: 'card:removed', id: 'RCB-1' }));
-    expect(screen.queryByTestId('card-RCB-1')).toBeNull();
+    act(() => store.dispatch({ type: 'card:removed', id: 'RB-1' }));
+    expect(screen.queryByTestId('card-RB-1')).toBeNull();
   });
 });

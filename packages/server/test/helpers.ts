@@ -1,9 +1,9 @@
-/** Test helpers. Everything lives under os.tmpdir(); the repo's own .rcb is never touched. */
+/** Test helpers. Everything lives under os.tmpdir(); the repo's own .repoboard is never touched. */
 import type { EventEmitter } from 'node:events';
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { defaultBoardConfig, serializeBoard } from '@rcb/core';
+import { defaultBoardConfig, serializeBoard } from '@repoboard/core';
 
 export const NOW = new Date('2026-09-02T22:41:10Z');
 
@@ -29,19 +29,19 @@ export interface TempRepo {
   cleanup(): Promise<void>;
 }
 
-/** A temp root with `.rcb/board.yml` (defaults) and the given cards. */
-export async function makeTempRcb(cards: Record<string, string> = {}): Promise<TempRepo> {
-  const root = await mkdtemp(join(tmpdir(), 'rcb-test-'));
-  const cardsDir = join(root, '.rcb', 'cards');
+/** A temp root with `.repoboard/board.yml` (defaults) and the given cards. */
+export async function makeTempRepoboard(cards: Record<string, string> = {}): Promise<TempRepo> {
+  const root = await mkdtemp(join(tmpdir(), 'repoboard-test-'));
+  const cardsDir = join(root, '.repoboard', 'cards');
   await mkdir(cardsDir, { recursive: true });
-  await writeFile(join(root, '.rcb', 'board.yml'), serializeBoard(defaultBoardConfig()));
+  await writeFile(join(root, '.repoboard', 'board.yml'), serializeBoard(defaultBoardConfig()));
   for (const [name, text] of Object.entries(cards)) {
     await writeFile(join(cardsDir, name), text);
   }
   return { root, cardsDir, cleanup: () => rm(root, { recursive: true, force: true }) };
 }
 
-export async function makeTempDir(prefix = 'rcb-test-'): Promise<string> {
+export async function makeTempDir(prefix = 'repoboard-test-'): Promise<string> {
   return mkdtemp(join(tmpdir(), prefix));
 }
 

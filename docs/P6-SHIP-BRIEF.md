@@ -27,8 +27,9 @@ that grep's output. Update `.gitignore`. Run the full suite after.
   `.repoboard/events.jsonl (.rcb/ until P6.0)` to drop the parenthetical. Everything else —
   `README.md`, `CLAUDE.md`, `docs/AGENTS.md`, `docs/BUILD-PLAN.md` (including §1 D1–D4, §2, §6),
   `docs/NEXT-AGENT-PROMPT.md`, this brief — is user-facing and gets renamed. The final grep's
-  allowed remainder is therefore: those four old briefs, HANDOFF history lines, and this repo's
-  card ids / `prefix: RCB` in `.repoboard/board.yml` and `.repoboard/cards/`.
+  allowed remainder is therefore: those four old briefs, HANDOFF history lines, this repo's
+  card ids / `prefix: RCB` in `.repoboard/board.yml` and `.repoboard/cards/`, and the from→to
+  lines of the rename spec itself (plan §11 O1 and this brief's P6.0 sections; 12 lines).
 - The board: move RCB-25 to `doing` with `--as claude/ship-agent` **and** set
   `assignee: claude/ship-agent` in its frontmatter (HANDOFF §7.9); move to `review` when done.
   Note the data dir moves under you: rebuild (`pnpm build`) after the `git mv` before the CLI

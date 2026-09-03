@@ -10,7 +10,7 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import type { AddressInfo } from 'node:net';
 import { dirname, extname, join, normalize, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import type { Card, CardPatch, CreateCardInput, Priority } from '@rcb/core';
+import type { Card, CardPatch, CreateCardInput, Priority } from '@repoboard/core';
 import { watch as chokidarWatch, type FSWatcher } from 'chokidar';
 import { type WebSocket, WebSocketServer } from 'ws';
 import { type ScanResult, scanRepo } from './scanner.js';
@@ -26,7 +26,7 @@ export interface ServerOptions {
   fun?: boolean;
   /** Scan the repo at start and on changes. Default true. */
   scan?: boolean;
-  /** Watch the repo (not `.rcb/`) and rescan, debounced. Default = `scan`. */
+  /** Watch the repo (not `.repoboard/`) and rescan, debounced. Default = `scan`. */
   watchRepo?: boolean;
   /** Debounce for rescans and `repo` broadcasts. Default 2000 ms (§3: ≤ 1 per 2 s). */
   rescanDebounceMs?: number;
@@ -251,9 +251,9 @@ function sendJson(res: ServerResponse, status: number, payload: unknown): void {
 
 const NOT_BUILT_HTML = `<!doctype html>
 <meta charset="utf-8">
-<title>rcb — web not built</title>
+<title>repoboard — web not built</title>
 <style>body{font:16px/1.5 system-ui,sans-serif;max-width:40em;margin:4em auto;padding:0 1em}code{background:#eee;padding:.1em .3em}</style>
-<h1>rcb: web not built</h1>
+<h1>repoboard: web not built</h1>
 <p>The server is running, but no UI bundle was found. Build it with <code>pnpm build</code>
 at the repo root, then reload.</p>
 <p>Meanwhile the API works: <a href="/api/board">/api/board</a>, <a href="/api/repo">/api/repo</a>,
@@ -419,7 +419,7 @@ export async function startServer(opts: ServerOptions): Promise<RunningServer> {
         if (rel === '' || rel.startsWith('..')) return false;
         const parts = rel.split('/');
         if (parts[0] === '.git') return !gitAllowed.has(rel);
-        if (parts[0] === '.rcb') return true; // the store watches that
+        if (parts[0] === '.repoboard') return true; // the store watches that
         return parts.some((seg) => seg === 'node_modules' || seg === 'dist');
       },
     });
@@ -518,7 +518,7 @@ export async function startServer(opts: ServerOptions): Promise<RunningServer> {
       if (method === 'PATCH') {
         const body = await readBody(req);
         const { card, warnings } = await applyPatch(store, id, body, 'web');
-        if (warnings.length > 0) res.setHeader('x-rcb-warnings', JSON.stringify(warnings));
+        if (warnings.length > 0) res.setHeader('x-repoboard-warnings', JSON.stringify(warnings));
         return sendJson(res, 200, card);
       }
     }

@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /**
  * P2.1 CLI. `node:util.parseArgs`, no framework. Every card mutation goes through the store,
- * which goes through @rcb/core. Exit codes: 0 ok · 1 user error (one line) · 2 crash.
+ * which goes through @repoboard/core. Exit codes: 0 ok · 1 user error (one line) · 2 crash.
  */
 import { spawn } from 'node:child_process';
 import { realpathSync } from 'node:fs';
@@ -17,7 +17,7 @@ import {
   type Priority,
   serializeBoard,
   serializeCard,
-} from '@rcb/core';
+} from '@repoboard/core';
 import { type RunningServer, startServer } from './http.js';
 import { serveMcp } from './mcp.js';
 import { openStore } from './store.js';
@@ -42,21 +42,21 @@ export interface CliIO {
 /** A mistake by the caller: printed as one line, exit 1. */
 export class UserError extends Error {}
 
-const HELP = `rcb — Remember · Connect · Build
+const HELP = `repoboard — Remember · Connect · Build
 
 Usage:
-  rcb init                              create .rcb/ with a default board and a first card
-  rcb card add "<title>" [options]      --status s --assignee a --priority high|medium|low
+  repoboard init                              create .repoboard/ with a default board and a first card
+  repoboard card add "<title>" [options]      --status s --assignee a --priority high|medium|low
                                         --label l (repeatable) --file f (repeatable) --as actor
-  rcb card move <id> <status> [--as a]  move a card to a column
-  rcb card list [--status s] [--json]   list cards
-  rcb card show <id>                    print the card file
-  rcb serve [--port 4242] [--open] [--no-fun]
+  repoboard card move <id> <status> [--as a]  move a card to a column
+  repoboard card list [--status s] [--json]   list cards
+  repoboard card show <id>                    print the card file
+  repoboard serve [--port 4242] [--open] [--no-fun]
                                         start the dashboard (binds 127.0.0.1)
-  rcb mcp [--root <dir>]                MCP server over stdio (for Claude Code etc.)
-  rcb --help | --version
+  repoboard mcp [--root <dir>]                MCP server over stdio (for Claude Code etc.)
+  repoboard --help | --version
 
-Actor for --as defaults to $RCB_ACTOR, then $USER, then "cli"; for mcp: $RCB_ACTOR, then "mcp".
+Actor for --as defaults to $REPOBOARD_ACTOR, then $USER, then "cli"; for mcp: $REPOBOARD_ACTOR, then "mcp".
 `;
 
 const PRIORITIES: ReadonlySet<string> = new Set(['high', 'medium', 'low']);
@@ -71,12 +71,12 @@ function parse<T extends Options>(args: string[], options: T) {
   }
 }
 
-/** Walk up from `cwd` to the nearest directory containing `.rcb/`. */
+/** Walk up from `cwd` to the nearest directory containing `.repoboard/`. */
 export async function findRoot(cwd: string): Promise<string | null> {
   let dir = resolve(cwd);
   for (;;) {
     try {
-      if ((await stat(join(dir, '.rcb'))).isDirectory()) return dir;
+      if ((await stat(join(dir, '.repoboard'))).isDirectory()) return dir;
     } catch {
       // keep climbing
     }
@@ -89,13 +89,15 @@ export async function findRoot(cwd: string): Promise<string | null> {
 async function requireRoot(io: CliIO): Promise<string> {
   const root = await findRoot(io.cwd);
   if (!root)
-    throw new UserError(`no .rcb directory found in ${io.cwd} or above (run \`rcb init\`)`);
+    throw new UserError(
+      `no .repoboard directory found in ${io.cwd} or above (run \`repoboard init\`)`,
+    );
   return root;
 }
 
 function actorFrom(flag: string | undefined, io: CliIO): string {
   const env = io.env ?? process.env;
-  return flag || env.RCB_ACTOR || env.USER || 'cli';
+  return flag || env.REPOBOARD_ACTOR || env.USER || 'cli';
 }
 
 function priorityFrom(v: string | undefined): Priority | undefined {
@@ -109,12 +111,12 @@ function priorityFrom(v: string | undefined): Priority | undefined {
 async function cmdInit(args: string[], io: CliIO): Promise<number> {
   parse(args, {});
   const root = resolve(io.cwd);
-  const rcbDir = join(root, '.rcb');
-  const present = await stat(rcbDir).then(
+  const repoboardDir = join(root, '.repoboard');
+  const present = await stat(repoboardDir).then(
     () => true,
     () => false,
   );
-  if (present) throw new UserError(`${rcbDir} already exists; refusing to overwrite`);
+  if (present) throw new UserError(`${repoboardDir} already exists; refusing to overwrite`);
   const config = defaultBoardConfig();
   const now = io.now?.() ?? new Date();
   const welcome = createCard(
@@ -122,9 +124,9 @@ async function cmdInit(args: string[], io: CliIO): Promise<number> {
       title: 'Welcome',
       body: [
         '',
-        'This board lives in `.rcb/`. Every card is a markdown file in `.rcb/cards/`;',
-        'columns are in `.rcb/board.yml`. Move a card by editing `status:` in its file,',
-        'or with `rcb card move <id> <status>`. Run `rcb serve` to see the board.',
+        'This board lives in `.repoboard/`. Every card is a markdown file in `.repoboard/cards/`;',
+        'columns are in `.repoboard/board.yml`. Move a card by editing `status:` in its file,',
+        'or with `repoboard card move <id> <status>`. Run `repoboard serve` to see the board.',
         '',
       ].join('\n'),
     },
@@ -132,10 +134,10 @@ async function cmdInit(args: string[], io: CliIO): Promise<number> {
   );
   if (!welcome.ok) throw new Error(`init: ${welcome.error}`); // default config: cannot happen
   const card = welcome.card;
-  await mkdir(join(rcbDir, 'cards'), { recursive: true });
-  await writeFile(join(rcbDir, 'board.yml'), serializeBoard(config));
-  await writeFile(join(rcbDir, 'cards', `${card.id}.md`), serializeCard(card));
-  io.stdout.write(`initialised ${rcbDir} with ${card.id} "Welcome"\n`);
+  await mkdir(join(repoboardDir, 'cards'), { recursive: true });
+  await writeFile(join(repoboardDir, 'board.yml'), serializeBoard(config));
+  await writeFile(join(repoboardDir, 'cards', `${card.id}.md`), serializeCard(card));
+  io.stdout.write(`initialised ${repoboardDir} with ${card.id} "Welcome"\n`);
   return 0;
 }
 
@@ -150,7 +152,7 @@ async function cmdCardAdd(args: string[], io: CliIO): Promise<number> {
     as: { type: 'string' },
   });
   const title = positionals.join(' ').trim();
-  if (!title) throw new UserError('card add needs a title: rcb card add "<title>"');
+  if (!title) throw new UserError('card add needs a title: repoboard card add "<title>"');
   const root = await requireRoot(io);
   const store = await openStore(root, { watch: false, now: io.now });
   const input: CreateCardInput = { title };
@@ -171,7 +173,7 @@ async function cmdCardAdd(args: string[], io: CliIO): Promise<number> {
 async function cmdCardMove(args: string[], io: CliIO): Promise<number> {
   const { values, positionals } = parse(args, { as: { type: 'string' } });
   const [id, status] = positionals;
-  if (!id || !status) throw new UserError('usage: rcb card move <id> <status>');
+  if (!id || !status) throw new UserError('usage: repoboard card move <id> <status>');
   const root = await requireRoot(io);
   const store = await openStore(root, { watch: false, now: io.now });
   const res = await store.move(id, status, actorFrom(values.as, io));
@@ -224,7 +226,7 @@ async function cmdCardList(args: string[], io: CliIO): Promise<number> {
 async function cmdCardShow(args: string[], io: CliIO): Promise<number> {
   const { positionals } = parse(args, {});
   const [id] = positionals;
-  if (!id) throw new UserError('usage: rcb card show <id>');
+  if (!id) throw new UserError('usage: repoboard card show <id>');
   const root = await requireRoot(io);
   const store = await openStore(root, { watch: false, now: io.now });
   if (!store.get(id)) throw new UserError(`unknown card "${id}"`);
@@ -271,7 +273,7 @@ async function cmdServe(args: string[], io: CliIO): Promise<number> {
     if (code === 'EADDRINUSE') throw new UserError(`port ${port} is already in use`);
     throw e;
   }
-  io.stdout.write(`rcb: serving ${root}\n  ${server.url}\n`);
+  io.stdout.write(`repoboard: serving ${root}\n  ${server.url}\n`);
   if (!server.webDir) io.stdout.write('  (web not built: API only, see the page)\n');
   if (values.open) (io.openUrl ?? openInBrowser)(server.url);
   io.onServe?.(server);
@@ -293,7 +295,7 @@ async function cmdServe(args: string[], io: CliIO): Promise<number> {
 }
 
 /**
- * `rcb mcp [--root <dir>]`: the MCP server on stdin/stdout. Nothing else may write to stdout
+ * `repoboard mcp [--root <dir>]`: the MCP server on stdin/stdout. Nothing else may write to stdout
  * while it runs (the transport owns it); warnings go to stderr. Returns when stdin closes.
  */
 async function cmdMcp(args: string[], io: CliIO): Promise<number> {
@@ -303,10 +305,10 @@ async function cmdMcp(args: string[], io: CliIO): Promise<number> {
   const err = io.stderr ?? process.stderr;
   await serveMcp({
     root,
-    defaultActor: env.RCB_ACTOR || 'mcp',
+    defaultActor: env.REPOBOARD_ACTOR || 'mcp',
     now: io.now,
     signal: io.signal,
-    warn: (m) => err.write(`rcb mcp: warning: ${m}\n`),
+    warn: (m) => err.write(`repoboard mcp: warning: ${m}\n`),
   });
   return 0;
 }
@@ -335,13 +337,13 @@ export async function run(argv: string[], io: CliIO): Promise<number> {
       if (sub === 'show') return await cmdCardShow(rest, io);
       throw new UserError(`unknown card command "${sub ?? ''}" (add, move, list, show)`);
     }
-    throw new UserError(`unknown command "${cmd}" (try rcb --help)`);
+    throw new UserError(`unknown command "${cmd}" (try repoboard --help)`);
   } catch (e) {
     if (e instanceof UserError) {
-      err.write(`rcb: ${e.message}\n`);
+      err.write(`repoboard: ${e.message}\n`);
       return 1;
     }
-    err.write(`rcb: crash: ${e instanceof Error ? (e.stack ?? e.message) : String(e)}\n`);
+    err.write(`repoboard: crash: ${e instanceof Error ? (e.stack ?? e.message) : String(e)}\n`);
     return 2;
   }
 }

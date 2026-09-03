@@ -4,11 +4,11 @@
 a human can read at a glance, and it shows work as cards on a Kanban board that move while agents
 (Claude Code and friends) work on them. It ships to GitHub as an open-source utility.
 
-**One-line pitch.** `npx rcb` in a repo → a browser tab with a live board and a live map of the
+**One-line pitch.** `npx repoboard` in a repo → a browser tab with a live board and a live map of the
 codebase. Agents move cards by editing files, running the CLI, or calling the MCP server. Humans
 drag cards. Everything is plain files in git.
 
-Working name: **rcb** (Remember · Connect · Build). The name is the owner's decision — §11 O1.
+Name: **repoboard** (Remember · Connect · Build) — decided 2026-09-03, §11 O1.
 
 ---
 
@@ -17,7 +17,7 @@ Working name: **rcb** (Remember · Connect · Build). The name is the owner's de
 0.1 `CLAUDE.md` non-negotiables apply. This plan wins over HANDOFF when they disagree.
 0.2 Local-first. No accounts, no telemetry, no network calls at runtime. The dashboard binds to
     localhost only.
-0.3 **Plain files are the database.** Board state lives in the repo under `.rcb/`. Git is the
+0.3 **Plain files are the database.** Board state lives in the repo under `.repoboard/`. Git is the
     history. If you can `cat` it, an agent can edit it. This is the product's whole thesis.
 0.4 Every surface that mutates a card (file edit, CLI, HTTP, MCP) funnels through one function in
     `packages/core`. No surface writes its own frontmatter.
@@ -31,10 +31,10 @@ Working name: **rcb** (Remember · Connect · Build). The name is the owner's de
 
 | # | Decision | Why |
 |---|---|---|
-| D1 | **Cards are markdown files with YAML frontmatter** in `.rcb/cards/<id>.md`. One file per card. | Diffable, mergeable, agent-editable with zero tooling, readable on GitHub. |
-| D2 | **Columns are configured in `.rcb/board.yml`**; `status` on a card is a column id. Default columns: `backlog, todo, doing, review, done`. | Teams differ; the default matches how the owner already works. |
-| D3 | **Card ids are `<PREFIX>-<n>`**, prefix from `board.yml`, `n` monotonic, allocated by scanning existing ids (max+1). Default prefix `RCB`. | Matches the owner's `K<n>` habit. No counter file to merge-conflict. |
-| D4 | **Three agent surfaces, one core:** direct file edit · CLI (`rcb card move RCB-3 doing`) · MCP server (`rcb mcp`). Plus HTTP for the web UI. | An agent that can only edit files still works. Claude Code gets a native tool. |
+| D1 | **Cards are markdown files with YAML frontmatter** in `.repoboard/cards/<id>.md`. One file per card. | Diffable, mergeable, agent-editable with zero tooling, readable on GitHub. |
+| D2 | **Columns are configured in `.repoboard/board.yml`**; `status` on a card is a column id. Default columns: `backlog, todo, doing, review, done`. | Teams differ; the default matches how the owner already works. |
+| D3 | **Card ids are `<PREFIX>-<n>`**, prefix from `board.yml`, `n` monotonic, allocated by scanning existing ids (max+1). Default prefix `RB`. | Matches the owner's `K<n>` habit. No counter file to merge-conflict. |
+| D4 | **Three agent surfaces, one core:** direct file edit · CLI (`repoboard card move RB-3 doing`) · MCP server (`repoboard mcp`). Plus HTTP for the web UI. | An agent that can only edit files still works. Claude Code gets a native tool. |
 | D5 | **Stack:** TypeScript, Node ≥ 20, pnpm workspace. `packages/core` (domain), `packages/server` (CLI + HTTP + WS + watcher + MCP), `packages/web` (Vite + React + d3). Tests: vitest. Lint: biome. | Widest contributor pool for an OSS utility. d3 for treemap/graph. |
 | D6 | **Live updates via a filesystem watcher (chokidar) → WebSocket.** The server never trusts its own memory as the source of truth; it re-reads the file on every change event. | An agent editing a file with `sed` shows up on the board in under a second, and the server cannot drift from disk. |
 | D7 | **Repo visuals, in priority order:** (a) treemap of files by size, colored by language; (b) import graph for JS/TS (other languages: directory graph fallback); (c) git activity heat — commits per file over the last 30/90 days; (d) **"who is where"** — files listed on `doing` cards glow with the assignee's color. | (a)+(c) are language-agnostic and land first. (d) is the connection between board and code, which is the point. |
@@ -47,9 +47,9 @@ Working name: **rcb** (Remember · Connect · Build). The name is the owner's de
 
 ## §2 File formats (the contract agents see)
 
-### `.rcb/board.yml`
+### `.repoboard/board.yml`
 ```yaml
-prefix: RCB
+prefix: RB
 activeWindowMinutes: 30
 columns:
   - id: backlog
@@ -68,10 +68,10 @@ columns:
     done: true
 ```
 
-### `.rcb/cards/RCB-12.md`
+### `.repoboard/cards/RB-12.md`
 ```markdown
 ---
-id: RCB-12
+id: RB-12
 title: Treemap view of the repo
 status: doing
 assignee: claude/web-agent
@@ -93,7 +93,7 @@ Rules: `id`, `title`, `status`, `created`, `updated` required; everything else o
 Unknown frontmatter keys are preserved on round-trip, never dropped. Body is preserved
 byte-for-byte except when a surface explicitly appends to `## Log`.
 
-### `.rcb/events.jsonl` (optional, append-only)
+### `.repoboard/events.jsonl` (optional, append-only)
 One JSON object per line: `{ts, actor, type, cardId, from, to}`. Written by CLI/HTTP/MCP moves.
 Direct file edits produce no event; the watcher synthesizes one from the diff (`actor: "file"`).
 The ticker reads this. Safe to delete; safe to gitignore.
@@ -162,9 +162,9 @@ one commit carrying verification output.
   deterministic; `computeBoardSummary(cards, config)`.
 
 ### P2 Server
-- **P2.1** CLI `rcb init` writes `.rcb/board.yml` and a first card; `rcb card add|move|list|show`;
-  `rcb serve [--port] [--open] [--no-fun]`. Uses core for every mutation.
-- **P2.2** Card store: reads `.rcb/cards/*.md`, chokidar watcher, atomic writes (temp + rename),
+- **P2.1** CLI `repoboard init` writes `.repoboard/board.yml` and a first card; `repoboard card add|move|list|show`;
+  `repoboard serve [--port] [--open] [--no-fun]`. Uses core for every mutation.
+- **P2.2** Card store: reads `.repoboard/cards/*.md`, chokidar watcher, atomic writes (temp + rename),
   event log append. Tests write to a temp dir, never the repo.
 - **P2.3** HTTP + WS per §3. Binds `127.0.0.1` only.
 - **P2.4** Repo scanner per §4: `git ls-files`, sizes, line counts, language by extension, git
@@ -189,18 +189,18 @@ one commit carrying verification output.
   force-directed, capped at 500 nodes with a "too big, filter by directory" affordance.
 
 ### P5 MCP
-- **P5.1** `rcb mcp` — stdio MCP server exposing `list_cards`, `get_card`, `create_card`,
+- **P5.1** `repoboard mcp` — stdio MCP server exposing `list_cards`, `get_card`, `create_card`,
   `move_card`, `update_card`, `append_log`. Same core, same store. Tool descriptions written for
   an agent that has never seen the board.
 - **P5.2** `docs/AGENTS.md` — the one page an agent (or a CLAUDE.md) needs: file format, CLI,
   MCP registration snippet for Claude Code, the `## Log` convention.
 
 ### P6 Ship
-- **P6.1** README with a 20-second GIF, install (`npx rcb`), the thesis (files are the DB).
-- **P6.2** `npx rcb` works from a fresh `npm pack` install; `bin` wiring verified.
+- **P6.1** README with a 20-second GIF, install (`npx repoboard`), the thesis (files are the DB).
+- **P6.2** `npx repoboard` works from a fresh `npm pack` install; `bin` wiring verified.
 - **P6.3** Owner decisions O1–O3 answered; GitHub repo created; v0.1.0 tagged. **Ask first.**
 
-**Exit criterion for v0.1:** in a foreign repo, `npx rcb` opens a board; an agent with only a
+**Exit criterion for v0.1:** in a foreign repo, `npx repoboard` opens a board; an agent with only a
 shell moves a card with `sed` and the board updates within 1 s; the treemap renders; the card's
 files glow with the agent's color.
 
@@ -209,10 +209,10 @@ files glow with the agent's color.
 ## §6 Repo layout
 ```
 packages/core/      domain, I/O-free
-packages/server/    cli (bin: rcb), http, ws, watcher, scanner, mcp
+packages/server/    cli (bin: repoboard), http, ws, watcher, scanner, mcp
 packages/web/       vite app, built into packages/server/dist/web at build time
 docs/               this plan, HANDOFF, AGENTS, briefs
-.rcb/               this repo dogfoods its own board
+.repoboard/         this repo dogfoods its own board
 ```
 
 ---

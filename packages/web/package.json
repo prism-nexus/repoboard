@@ -1,9 +1,9 @@
 {
-  "name": "@rcb/web",
+  "name": "@repoboard/web",
   "version": "0.0.0",
   "private": true,
   "type": "module",
-  "description": "rcb web UI (Vite + React). The board (P3) and the repo map (P4).",
+  "description": "repoboard web UI (Vite + React). The board (P3) and the repo map (P4).",
   "license": "MIT",
   "scripts": {
     "dev": "vite",
@@ -16,7 +16,7 @@
     "@dnd-kit/core": "^6.3.1",
     "@dnd-kit/sortable": "^10.0.0",
     "@dnd-kit/utilities": "^3.2.2",
-    "@rcb/core": "workspace:*",
+    "@repoboard/core": "workspace:*",
     "d3-force": "^3.0.0",
     "d3-hierarchy": "^3.1.2",
     "dompurify": "^3.4.14",

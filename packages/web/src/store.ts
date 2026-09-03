@@ -3,7 +3,7 @@
  * Holds what the wire gives us (config, cards, repo, events, connected) plus UI state.
  * Optimistic moves/updates snap back if the server's `card` echo does not arrive in time.
  */
-import type { BoardConfig, Card, CardPatch, Event, RepoSnapshot } from '@rcb/core';
+import type { BoardConfig, Card, CardPatch, Event, RepoSnapshot } from '@repoboard/core';
 import type { ClientMessage, ServerMessage, Transport, TransportFactory } from './wire.js';
 
 export type Theme = 'dark' | 'light';
@@ -42,8 +42,8 @@ export interface StoreOptions {
 }
 
 export const EVENTS_KEPT = 50;
-export const STORAGE_FUN = 'rcb.fun';
-export const STORAGE_THEME = 'rcb.theme';
+export const STORAGE_FUN = 'repoboard.fun';
+export const STORAGE_THEME = 'repoboard.theme';
 
 type Listener = () => void;
 

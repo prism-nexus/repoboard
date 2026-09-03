@@ -1,4 +1,4 @@
-import { defaultBoardConfig, type RepoSnapshot } from '@rcb/core';
+import { defaultBoardConfig, type RepoSnapshot } from '@repoboard/core';
 import { describe, expect, it } from 'vitest';
 import {
   buildTree,
@@ -30,14 +30,14 @@ describe('buildTree', () => {
     const root = buildTree(
       [f('src/a.ts', 10), f('src/x/b.ts', 5), f('README.md', 1)],
       [
-        { path: 'src/x/gone.ts', cardId: 'RCB-1', color: '#f00' },
-        { path: 'lib/new.ts', cardId: 'RCB-1', color: '#f00' },
+        { path: 'src/x/gone.ts', cardId: 'RB-1', color: '#f00' },
+        { path: 'lib/new.ts', cardId: 'RB-1', color: '#f00' },
       ],
     );
     expect(root.children?.map((c) => c.name)).toEqual(['src', 'README.md', 'lib']);
     const x = findDir(root, 'src/x');
     expect(x?.children?.map((c) => `${c.kind}:${c.name}`)).toEqual(['file:b.ts', 'ghost:gone.ts']);
-    expect(findDir(root, 'lib')?.children?.[0]).toMatchObject({ kind: 'ghost', ghostOf: 'RCB-1' });
+    expect(findDir(root, 'lib')?.children?.[0]).toMatchObject({ kind: 'ghost', ghostOf: 'RB-1' });
     expect(findDir(root, 'nope')).toBeNull();
   });
 
@@ -95,39 +95,39 @@ describe('whoIsWhere', () => {
   const known = new Set(['src/a.ts', 'src/b.ts']);
 
   it('active cards with files highlight; idle cards only when pinned or hovered', () => {
-    const active = card('RCB-1', 'doing', {
+    const active = card('RB-1', 'doing', {
       assignee: 'claude/x',
       updated: new Date(now).toISOString(),
       files: ['src/a.ts', 'src/missing.ts'],
     });
-    const stale = card('RCB-2', 'doing', {
+    const stale = card('RB-2', 'doing', {
       assignee: 'claude/y',
       updated: new Date(now - 3 * 3_600_000).toISOString(),
       files: ['src/b.ts'],
     });
-    const noFiles = card('RCB-3', 'doing', { assignee: 'z', updated: new Date(now).toISOString() });
+    const noFiles = card('RB-3', 'doing', { assignee: 'z', updated: new Date(now).toISOString() });
 
     const w = whoIsWhere([active, stale, noFiles], config, now, [], null, known);
-    expect(w.cards.map((c) => `${c.card.id}:${c.why}`)).toEqual(['RCB-1:active']);
+    expect(w.cards.map((c) => `${c.card.id}:${c.why}`)).toEqual(['RB-1:active']);
     expect(w.byPath.get('src/a.ts')?.[0]).toMatchObject({ assignee: 'claude/x', why: 'active' });
     expect(w.ghosts).toEqual([
-      { path: 'src/missing.ts', cardId: 'RCB-1', color: expect.any(String) },
+      { path: 'src/missing.ts', cardId: 'RB-1', color: expect.any(String) },
     ]);
 
-    const pinned = whoIsWhere([active, stale], config, now, ['RCB-2'], null, known);
+    const pinned = whoIsWhere([active, stale], config, now, ['RB-2'], null, known);
     expect(pinned.byPath.get('src/b.ts')?.[0]?.why).toBe('pinned');
-    const hovered = whoIsWhere([active, stale], config, now, [], 'RCB-2', known);
+    const hovered = whoIsWhere([active, stale], config, now, [], 'RB-2', known);
     expect(hovered.byPath.get('src/b.ts')?.[0]?.why).toBe('hover');
     // Active wins over pinned for the same card: one entry, why = active.
-    const both = whoIsWhere([active], config, now, ['RCB-1'], 'RCB-1', known);
+    const both = whoIsWhere([active], config, now, ['RB-1'], 'RB-1', known);
     expect(both.cards).toHaveLength(1);
     expect(both.cards[0]?.why).toBe('active');
   });
 
   it('with no config nothing is active (inert), pins still work', () => {
-    const c = card('RCB-1', 'doing', { assignee: 'a', files: ['src/a.ts'] });
+    const c = card('RB-1', 'doing', { assignee: 'a', files: ['src/a.ts'] });
     expect(whoIsWhere([c], null, now, [], null, known).cards).toHaveLength(0);
-    expect(whoIsWhere([c], null, now, ['RCB-1'], null, known).cards).toHaveLength(1);
+    expect(whoIsWhere([c], null, now, ['RB-1'], null, known).cards).toHaveLength(1);
   });
 });
 

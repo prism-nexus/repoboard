@@ -1,4 +1,4 @@
-import { defaultBoardConfig, type RepoSnapshot } from '@rcb/core';
+import { defaultBoardConfig, type RepoSnapshot } from '@repoboard/core';
 import { act, fireEvent, screen, within } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
 import { CHURN_FLOOR } from '../src/map/model.js';
@@ -29,7 +29,7 @@ const FIVE = [
   file('package.json', 500, 'json', 0),
 ];
 
-function openMap(files: File[], cards = [card('RCB-1', 'todo')]) {
+function openMap(files: File[], cards = [card('RB-1', 'todo')]) {
   const store = testStore();
   store.dispatch({
     type: 'snapshot',
@@ -98,12 +98,12 @@ describe('activity heat (P4.2)', () => {
 
 describe('who is where (P4.3)', () => {
   it("an active card's file tile carries data-active-by with the assignee", () => {
-    const active = card('RCB-7', 'doing', {
+    const active = card('RB-7', 'doing', {
       assignee: 'claude/map-agent',
       updated: new Date().toISOString(),
       files: ['src/a.ts', 'src/gone.ts'],
     });
-    const idle = card('RCB-8', 'todo', { assignee: 'matt', files: ['src/b.ts'] });
+    const idle = card('RB-8', 'todo', { assignee: 'matt', files: ['src/b.ts'] });
     openMap(FIVE, [active, idle]);
     const svg = screen.getByRole('img', { name: 'Repository treemap' });
     expect(svg.querySelector('[data-tile="src/a.ts"]')?.getAttribute('data-active-by')).toBe(
@@ -113,27 +113,27 @@ describe('who is where (P4.3)', () => {
     // A file the card names but the repo lacks is a ghost tile, not a silent drop.
     expect(svg.querySelector('[data-tile="src/gone.ts"]')?.getAttribute('data-kind')).toBe('ghost');
     // The rail lists the active card; the file panel lists every card naming a path.
-    expect(screen.getByTestId('who-RCB-7')).toBeInTheDocument();
+    expect(screen.getByTestId('who-RB-7')).toBeInTheDocument();
     fireEvent.click(svg.querySelector('[data-tile="src/b.ts"]') as Element);
     const panel = screen.getByTestId('file-panel');
-    expect(within(panel).getByText('RCB-8')).toBeInTheDocument();
+    expect(within(panel).getByText('RB-8')).toBeInTheDocument();
   });
 
   it('pinning a card on the board keeps its files highlighted on the map', () => {
-    const idle = card('RCB-8', 'todo', { assignee: 'matt', files: ['src/b.ts'] });
+    const idle = card('RB-8', 'todo', { assignee: 'matt', files: ['src/b.ts'] });
     const { store } = openMap(FIVE, [idle]);
     let svg = screen.getByRole('img', { name: 'Repository treemap' });
     expect(svg.querySelector('[data-tile="src/b.ts"]')?.getAttribute('data-active-by')).toBeNull();
     expect(svg.querySelectorAll('.tm-hl')).toHaveLength(0);
 
     act(() => store.setView('board'));
-    fireEvent.click(screen.getByTestId('pin-RCB-8'));
+    fireEvent.click(screen.getByTestId('pin-RB-8'));
     act(() => store.setView('map'));
     svg = screen.getByRole('img', { name: 'Repository treemap' });
     expect(svg.querySelectorAll('.tm-hl')).toHaveLength(1);
     // Pinned, not active: outlined but no data-active-by.
     expect(svg.querySelector('[data-tile="src/b.ts"]')?.getAttribute('data-active-by')).toBeNull();
-    expect(within(screen.getByTestId('who-RCB-8')).getByText('pinned')).toBeInTheDocument();
+    expect(within(screen.getByTestId('who-RB-8')).getByText('pinned')).toBeInTheDocument();
   });
 });
 

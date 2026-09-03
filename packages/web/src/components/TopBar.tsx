@@ -1,4 +1,4 @@
-import type { RepoSnapshot } from '@rcb/core';
+import type { RepoSnapshot } from '@repoboard/core';
 import type { Theme, View } from '../store.js';
 
 interface Props {
@@ -20,7 +20,7 @@ export function TopBar({ repo, connected, fun, theme, view, onView, onFun, onThe
   return (
     <header className="topbar">
       <div className="topbar__repo">
-        <span className="topbar__mark">rcb</span>
+        <span className="topbar__mark">repoboard</span>
         {repo ? (
           <>
             <span className="topbar__name">{repoName(repo.root)}</span>

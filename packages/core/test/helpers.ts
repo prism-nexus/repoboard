@@ -4,7 +4,7 @@ export const NOW = new Date('2026-09-02T22:41:10Z');
 
 export function sampleCard(overrides: Partial<Card> = {}): Card {
   return {
-    id: 'RCB-12',
+    id: 'RB-12',
     title: 'Treemap view of the repo',
     status: 'doing',
     assignee: 'claude/web-agent',

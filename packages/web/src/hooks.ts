@@ -1,4 +1,4 @@
-import type { Card } from '@rcb/core';
+import type { Card } from '@repoboard/core';
 import {
   createContext,
   useContext,

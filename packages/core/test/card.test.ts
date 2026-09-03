@@ -4,7 +4,7 @@ import type { Card } from '../src/types.js';
 import { rng, sampleCard } from './helpers.js';
 
 const SPEC_EXAMPLE = `---
-id: RCB-12
+id: RB-12
 title: Treemap view of the repo
 status: doing
 assignee: claude/web-agent
@@ -31,7 +31,7 @@ function mustParse(text: string): Card {
 describe('parseCard', () => {
   it('parses the §2 example, timestamps stay strings', () => {
     const card = mustParse(SPEC_EXAMPLE);
-    expect(card.id).toBe('RCB-12');
+    expect(card.id).toBe('RB-12');
     expect(card.title).toBe('Treemap view of the repo');
     expect(card.status).toBe('doing');
     expect(card.assignee).toBe('claude/web-agent');
@@ -46,7 +46,7 @@ describe('parseCard', () => {
   });
 
   it('returns ok:false naming each missing required key', () => {
-    const r = parseCard('---\nid: RCB-1\nstatus: todo\n---\nbody\n');
+    const r = parseCard('---\nid: RB-1\nstatus: todo\n---\nbody\n');
     expect(r.ok).toBe(false);
     if (r.ok) return;
     expect(r.error).toMatch(/missing required keys: title, created, updated/);
@@ -54,14 +54,14 @@ describe('parseCard', () => {
 
   it('names a single missing key', () => {
     const r = parseCard(
-      '---\nid: RCB-1\nstatus: todo\ncreated: 2026-01-01T00:00:00Z\nupdated: 2026-01-01T00:00:00Z\n---\n',
+      '---\nid: RB-1\nstatus: todo\ncreated: 2026-01-01T00:00:00Z\nupdated: 2026-01-01T00:00:00Z\n---\n',
     );
     expect(r).toEqual({ ok: false, error: 'missing required key: title' });
   });
 
   it('rejects a bad priority and a non-ISO timestamp, naming the key', () => {
     const bad = parseCard(
-      '---\nid: RCB-1\ntitle: t\nstatus: todo\npriority: urgent\ncreated: yesterday\nupdated: 2026-01-01T00:00:00Z\n---\n',
+      '---\nid: RB-1\ntitle: t\nstatus: todo\npriority: urgent\ncreated: yesterday\nupdated: 2026-01-01T00:00:00Z\n---\n',
     );
     expect(bad.ok).toBe(false);
     if (bad.ok) return;
@@ -71,7 +71,7 @@ describe('parseCard', () => {
 
   it('rejects text without frontmatter, unterminated frontmatter, invalid YAML, empty mapping', () => {
     expect(parseCard('just markdown').ok).toBe(false);
-    expect(parseCard('---\nid: RCB-1\n').ok).toBe(false);
+    expect(parseCard('---\nid: RB-1\n').ok).toBe(false);
     expect(parseCard('---\nid: [\n---\n').ok).toBe(false);
     expect(parseCard('---\n---\n').ok).toBe(false);
     expect(parseCard('---\n- a\n- b\n---\n').ok).toBe(false);
@@ -83,21 +83,21 @@ describe('parseCard', () => {
 
   it('rejects a frontmatter key named body', () => {
     const r = parseCard(
-      '---\nid: RCB-1\ntitle: t\nstatus: todo\nbody: x\ncreated: 2026-01-01T00:00:00Z\nupdated: 2026-01-01T00:00:00Z\n---\n',
+      '---\nid: RB-1\ntitle: t\nstatus: todo\nbody: x\ncreated: 2026-01-01T00:00:00Z\nupdated: 2026-01-01T00:00:00Z\n---\n',
     );
     expect(r.ok).toBe(false);
   });
 
   it('treats an empty optional value (`assignee:`) as absent', () => {
     const card = mustParse(
-      '---\nid: RCB-1\ntitle: t\nstatus: todo\nassignee:\ncreated: 2026-01-01T00:00:00Z\nupdated: 2026-01-01T00:00:00Z\n---\n',
+      '---\nid: RB-1\ntitle: t\nstatus: todo\nassignee:\ncreated: 2026-01-01T00:00:00Z\nupdated: 2026-01-01T00:00:00Z\n---\n',
     );
     expect('assignee' in card).toBe(false);
   });
 
   it('keeps unknown frontmatter keys', () => {
     const card = mustParse(
-      '---\nid: RCB-1\ntitle: t\nstatus: todo\nfoo: bar\nnested:\n  a: 1\ncreated: 2026-01-01T00:00:00Z\nupdated: 2026-01-01T00:00:00Z\n---\n',
+      '---\nid: RB-1\ntitle: t\nstatus: todo\nfoo: bar\nnested:\n  a: 1\ncreated: 2026-01-01T00:00:00Z\nupdated: 2026-01-01T00:00:00Z\n---\n',
     );
     expect(card.foo).toBe('bar');
     expect(card.nested).toEqual({ a: 1 });
@@ -105,7 +105,7 @@ describe('parseCard', () => {
 
   it('body is byte-for-byte: no trailing newline, CRLF, leading blanks', () => {
     const base =
-      '---\nid: RCB-1\ntitle: t\nstatus: todo\ncreated: 2026-01-01T00:00:00Z\nupdated: 2026-01-01T00:00:00Z\n---';
+      '---\nid: RB-1\ntitle: t\nstatus: todo\ncreated: 2026-01-01T00:00:00Z\nupdated: 2026-01-01T00:00:00Z\n---';
     expect(mustParse(base).body).toBe('');
     expect(mustParse(`${base}\n`).body).toBe('');
     expect(mustParse(`${base}\n\n\n  x  \n\n`).body).toBe('\n\n  x  \n\n');
@@ -126,7 +126,7 @@ describe('serializeCard / round-trip', () => {
     const text = serializeCard(sampleCard({ labels: undefined }));
     expect(text.split('\n').slice(0, 9)).toEqual([
       '---',
-      'id: RCB-12',
+      'id: RB-12',
       'title: Treemap view of the repo',
       'status: doing',
       'assignee: claude/web-agent',
@@ -140,11 +140,11 @@ describe('serializeCard / round-trip', () => {
 
   it('unknown key `foo: bar` survives the round-trip and is written after known keys', () => {
     const card = mustParse(
-      '---\nfoo: bar\nid: RCB-1\ntitle: t\nstatus: todo\ncreated: 2026-01-01T00:00:00Z\nupdated: 2026-01-01T00:00:00Z\n---\nhello\n',
+      '---\nfoo: bar\nid: RB-1\ntitle: t\nstatus: todo\ncreated: 2026-01-01T00:00:00Z\nupdated: 2026-01-01T00:00:00Z\n---\nhello\n',
     );
     const text = serializeCard(card);
     expect(text).toBe(
-      '---\nid: RCB-1\ntitle: t\nstatus: todo\ncreated: 2026-01-01T00:00:00Z\nupdated: 2026-01-01T00:00:00Z\nfoo: bar\n---\nhello\n',
+      '---\nid: RB-1\ntitle: t\nstatus: todo\ncreated: 2026-01-01T00:00:00Z\nupdated: 2026-01-01T00:00:00Z\nfoo: bar\n---\nhello\n',
     );
     expect(mustParse(text).foo).toBe('bar');
   });

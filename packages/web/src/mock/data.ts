@@ -1,4 +1,9 @@
-import { type BoardConfig, type Card, defaultBoardConfig, type RepoSnapshot } from '@rcb/core';
+import {
+  type BoardConfig,
+  type Card,
+  defaultBoardConfig,
+  type RepoSnapshot,
+} from '@repoboard/core';
 
 export const MOCK_ACTORS = ['claude/web-agent', 'claude/server-agent', 'claude/core-agent', 'matt'];
 
@@ -23,7 +28,7 @@ function card(
     ...(log.length ? ['', '## Log', ...log.map((l) => `- ${l}`)] : []),
     '',
   ].join('\n');
-  return { id: `RCB-${n}`, title, status, created, updated, body, ...rest };
+  return { id: `RB-${n}`, title, status, created, updated, body, ...rest };
 }
 
 export function mockConfig(): BoardConfig {
@@ -114,7 +119,7 @@ export function mockCards(now = Date.now()): Card[] {
       priority: 'high',
       labels: ['mcp'],
     }),
-    card(23, 'P6.2 npx rcb works from npm pack', 'backlog', 220, {
+    card(23, 'P6.2 npx repoboard works from npm pack', 'backlog', 220, {
       priority: 'low',
       labels: ['infra'],
     }),
@@ -173,14 +178,14 @@ export function mockRepo(now = Date.now()): RepoSnapshot {
     f('package.json', 900, 'json', 2, 700),
     f('pnpm-lock.yaml', 180000, 'lock', 2, 700, null),
     f('docs/demo.gif', 640000, 'image', 0, null, null),
-    f('.rcb/board.yml', 300, 'yaml', 1, 20),
-    f('.rcb/cards/RCB-7.md', 800, 'markdown', 4, 4),
+    f('.repoboard/board.yml', 300, 'yaml', 1, 20),
+    f('.repoboard/cards/RB-7.md', 800, 'markdown', 4, 4),
   ];
   const languages: Record<string, number> = {};
   for (const x of files) languages[x.lang] = (languages[x.lang] ?? 0) + x.bytes;
   const e = (from: string, to: string) => ({ from, to });
   return {
-    root: '/Users/you/Projects/rcb',
+    root: '/Users/you/Projects/repoboard',
     scannedAt: new Date(now).toISOString(),
     files,
     edges: [

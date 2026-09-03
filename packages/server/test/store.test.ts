@@ -1,7 +1,7 @@
 import { readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import type { BoardConfig, Card } from '@rcb/core';
-import { parseCard } from '@rcb/core';
+import type { BoardConfig, Card } from '@repoboard/core';
+import { parseCard } from '@repoboard/core';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
   type CardStore,
@@ -11,7 +11,7 @@ import {
   openStore,
   type StoreEvent,
 } from '../src/store.js';
-import { cardText, makeTempRcb, NOW, type TempRepo, waitForEvent } from './helpers.js';
+import { cardText, makeTempRepoboard, NOW, type TempRepo, waitForEvent } from './helpers.js';
 
 const opened: CardStore[] = [];
 const repos: TempRepo[] = [];
@@ -28,7 +28,7 @@ afterEach(async () => {
 });
 
 async function repoWith(cards: Record<string, string>): Promise<TempRepo> {
-  const repo = await makeTempRcb(cards);
+  const repo = await makeTempRepoboard(cards);
   repos.push(repo);
   return repo;
 }
@@ -36,12 +36,12 @@ async function repoWith(cards: Record<string, string>): Promise<TempRepo> {
 describe('openStore: load', () => {
   it('reads board.yml and every card; falls back to defaults without board.yml', async () => {
     const repo = await repoWith({
-      'RCB-1.md': cardText('RCB-1', 'todo'),
-      'RCB-2.md': cardText('RCB-2', 'doing', { assignee: 'claude/x' }),
-      'RCB-10.md': cardText('RCB-10', 'done'),
+      'RB-1.md': cardText('RB-1', 'todo'),
+      'RB-2.md': cardText('RB-2', 'doing', { assignee: 'claude/x' }),
+      'RB-10.md': cardText('RB-10', 'done'),
     });
     const store = await open(repo, false);
-    expect(store.config.prefix).toBe('RCB');
+    expect(store.config.prefix).toBe('RB');
     expect(store.config.columns.map((c) => c.id)).toEqual([
       'backlog',
       'todo',
@@ -49,24 +49,24 @@ describe('openStore: load', () => {
       'review',
       'done',
     ]);
-    expect(store.list().map((c) => c.id)).toEqual(['RCB-1', 'RCB-2', 'RCB-10']);
-    expect(store.get('RCB-2')?.assignee).toBe('claude/x');
+    expect(store.list().map((c) => c.id)).toEqual(['RB-1', 'RB-2', 'RB-10']);
+    expect(store.get('RB-2')?.assignee).toBe('claude/x');
     expect(store.invalid).toEqual([]);
 
-    await rm(join(repo.root, '.rcb', 'board.yml'));
+    await rm(join(repo.root, '.repoboard', 'board.yml'));
     const bare = await open(repo, false);
     expect(bare.config.columns).toHaveLength(5);
   });
 
   it('reports an invalid card instead of throwing, and still loads the others', async () => {
     const repo = await repoWith({
-      'RCB-1.md': cardText('RCB-1', 'todo'),
-      'RCB-2.md': '---\nid: RCB-2\ntitle: no status here\n---\n',
+      'RB-1.md': cardText('RB-1', 'todo'),
+      'RB-2.md': '---\nid: RB-2\ntitle: no status here\n---\n',
     });
     const store = await open(repo, false);
-    expect(store.list().map((c) => c.id)).toEqual(['RCB-1']);
+    expect(store.list().map((c) => c.id)).toEqual(['RB-1']);
     expect(store.invalid).toHaveLength(1);
-    expect(store.invalid[0]?.path).toBe(join('.rcb', 'cards', 'RCB-2.md'));
+    expect(store.invalid[0]?.path).toBe(join('.repoboard', 'cards', 'RB-2.md'));
     expect(store.invalid[0]?.error).toMatch(/missing required keys: status, created, updated/);
   });
 
@@ -87,36 +87,36 @@ function created(res: CreateOutcome): Card {
 describe('create', () => {
   it('allocates the next id, writes the file via core, and appends a create event', async () => {
     const repo = await repoWith({
-      'RCB-3.md': cardText('RCB-3', 'todo'),
-      'RCB-7.md': cardText('RCB-7', 'done'),
+      'RB-3.md': cardText('RB-3', 'todo'),
+      'RB-7.md': cardText('RB-7', 'done'),
     });
     const store = await open(repo, false);
     const card = created(await store.create({ title: 'New one', labels: ['a'] }, 'tester'));
-    expect(card.id).toBe('RCB-8');
+    expect(card.id).toBe('RB-8');
     expect(card.status).toBe('backlog');
     expect(card.created).toBe('2026-09-02T22:41:10Z');
 
-    const text = await readFile(join(repo.cardsDir, 'RCB-8.md'), 'utf8');
+    const text = await readFile(join(repo.cardsDir, 'RB-8.md'), 'utf8');
     const parsed = parseCard(text);
     expect(parsed.ok && parsed.card.title).toBe('New one');
-    expect(store.get('RCB-8')).toEqual(card);
+    expect(store.get('RB-8')).toEqual(card);
 
-    const log = await readFile(join(repo.root, '.rcb', 'events.jsonl'), 'utf8');
+    const log = await readFile(join(repo.root, '.repoboard', 'events.jsonl'), 'utf8');
     expect(JSON.parse(log.trim())).toEqual({
       ts: '2026-09-02T22:41:10Z',
       actor: 'tester',
       type: 'create',
-      cardId: 'RCB-8',
+      cardId: 'RB-8',
       from: null,
       to: 'backlog',
     });
   });
 
   it('counts an invalid file toward id allocation so it is never overwritten', async () => {
-    const repo = await repoWith({ 'RCB-4.md': 'garbage' });
+    const repo = await repoWith({ 'RB-4.md': 'garbage' });
     const store = await open(repo, false);
     const card = created(await store.create({ title: 'x' }, 'tester'));
-    expect(card.id).toBe('RCB-5');
+    expect(card.id).toBe('RB-5');
   });
 
   it('rejects an unknown status as ok:false (K4) without writing anything', async () => {
@@ -132,33 +132,33 @@ describe('create', () => {
 
 describe('move and update', () => {
   it('move writes the file, sets updated, appends a Log line and an event', async () => {
-    const repo = await repoWith({ 'RCB-1.md': cardText('RCB-1', 'todo') });
+    const repo = await repoWith({ 'RB-1.md': cardText('RB-1', 'todo') });
     const store = await open(repo, false);
     const events: StoreEvent[] = [];
     store.on('event', (e) => events.push(e));
 
-    const res = await store.move('RCB-1', 'doing', 'claude/agent');
+    const res = await store.move('RB-1', 'doing', 'claude/agent');
     expect(res.ok).toBe(true);
     if (!res.ok) return;
     expect(res.card.status).toBe('doing');
     expect(res.card.updated).toBe('2026-09-02T22:41:10Z');
     expect(res.warnings).toEqual([]);
 
-    const text = await readFile(join(repo.cardsDir, 'RCB-1.md'), 'utf8');
+    const text = await readFile(join(repo.cardsDir, 'RB-1.md'), 'utf8');
     expect(text).toContain('status: doing');
     expect(text).toContain('- 2026-09-02T22:41:10Z claude/agent — moved todo → doing');
-    expect(await readFile(join(repo.cardsDir, 'RCB-1.md.tmp'), 'utf8').catch(() => 'gone')).toBe(
+    expect(await readFile(join(repo.cardsDir, 'RB-1.md.tmp'), 'utf8').catch(() => 'gone')).toBe(
       'gone',
     );
 
-    const log = await readFile(join(repo.root, '.rcb', 'events.jsonl'), 'utf8');
+    const log = await readFile(join(repo.root, '.repoboard', 'events.jsonl'), 'utf8');
     expect(log.trim().split('\n')).toHaveLength(1);
     expect(events).toEqual([
       {
         ts: '2026-09-02T22:41:10Z',
         actor: 'claude/agent',
         type: 'move',
-        cardId: 'RCB-1',
+        cardId: 'RB-1',
         from: 'todo',
         to: 'doing',
       },
@@ -169,31 +169,31 @@ describe('move and update', () => {
 
   it('move returns ok:false for an unknown card or column, and a WIP warning', async () => {
     const repo = await repoWith({
-      'RCB-1.md': cardText('RCB-1', 'doing'),
-      'RCB-2.md': cardText('RCB-2', 'doing'),
-      'RCB-3.md': cardText('RCB-3', 'doing'),
-      'RCB-4.md': cardText('RCB-4', 'todo'),
+      'RB-1.md': cardText('RB-1', 'doing'),
+      'RB-2.md': cardText('RB-2', 'doing'),
+      'RB-3.md': cardText('RB-3', 'doing'),
+      'RB-4.md': cardText('RB-4', 'todo'),
     });
     const store = await open(repo, false);
-    expect(await store.move('RCB-99', 'doing', 't')).toMatchObject({ ok: false, notFound: true });
-    expect(await store.move('RCB-4', 'nowhere', 't')).toMatchObject({
+    expect(await store.move('RB-99', 'doing', 't')).toMatchObject({ ok: false, notFound: true });
+    expect(await store.move('RB-4', 'nowhere', 't')).toMatchObject({
       ok: false,
       error: expect.stringMatching(/unknown column/),
     });
-    const res = await store.move('RCB-4', 'doing', 't');
+    const res = await store.move('RB-4', 'doing', 't');
     expect(res.ok && res.warnings[0]).toMatch(/WIP limit exceeded/);
   });
 
   it('update changes fields, clears with null, and appends an update event', async () => {
-    const repo = await repoWith({ 'RCB-1.md': cardText('RCB-1', 'todo', { assignee: 'a' }) });
+    const repo = await repoWith({ 'RB-1.md': cardText('RB-1', 'todo', { assignee: 'a' }) });
     const store = await open(repo, false);
-    const res = await store.update('RCB-1', { title: 'Renamed', assignee: null }, 'ed');
+    const res = await store.update('RB-1', { title: 'Renamed', assignee: null }, 'ed');
     expect(res.ok).toBe(true);
     if (!res.ok) return;
     expect(res.card.title).toBe('Renamed');
     expect(res.card.assignee).toBeUndefined();
     expect(res.event).toMatchObject({ type: 'update', from: 'todo', to: 'todo', actor: 'ed' });
-    const text = await readFile(join(repo.cardsDir, 'RCB-1.md'), 'utf8');
+    const text = await readFile(join(repo.cardsDir, 'RB-1.md'), 'utf8');
     expect(text).not.toContain('assignee:');
     expect(text).toContain('updated title, assignee');
   });
@@ -204,15 +204,15 @@ describe('move and update', () => {
     const cards = await Promise.all(
       Array.from({ length: 5 }, (_, i) => store.create({ title: `c${i}` }, 't')),
     );
-    expect(cards.map((c) => created(c).id)).toEqual(['RCB-1', 'RCB-2', 'RCB-3', 'RCB-4', 'RCB-5']);
+    expect(cards.map((c) => created(c).id)).toEqual(['RB-1', 'RB-2', 'RB-3', 'RB-4', 'RB-5']);
   });
 });
 
 describe('watcher', () => {
   it('picks up an external sed-style edit and synthesises a file event', async () => {
-    const repo = await repoWith({ 'RCB-1.md': cardText('RCB-1', 'todo') });
+    const repo = await repoWith({ 'RB-1.md': cardText('RB-1', 'todo') });
     const store = await open(repo, true);
-    const path = join(repo.cardsDir, 'RCB-1.md');
+    const path = join(repo.cardsDir, 'RB-1.md');
 
     const cardSeen = waitForEvent<Card>(store, 'card', (c) => c.status === 'doing');
     const eventSeen = waitForEvent<StoreEvent>(store, 'event');
@@ -220,48 +220,48 @@ describe('watcher', () => {
     await writeFile(path, original.replace('status: todo', 'status: doing'));
 
     const card = await cardSeen;
-    expect(card.id).toBe('RCB-1');
-    expect(store.get('RCB-1')?.status).toBe('doing');
+    expect(card.id).toBe('RB-1');
+    expect(store.get('RB-1')?.status).toBe('doing');
     expect(await eventSeen).toEqual({
       ts: '2026-09-02T22:41:10Z',
       actor: 'file',
       type: 'move',
-      cardId: 'RCB-1',
+      cardId: 'RB-1',
       from: 'todo',
       to: 'doing',
     });
-    const log = await readFile(join(repo.root, '.rcb', 'events.jsonl'), 'utf8');
+    const log = await readFile(join(repo.root, '.repoboard', 'events.jsonl'), 'utf8');
     expect(log).toContain('"actor":"file"');
   });
 
   it('sees a new file, a removed file, and a file that turns invalid', async () => {
-    const repo = await repoWith({ 'RCB-1.md': cardText('RCB-1', 'todo') });
+    const repo = await repoWith({ 'RB-1.md': cardText('RB-1', 'todo') });
     const store = await open(repo, true);
 
-    const added = waitForEvent<Card>(store, 'card', (c) => c.id === 'RCB-2');
-    await writeFile(join(repo.cardsDir, 'RCB-2.md'), cardText('RCB-2', 'review'));
+    const added = waitForEvent<Card>(store, 'card', (c) => c.id === 'RB-2');
+    await writeFile(join(repo.cardsDir, 'RB-2.md'), cardText('RB-2', 'review'));
     expect((await added).status).toBe('review');
     expect(store.list()).toHaveLength(2);
 
     const invalid = waitForEvent<InvalidCard[]>(store, 'invalid', (list) => list.length === 1);
-    const removed = waitForEvent<string>(store, 'card:removed', (id) => id === 'RCB-2');
-    await writeFile(join(repo.cardsDir, 'RCB-2.md'), '---\nid: RCB-2\n---\n');
+    const removed = waitForEvent<string>(store, 'card:removed', (id) => id === 'RB-2');
+    await writeFile(join(repo.cardsDir, 'RB-2.md'), '---\nid: RB-2\n---\n');
     expect((await invalid)[0]?.error).toMatch(/missing required/);
-    expect(await removed).toBe('RCB-2');
-    expect(store.list().map((c) => c.id)).toEqual(['RCB-1']);
+    expect(await removed).toBe('RB-2');
+    expect(store.list().map((c) => c.id)).toEqual(['RB-1']);
 
-    const gone = waitForEvent<string>(store, 'card:removed', (id) => id === 'RCB-1');
-    await rm(join(repo.cardsDir, 'RCB-1.md'));
-    expect(await gone).toBe('RCB-1');
+    const gone = waitForEvent<string>(store, 'card:removed', (id) => id === 'RB-1');
+    await rm(join(repo.cardsDir, 'RB-1.md'));
+    expect(await gone).toBe('RB-1');
     expect(store.list()).toEqual([]);
   });
 
   it('does not synthesise a file event for its own write', async () => {
-    const repo = await repoWith({ 'RCB-1.md': cardText('RCB-1', 'todo') });
+    const repo = await repoWith({ 'RB-1.md': cardText('RB-1', 'todo') });
     const store = await open(repo, true);
     const events: StoreEvent[] = [];
     store.on('event', (e) => events.push(e));
-    await store.move('RCB-1', 'doing', 'me');
+    await store.move('RB-1', 'doing', 'me');
     // Give the watcher time to echo the write back (awaitWriteFinish is 100 ms).
     await new Promise((r) => setTimeout(r, 600));
     expect(events).toHaveLength(1);
@@ -273,7 +273,7 @@ describe('watcher', () => {
     const store = await open(repo, true);
     const changed = waitForEvent<BoardConfig>(store, 'config');
     await writeFile(
-      join(repo.root, '.rcb', 'board.yml'),
+      join(repo.root, '.repoboard', 'board.yml'),
       'prefix: ZZ\ncolumns:\n  - id: one\n  - id: two\n',
     );
     const cfg = await changed;
@@ -289,11 +289,11 @@ describe('watcher', () => {
       ts: '2026-09-02T23:00:00Z',
       actor: 'cli',
       type: 'move',
-      cardId: 'RCB-1',
+      cardId: 'RB-1',
       from: 'a',
       to: 'b',
     };
-    await writeFile(join(repo.root, '.rcb', 'events.jsonl'), `${JSON.stringify(line)}\n`);
+    await writeFile(join(repo.root, '.repoboard', 'events.jsonl'), `${JSON.stringify(line)}\n`);
     expect(await seen).toEqual(line);
     expect(store.events()).toEqual([line]);
   });
@@ -301,11 +301,11 @@ describe('watcher', () => {
 
 describe('compareCardIds', () => {
   it('orders numerically within a prefix', () => {
-    expect(['RCB-10', 'RCB-2', 'ABC-1', 'RCB-1'].sort(compareCardIds)).toEqual([
+    expect(['RB-10', 'RB-2', 'ABC-1', 'RB-1'].sort(compareCardIds)).toEqual([
       'ABC-1',
-      'RCB-1',
-      'RCB-2',
-      'RCB-10',
+      'RB-1',
+      'RB-2',
+      'RB-10',
     ]);
   });
 });

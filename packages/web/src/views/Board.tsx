@@ -10,7 +10,7 @@ import {
   useSensors,
 } from '@dnd-kit/core';
 import { sortableKeyboardCoordinates } from '@dnd-kit/sortable';
-import { type Card, findColumn, isActive } from '@rcb/core';
+import { type Card, findColumn, isActive } from '@repoboard/core';
 import { useCallback, useMemo, useState } from 'react';
 import { CardItem } from '../components/CardItem.jsx';
 import { Column } from '../components/Column.jsx';

@@ -1,6 +1,6 @@
 /**
- * P2.2 Card store. The in-memory map is a cache of `.rcb/` on disk, never the other way
- * around (D6): every mutation goes through @rcb/core, is written atomically (tmp + rename),
+ * P2.2 Card store. The in-memory map is a cache of `.repoboard/` on disk, never the other way
+ * around (D6): every mutation goes through @repoboard/core, is written atomically (tmp + rename),
  * and the chokidar watcher re-reads whatever changes on disk — including our own writes,
  * which it recognises by content hash and does not double-report.
  */
@@ -24,10 +24,10 @@ import {
   serializeCard,
   toIso,
   updateCard,
-} from '@rcb/core';
+} from '@repoboard/core';
 import { watch as chokidarWatch, type FSWatcher } from 'chokidar';
 
-/** One line of `.rcb/events.jsonl`: core's `Event` (K2). Kept as a name for the package index. */
+/** One line of `.repoboard/events.jsonl`: core's `Event` (K2). Kept as a name for the package index. */
 export type StoreEvent = Event;
 
 /** A card file that failed to parse. Reported, never thrown; the UI shows it red. */
@@ -80,7 +80,7 @@ export function compareCardIds(a: string, b: string): number {
 
 export class CardStore extends EventEmitter<StoreEvents> {
   readonly root: string;
-  readonly rcbDir: string;
+  readonly repoboardDir: string;
   readonly cardsDir: string;
   readonly boardPath: string;
   readonly eventsPath: string;
@@ -99,10 +99,10 @@ export class CardStore extends EventEmitter<StoreEvents> {
   constructor(root: string, opts: OpenStoreOptions = {}) {
     super();
     this.root = resolve(root);
-    this.rcbDir = join(this.root, '.rcb');
-    this.cardsDir = join(this.rcbDir, 'cards');
-    this.boardPath = join(this.rcbDir, 'board.yml');
-    this.eventsPath = join(this.rcbDir, 'events.jsonl');
+    this.repoboardDir = join(this.root, '.repoboard');
+    this.cardsDir = join(this.repoboardDir, 'cards');
+    this.boardPath = join(this.repoboardDir, 'board.yml');
+    this.eventsPath = join(this.repoboardDir, 'events.jsonl');
     this.now = opts.now ?? (() => new Date());
   }
 
@@ -158,7 +158,7 @@ export class CardStore extends EventEmitter<StoreEvents> {
     if (w) await w.close();
   }
 
-  // ---- mutations (each one funnels through @rcb/core and is serialised) ---------------
+  // ---- mutations (each one funnels through @repoboard/core and is serialised) ---------------
 
   /** Never throws on user input (K4): a bad status or title is `{ok:false, error}`. */
   create(input: CreateCardInput, actor: string): Promise<CreateOutcome> {
@@ -288,7 +288,7 @@ export class CardStore extends EventEmitter<StoreEvents> {
 
   private async appendEvent(event: Event): Promise<void> {
     const line = `${JSON.stringify(event)}\n`;
-    await mkdir(this.rcbDir, { recursive: true });
+    await mkdir(this.repoboardDir, { recursive: true });
     await appendFile(this.eventsPath, line, 'utf8');
     this.eventsBytes += Buffer.byteLength(line);
     this.eventLog.push(event);
@@ -418,7 +418,7 @@ export class CardStore extends EventEmitter<StoreEvents> {
   }
 
   private async startWatcher(): Promise<void> {
-    const watcher = chokidarWatch(this.rcbDir, {
+    const watcher = chokidarWatch(this.repoboardDir, {
       ignoreInitial: true,
       awaitWriteFinish: { stabilityThreshold: 100, pollInterval: 20 },
       ignored: (p) => p.endsWith('.tmp'),
@@ -426,7 +426,7 @@ export class CardStore extends EventEmitter<StoreEvents> {
     this.watcher = watcher;
     watcher.on('all', (event, rawPath) => {
       const path = resolve(rawPath);
-      const rel = relative(this.rcbDir, path).split(sep).join('/');
+      const rel = relative(this.repoboardDir, path).split(sep).join('/');
       const task = (): Promise<void> => {
         if (rel === 'board.yml') {
           return this.loadConfig()
@@ -490,7 +490,7 @@ async function exists(path: string): Promise<boolean> {
   }
 }
 
-/** Open the store at `<root>/.rcb`. Watches by default; pass `{watch:false}` for one-shots. */
+/** Open the store at `<root>/.repoboard`. Watches by default; pass `{watch:false}` for one-shots. */
 export async function openStore(root: string, opts: OpenStoreOptions = {}): Promise<CardStore> {
   const store = new CardStore(root, opts);
   await store.load(opts.watch ?? true);

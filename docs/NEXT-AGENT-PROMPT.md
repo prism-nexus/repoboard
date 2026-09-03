@@ -3,8 +3,7 @@
 Check this date against the highest `docs/HANDOFF.md` §12.0x letter before trusting it; if a
 higher letter exists, that letter wins and this file is stale.
 
-You are the orchestrator for **repoboard** (working dir name `Remember-Connect-Build`; the code
-still says `rcb` until P6.0 lands). Read `CLAUDE.md`, then `docs/BUILD-PLAN.md` §1 and §11, then
+You are the orchestrator for **repoboard** (working dir name `Remember-Connect-Build`). Read `CLAUDE.md`, then `docs/BUILD-PLAN.md` §1 and §11, then
 `docs/HANDOFF.md` §12 (highest letter), then `git log --oneline | head -20`.
 
 **State:** P0–P5 are committed and verified. 142 tests, typecheck and lint clean, bundle

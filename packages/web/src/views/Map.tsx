@@ -2,7 +2,7 @@
  * P4 map shell: layer toggle (treemap | graph), heat modes, breadcrumb, legend, the canvas, and
  * the rail ("who is where" + the file panel). All model work lives in ../map/model.ts.
  */
-import { avatarFor, type Card, findColumn } from '@rcb/core';
+import { avatarFor, type Card, findColumn } from '@repoboard/core';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Avatar } from '../components/Avatar.jsx';
 import { useBoardState, useNow, useStore } from '../hooks.js';

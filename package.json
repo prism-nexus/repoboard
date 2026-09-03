@@ -1,16 +1,16 @@
 {
-  "name": "rcb-monorepo",
+  "name": "repoboard-monorepo",
   "version": "0.0.0",
   "private": true,
   "type": "module",
-  "description": "rcb (Remember · Connect · Build) — local-first repo dashboard and agent-driven Kanban board",
+  "description": "repoboard (Remember · Connect · Build) — local-first repo dashboard and agent-driven Kanban board",
   "license": "MIT",
   "packageManager": "pnpm@11.18.0",
   "engines": {
     "node": ">=20"
   },
   "scripts": {
-    "test": "vitest run && pnpm --filter @rcb/web check:size",
+    "test": "vitest run && pnpm --filter @repoboard/web check:size",
     "typecheck": "pnpm -r typecheck",
     "lint": "biome check .",
     "format": "biome format --write .",

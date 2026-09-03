@@ -8,8 +8,8 @@ import { createReadStream } from 'node:fs';
 import { readdir, readFile, stat } from 'node:fs/promises';
 import { basename, extname, join, posix, relative, resolve, sep } from 'node:path';
 import { promisify } from 'node:util';
-import type { RepoSnapshot } from '@rcb/core';
-import { toIso } from '@rcb/core';
+import type { RepoSnapshot } from '@repoboard/core';
+import { toIso } from '@repoboard/core';
 
 const execFileAsync = promisify(execFile);
 

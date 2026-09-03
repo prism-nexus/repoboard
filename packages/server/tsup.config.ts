@@ -1,6 +1,6 @@
 import { defineConfig } from 'tsup';
 
-// @rcb/core ships TypeScript source only (its package.json exports ./src/index.ts), so the
+// @repoboard/core ships TypeScript source only (its package.json exports ./src/index.ts), so the
 // runnable CLI bundles core in. yaml/zod (core's deps) stay external and are listed as our own
 // dependencies. `clean` is off because the web build lands in dist/web (BUILD-PLAN §6).
 export default defineConfig({
@@ -15,6 +15,6 @@ export default defineConfig({
   sourcemap: true,
   dts: false,
   clean: false,
-  noExternal: ['@rcb/core'],
+  noExternal: ['@repoboard/core'],
   external: ['chokidar', 'ws', 'yaml', 'zod'],
 });

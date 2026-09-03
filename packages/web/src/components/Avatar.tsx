@@ -1,4 +1,4 @@
-import { avatarFor } from '@rcb/core';
+import { avatarFor } from '@repoboard/core';
 
 interface Props {
   assignee: string;

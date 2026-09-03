@@ -1,4 +1,4 @@
-import { defaultBoardConfig } from '@rcb/core';
+import { defaultBoardConfig } from '@repoboard/core';
 import { screen, within } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
 import { columnsWithCards } from '../src/store.js';
@@ -8,7 +8,7 @@ describe('columns from config', () => {
   it('renders one column per config column, in order, with the configured titles', () => {
     const store = testStore();
     const config = defaultBoardConfig();
-    snapshot(store, [card('RCB-1', 'todo')], config);
+    snapshot(store, [card('RB-1', 'todo')], config);
     renderApp(store);
     const board = screen.getByTestId('board');
     const sections = within(board).getAllByRole('region');
@@ -28,10 +28,10 @@ describe('columns from config', () => {
   it('shows count / wip and marks a WIP breach', () => {
     const store = testStore();
     snapshot(store, [
-      card('RCB-1', 'doing'),
-      card('RCB-2', 'doing'),
-      card('RCB-3', 'doing'),
-      card('RCB-4', 'doing'),
+      card('RB-1', 'doing'),
+      card('RB-2', 'doing'),
+      card('RB-3', 'doing'),
+      card('RB-4', 'doing'),
     ]);
     renderApp(store);
     const doing = screen.getByRole('region', { name: 'Doing' });
@@ -41,11 +41,11 @@ describe('columns from config', () => {
 
   it('sorts cards by updated desc and keeps unknown statuses visible', () => {
     const cols = columnsWithCards(defaultBoardConfig(), [
-      card('RCB-1', 'todo', { updated: '2026-09-02T21:00:00Z' }),
-      card('RCB-2', 'todo', { updated: '2026-09-02T23:00:00Z' }),
-      card('RCB-9', 'limbo'),
+      card('RB-1', 'todo', { updated: '2026-09-02T21:00:00Z' }),
+      card('RB-2', 'todo', { updated: '2026-09-02T23:00:00Z' }),
+      card('RB-9', 'limbo'),
     ]);
-    expect(cols.find((c) => c.id === 'todo')?.cards.map((c) => c.id)).toEqual(['RCB-2', 'RCB-1']);
+    expect(cols.find((c) => c.id === 'todo')?.cards.map((c) => c.id)).toEqual(['RB-2', 'RB-1']);
     const limbo = cols.at(-1);
     expect(limbo?.id).toBe('limbo');
     expect(limbo?.unconfigured).toBe(true);

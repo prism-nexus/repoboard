@@ -1,4 +1,4 @@
-import { type BoardConfig, type Card, defaultBoardConfig } from '@rcb/core';
+import { type BoardConfig, type Card, defaultBoardConfig } from '@repoboard/core';
 import { render } from '@testing-library/react';
 import { App } from '../src/App.jsx';
 import { createMockTransport } from '../src/mock/index.js';

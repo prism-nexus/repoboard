@@ -24,7 +24,7 @@ describe('moveCard', () => {
       ts: '2026-09-03T01:02:03Z',
       actor,
       type: 'move',
-      cardId: 'RCB-12',
+      cardId: 'RB-12',
       from: 'todo',
       to: 'doing',
     });
@@ -90,27 +90,27 @@ describe('moveCard', () => {
     });
     expect(r.ok).toBe(true);
     if (!r.ok) return;
-    expect(r.warnings).toEqual(['card RCB-12 is already in "doing"']);
+    expect(r.warnings).toEqual(['card RB-12 is already in "doing"']);
     expect(r.event.from).toBe('doing');
   });
 });
 
 describe('allocateCardId / createCard', () => {
   it('allocates max+1 for the prefix, ignoring other prefixes and gaps', () => {
-    expect(allocateCardId([], 'RCB')).toBe('RCB-1');
-    expect(allocateCardId(['RCB-1', 'RCB-7', 'RCB-3'], 'RCB')).toBe('RCB-8');
-    expect(allocateCardId(['K-40', 'RCB-2', 'RCBX-99', 'RCB-abc', 'rcb-50'], 'RCB')).toBe('RCB-3');
-    expect(allocateCardId(['K-40'], 'RCB')).toBe('RCB-1');
+    expect(allocateCardId([], 'RB')).toBe('RB-1');
+    expect(allocateCardId(['RB-1', 'RB-7', 'RB-3'], 'RB')).toBe('RB-8');
+    expect(allocateCardId(['K-40', 'RB-2', 'RBX-99', 'RB-abc', 'repoboard-50'], 'RB')).toBe('RB-3');
+    expect(allocateCardId(['K-40'], 'RB')).toBe('RB-1');
     expect(allocateCardId(['A.B-4'], 'A.B')).toBe('A.B-5');
     expect(allocateCardId(['AXB-4'], 'A.B')).toBe('A.B-1');
   });
 
   it('creates a card with defaults: first column, empty body, created == updated', () => {
-    const res = createCard({ title: 'New thing' }, { existingIds: ['RCB-2'], now: NOW, config });
+    const res = createCard({ title: 'New thing' }, { existingIds: ['RB-2'], now: NOW, config });
     if (!res.ok) throw new Error(res.error);
     const card = res.card;
     expect(card).toEqual({
-      id: 'RCB-3',
+      id: 'RB-3',
       title: 'New thing',
       status: 'backlog',
       created: '2026-09-02T22:41:10Z',
@@ -163,9 +163,9 @@ describe('allocateCardId / createCard', () => {
 
   it('core Event accepts every type the store writes (K2): move, update, create', () => {
     const events: Event[] = [
-      { ts: 't', actor: 'a', type: 'move', cardId: 'RCB-1', from: 'todo', to: 'doing' },
-      { ts: 't', actor: 'a', type: 'update', cardId: 'RCB-1', from: 'doing', to: 'doing' },
-      { ts: 't', actor: 'a', type: 'create', cardId: 'RCB-1', from: null, to: 'backlog' },
+      { ts: 't', actor: 'a', type: 'move', cardId: 'RB-1', from: 'todo', to: 'doing' },
+      { ts: 't', actor: 'a', type: 'update', cardId: 'RB-1', from: 'doing', to: 'doing' },
+      { ts: 't', actor: 'a', type: 'create', cardId: 'RB-1', from: null, to: 'backlog' },
     ];
     expect(events.map((e) => e.type)).toEqual(['move', 'update', 'create']);
     expect(events[2]?.from).toBeNull();

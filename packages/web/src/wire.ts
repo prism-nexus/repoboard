@@ -1,5 +1,5 @@
 /** Wire contract, verbatim from BUILD-PLAN §3. The web never assumes more than this. */
-import type { BoardConfig, Card, CardPatch, Event, RepoSnapshot } from '@rcb/core';
+import type { BoardConfig, Card, CardPatch, Event, RepoSnapshot } from '@repoboard/core';
 
 export type ServerMessage =
   | { type: 'snapshot'; board: { config: BoardConfig; cards: Card[] }; repo: RepoSnapshot | null }

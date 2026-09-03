@@ -1,4 +1,4 @@
-// @rcb/server — CLI, HTTP, WebSocket, watcher, scanner. MCP arrives in P5.
+// repoboard — CLI, HTTP, WebSocket, watcher, scanner. MCP arrives in P5.
 export { run as runCli } from './cli.js';
 export type { RunningServer, ServerOptions } from './http.js';
 export { startServer } from './http.js';

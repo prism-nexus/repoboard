@@ -13,7 +13,7 @@ export const ColumnSchema = z.looseObject({
 /** The exact default from BUILD-PLAN §2. */
 export function defaultBoardConfig(): BoardConfig {
   return {
-    prefix: 'RCB',
+    prefix: 'RB',
     activeWindowMinutes: 30,
     columns: [
       { id: 'backlog', title: 'Backlog' },
@@ -30,7 +30,7 @@ export const BoardConfigSchema = z
     prefix: z
       .string()
       .regex(/^[A-Za-z][A-Za-z0-9_]*$/, 'must start with a letter and contain only [A-Za-z0-9_]')
-      .default('RCB'),
+      .default('RB'),
     activeWindowMinutes: z.number().positive().default(30),
     // An absent `columns` key means "the defaults"; an explicit empty list is an error.
     columns: z
@@ -60,7 +60,7 @@ function formatIssue(issue: z.core.$ZodIssue): string {
   return path ? `${path}: ${issue.message}` : issue.message;
 }
 
-/** Parse `.rcb/board.yml`. An empty file yields the defaults. Never throws. */
+/** Parse `.repoboard/board.yml`. An empty file yields the defaults. Never throws. */
 export function parseBoard(text: string): BoardParseResult {
   let data: unknown;
   try {

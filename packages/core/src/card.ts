@@ -74,7 +74,7 @@ function formatIssue(issue: z.core.$ZodIssue): string {
 }
 
 /**
- * Parse the text of a `.rcb/cards/<id>.md` file.
+ * Parse the text of a `.repoboard/cards/<id>.md` file.
  * Never throws; a bad file yields `{ok:false, error}` with a message naming the problem key.
  */
 export function parseCard(text: string): CardParseResult {

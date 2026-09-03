@@ -2,7 +2,7 @@
  * Mock transport: a fake board plus fake WS events on a timer, so `VITE_MOCK=1 pnpm dev`
  * runs with no server. Also what tests use (with `tick: null` for full control).
  */
-import { appendLogLine, type Card, type Event, findColumn, formatLogLine } from '@rcb/core';
+import { appendLogLine, type Card, type Event, findColumn, formatLogLine } from '@repoboard/core';
 import type { ServerMessage, Transport, TransportFactory, TransportHandlers } from '../wire.js';
 import { MOCK_ACTORS, mockCards, mockConfig, mockRepo } from './data.js';
 
@@ -135,10 +135,10 @@ function openMock(handlers: TransportHandlers, options: MockOptions): MockTransp
     // A little history so the ticker has something to say.
     const now = Date.now();
     const history: Array<[string, string, string, string, number]> = [
-      ['claude/core-agent', 'RCB-3', 'doing', 'done', 120],
-      ['claude/orchestrator', 'RCB-7', 'todo', 'doing', 40],
-      ['claude/orchestrator', 'RCB-12', 'todo', 'doing', 35],
-      ['claude/web-agent', 'RCB-13', 'doing', 'review', 25],
+      ['claude/core-agent', 'RB-3', 'doing', 'done', 120],
+      ['claude/orchestrator', 'RB-7', 'todo', 'doing', 40],
+      ['claude/orchestrator', 'RB-12', 'todo', 'doing', 35],
+      ['claude/web-agent', 'RB-13', 'doing', 'review', 25],
     ];
     for (const [actor, cardId, from, to, ago] of history) {
       emit({

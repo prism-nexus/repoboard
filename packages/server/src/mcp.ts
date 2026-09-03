@@ -1,7 +1,7 @@
 /**
  * P5.1 MCP server (BUILD-PLAN D4: three agent surfaces, one core). Every tool calls the same
- * `CardStore` the CLI and HTTP use, which calls @rcb/core — one code path. Transport is stdio,
- * so while `rcb mcp` runs, stdout belongs to the protocol and warnings go to stderr.
+ * `CardStore` the CLI and HTTP use, which calls @repoboard/core — one code path. Transport is stdio,
+ * so while `repoboard mcp` runs, stdout belongs to the protocol and warnings go to stderr.
  *
  * Tool descriptions are written for an agent that has never seen this board: they say what a
  * card is, that `status` is a column id, and that `list_cards` is the cheap first call.
@@ -9,7 +9,7 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
-import { type Card, type CardPatch, computeBoardSummary } from '@rcb/core';
+import { type Card, type CardPatch, computeBoardSummary } from '@repoboard/core';
 import { z } from 'zod';
 import { type CardStore, openStore } from './store.js';
 
@@ -25,7 +25,7 @@ export const MCP_TOOL_NAMES = [
 
 export interface McpServerOptions {
   store: CardStore;
-  /** Used when a tool call carries no `actor`: `$RCB_ACTOR`, then `mcp` (see `serveMcp`). */
+  /** Used when a tool call carries no `actor`: `$REPOBOARD_ACTOR`, then `mcp` (see `serveMcp`). */
   defaultActor: string;
   /** Clock, for tests. */
   now?: () => Date;
@@ -75,14 +75,14 @@ function nameField(error: string): string {
 }
 
 const CARD_INTRO =
-  "A card is one task on this repository's Kanban board: the file `.rcb/cards/<id>.md`, " +
+  "A card is one task on this repository's Kanban board: the file `.repoboard/cards/<id>.md`, " +
   'YAML frontmatter (id, title, status, assignee, priority, labels, files, created, updated) ' +
   'plus a markdown body with a `## Log` section. `status` is always a column id from ' +
-  '`.rcb/board.yml`. ';
+  '`.repoboard/board.yml`. ';
 
 const ACTOR_DESC =
   'Who is acting, written `<tool>/<role>` (e.g. `claude/web-agent`) so the board can draw a ' +
-  'stable avatar. Defaults to $RCB_ACTOR, then "mcp".';
+  'stable avatar. Defaults to $REPOBOARD_ACTOR, then "mcp".';
 
 const PRIORITY = z.enum(['high', 'medium', 'low']);
 
@@ -92,7 +92,7 @@ export function createMcpServer(opts: McpServerOptions): McpServer {
   const now = opts.now ?? (() => new Date());
   const columnIds = () => store.config.columns.map((c) => c.id).join(', ');
   const server = new McpServer(
-    { name: 'rcb', version: '0.0.0' },
+    { name: 'repoboard', version: '0.0.0' },
     {
       instructions:
         `${CARD_INTRO}Column ids on this board: ${columnIds()}. Call list_cards or ` +
@@ -138,7 +138,7 @@ export function createMcpServer(opts: McpServerOptions): McpServer {
         `${CARD_INTRO}Returns the full card as JSON, including its markdown body and ` +
         '`## Log` history. Use list_cards to find ids.',
       inputSchema: {
-        id: z.string().describe('The card id from its frontmatter, e.g. RCB-12.'),
+        id: z.string().describe('The card id from its frontmatter, e.g. RB-12.'),
       },
       annotations: { readOnlyHint: true },
     },
@@ -191,7 +191,7 @@ export function createMcpServer(opts: McpServerOptions): McpServer {
         "Exceeding a column's WIP limit is reported as a warning in the result, never refused; " +
         'moving to the column the card is already in is also just a warning.',
       inputSchema: {
-        id: z.string().describe('Card id, e.g. RCB-12.'),
+        id: z.string().describe('Card id, e.g. RB-12.'),
         status: z.string().describe(`Destination column id (one of: ${columnIds()}).`),
         actor: z.string().optional().describe(ACTOR_DESC),
       },
@@ -212,7 +212,7 @@ export function createMcpServer(opts: McpServerOptions): McpServer {
         '`updated` and appends a `## Log` line naming the changed fields. Pass null to clear an ' +
         'optional field. Not for status (use move_card) or the body (use append_log).',
       inputSchema: {
-        id: z.string().describe('Card id, e.g. RCB-12.'),
+        id: z.string().describe('Card id, e.g. RB-12.'),
         title: z.string().min(1).optional(),
         assignee: z.string().nullable().optional().describe('null clears it.'),
         priority: PRIORITY.nullable().optional().describe('null clears it.'),
@@ -251,7 +251,7 @@ export function createMcpServer(opts: McpServerOptions): McpServer {
         '`## Log` heading (created if missing) and bumps `updated`. Use it to say what you did ' +
         'or verified. Text is kept to one line.',
       inputSchema: {
-        id: z.string().describe('Card id, e.g. RCB-12.'),
+        id: z.string().describe('Card id, e.g. RB-12.'),
         text: z.string().min(1).describe('What happened, one line.'),
         actor: z.string().optional().describe(ACTOR_DESC),
       },
@@ -304,7 +304,7 @@ export function createMcpServer(opts: McpServerOptions): McpServer {
 }
 
 export interface ServeMcpOptions {
-  /** Directory containing `.rcb/`. */
+  /** Directory containing `.repoboard/`. */
   root: string;
   defaultActor: string;
   now?: () => Date;
@@ -314,7 +314,7 @@ export interface ServeMcpOptions {
   warn?: (message: string) => void;
 }
 
-/** `rcb mcp`: serve over stdio until stdin closes. Watches `.rcb/` so direct edits are seen. */
+/** `repoboard mcp`: serve over stdio until stdin closes. Watches `.repoboard/` so direct edits are seen. */
 export async function serveMcp(opts: ServeMcpOptions): Promise<void> {
   const store = await openStore(opts.root, { watch: true, now: opts.now });
   if (opts.warn) store.on('warning', opts.warn);

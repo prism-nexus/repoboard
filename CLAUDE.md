@@ -1,13 +1,13 @@
-# Remember-Connect-Build — routing anchor
+# rcb (Remember · Connect · Build) — routing anchor
 
 **This file routes; it does not restate.** It carries no test counts, commit hashes, or task
 status, because those move and a stale router is worse than none. Every fact lives in one place
 and this file says which place. If you need a number, get it from the section named below or
 measure it.
 
-<!-- Fill in once the project has them. Until then, the working rules below are the whole file. -->
-- Plan / authority: _TBD_
-- Running record / handoff: _TBD_
+`docs/BUILD-PLAN.md` is **the authority** — decisions in §1, file and wire contracts in §2–§4,
+tasks in §5, owner-only decisions in §11. `docs/HANDOFF.md` is the running record; its §12.0x
+subsections are append-only and the highest letter is current.
 - Unfinished work: `README.md` §"Known issues", a numbered list `K1` upward. A commit that closes
   one says `Closes K<n>` and edits that list in the same commit.
 

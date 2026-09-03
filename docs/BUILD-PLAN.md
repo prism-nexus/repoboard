@@ -221,8 +221,8 @@ docs/               this plan, HANDOFF, AGENTS, briefs
 Answered 2026-09-03:
 - **O1 — name: `repoboard`.** npm package `repoboard`, bin `repoboard`. Rename lands in P6 and
   also renames the data directory `.rcb/` → `.repoboard/`, the default prefix `RCB` → `RB`, and
-  every doc; the old names must not survive in user-facing text. (Directory and prefix names are
-  the orchestrator's proposal; the owner can override before P6 starts.)
+  every doc; the old names must not survive in user-facing text. (Directory and prefix names were the orchestrator's proposal;
+  the owner accepted them 2026-09-03.)
 - **O2 — GitHub: after v1.** The owner sets up the account/org. P6.3 stays closed until then;
   P6.1 and P6.2 do not depend on it.
 - **O3 — docs steer to CLI first, MCP second, file edits as the escape hatch.** The owner's

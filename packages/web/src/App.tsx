@@ -37,6 +37,14 @@ function Shell() {
     [state.config, state.cards],
   );
   const close = useCallback(() => store.select(null), [store]);
+  const showOnMap = useCallback(
+    (id: string) => {
+      if (!store.getState().pinned.includes(id)) store.togglePin(id);
+      store.select(null);
+      store.setView('map');
+    },
+    [store],
+  );
 
   return (
     <div className="app">
@@ -66,6 +74,7 @@ function Shell() {
           onClose={close}
           onMove={store.moveCard}
           onUpdate={store.updateCard}
+          onShowOnMap={showOnMap}
         />
       ) : null}
       <Toasts toasts={state.toasts} onDismiss={store.dismissToast} />

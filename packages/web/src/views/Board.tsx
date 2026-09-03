@@ -41,7 +41,7 @@ export function handleDragEnd(store: Store, ev: Pick<DragEndEvent, 'active' | 'o
 
 export function Board() {
   const store = useStore();
-  const { config, cards, fun, selectedId } = useBoardState();
+  const { config, cards, fun, selectedId, pinned } = useBoardState();
   const now = useNow();
   const columns = useMemo(() => columnsWithCards(config, cards), [config, cards]);
   const [dragging, setDragging] = useState<Card | null>(null);
@@ -69,6 +69,8 @@ export function Board() {
     handleDragEnd(store, ev);
   };
   const open = useCallback((id: string) => store.select(id), [store]);
+  const pin = useCallback((id: string) => store.togglePin(id), [store]);
+  const hover = useCallback((id: string | null) => store.setHover(id), [store]);
 
   const doneOrigin = useMemo(() => {
     if (arrivals.doneBurst === 0 || typeof document === 'undefined') return null;
@@ -101,6 +103,9 @@ export function Board() {
                 arrival={arrivals.byId.get(card.id)}
                 fun={fun}
                 onOpen={open}
+                pinned={pinned.includes(card.id)}
+                onPin={pin}
+                onHover={hover}
               />
             ))}
           </Column>

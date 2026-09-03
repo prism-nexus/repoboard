@@ -26,6 +26,10 @@ export interface State {
   theme: Theme;
   view: View;
   selectedId: string | null;
+  /** P4.3: cards whose files stay highlighted on the map (click a card's avatar). */
+  pinned: string[];
+  /** P4.3: the card under the pointer (board or map rail); its files light up on the map. */
+  hoverId: string | null;
   toasts: Toast[];
 }
 
@@ -54,6 +58,8 @@ export interface Store {
   updateCard(id: string, patch: CardPatch): void;
   select(id: string | null): void;
   setView(view: View): void;
+  togglePin(id: string): void;
+  setHover(id: string | null): void;
   setFun(fun: boolean): void;
   setTheme(theme: Theme): void;
   dismissToast(id: number): void;
@@ -90,6 +96,8 @@ export function createStore(factory: TransportFactory, opts: StoreOptions = {}):
           : 'light',
     view: 'board',
     selectedId: null,
+    pinned: [],
+    hoverId: null,
     toasts: [],
   };
   const listeners = new Set<Listener>();
@@ -169,6 +177,8 @@ export function createStore(factory: TransportFactory, opts: StoreOptions = {}):
           set({
             cards: state.cards.filter((c) => c.id !== msg.id),
             selectedId: state.selectedId === msg.id ? null : state.selectedId,
+            pinned: state.pinned.filter((id) => id !== msg.id),
+            hoverId: state.hoverId === msg.id ? null : state.hoverId,
           });
           break;
         case 'repo':
@@ -201,6 +211,15 @@ export function createStore(factory: TransportFactory, opts: StoreOptions = {}):
     },
     select: (selectedId) => set({ selectedId }),
     setView: (view) => set({ view }),
+    togglePin: (id) =>
+      set({
+        pinned: state.pinned.includes(id)
+          ? state.pinned.filter((p) => p !== id)
+          : [...state.pinned, id],
+      }),
+    setHover(id) {
+      if (state.hoverId !== id) set({ hoverId: id });
+    },
     setFun(fun) {
       storage?.setItem(STORAGE_FUN, fun ? '1' : '0');
       set({ fun });

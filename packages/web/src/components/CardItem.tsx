@@ -10,11 +10,27 @@ interface Props {
   arrival?: Arrival;
   fun: boolean;
   onOpen: (id: string) => void;
+  /** P4.3: this card's files stay highlighted on the map. */
+  pinned?: boolean;
+  /** Avatar click: pin/unpin on the map. */
+  onPin?: (id: string) => void;
+  /** Pointer over the card: its files light up on the map. */
+  onHover?: (id: string | null) => void;
   /** Render as the DragOverlay ghost: no sortable wiring. */
   overlay?: boolean;
 }
 
-export function CardItem({ card, active, arrival, fun, onOpen, overlay = false }: Props) {
+export function CardItem({
+  card,
+  active,
+  arrival,
+  fun,
+  onOpen,
+  pinned = false,
+  onPin,
+  onHover,
+  overlay = false,
+}: Props) {
   const sortable = useSortable({
     id: card.id,
     data: { type: 'card', status: card.status },
@@ -32,17 +48,21 @@ export function CardItem({ card, active, arrival, fun, onOpen, overlay = false }
     active ? 'card--active' : '',
     sortable.isDragging && !overlay ? 'card--dragging' : '',
     overlay ? 'card--overlay' : '',
+    pinned ? 'card--pinned' : '',
   ]
     .filter(Boolean)
     .join(' ');
 
   return (
+    // biome-ignore lint/a11y/noStaticElementInteractions: hover is a preview for the map; the buttons inside are the keyboard path
     <div
       ref={overlay ? undefined : sortable.setNodeRef}
       className={cls}
       style={style}
       data-testid={`card-${card.id}`}
       data-card={card.id}
+      onMouseEnter={onHover ? () => onHover(card.id) : undefined}
+      onMouseLeave={onHover ? () => onHover(null) : undefined}
       {...(overlay ? {} : sortable.attributes)}
       {...(overlay ? {} : sortable.listeners)}
     >
@@ -57,7 +77,19 @@ export function CardItem({ card, active, arrival, fun, onOpen, overlay = false }
             {card.id}
           </button>
           {card.assignee ? (
-            <Avatar assignee={card.assignee} active={active} bounce={bounce} />
+            <button
+              type="button"
+              className={`card__pin ${pinned ? 'card__pin--on' : ''}`}
+              onClick={(e) => {
+                e.stopPropagation();
+                onPin?.(card.id);
+              }}
+              aria-pressed={pinned}
+              title={pinned ? 'Pinned on the map — click to unpin' : 'Pin on the map'}
+              data-testid={`pin-${card.id}`}
+            >
+              <Avatar assignee={card.assignee} active={active} bounce={bounce} />
+            </button>
           ) : null}
         </div>
         <button type="button" className="card__title" onClick={() => onOpen(card.id)}>

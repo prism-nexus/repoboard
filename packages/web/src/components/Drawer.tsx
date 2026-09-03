@@ -13,10 +13,21 @@ interface Props {
   onClose: () => void;
   onMove: (id: string, status: string) => void;
   onUpdate: (id: string, patch: { title?: string; assignee?: string | null }) => void;
+  /** P4.3: pin this card and switch to the map. */
+  onShowOnMap?: (id: string) => void;
 }
 
 /** Slide-in card detail. ESC closes. Title/assignee commit on blur or Enter; status on change. */
-export function Drawer({ card, columns, active, now, onClose, onMove, onUpdate }: Props) {
+export function Drawer({
+  card,
+  columns,
+  active,
+  now,
+  onClose,
+  onMove,
+  onUpdate,
+  onShowOnMap,
+}: Props) {
   const [title, setTitle] = useState(card.title);
   const [assignee, setAssignee] = useState(card.assignee ?? '');
   // Reset drafts when a different card (or a fresh echo of this one) arrives.
@@ -129,7 +140,18 @@ export function Drawer({ card, columns, active, now, onClose, onMove, onUpdate }
       ) : null}
       {card.files?.length ? (
         <section className="drawer__section">
-          <h3>Files</h3>
+          <h3>
+            Files
+            {onShowOnMap ? (
+              <button
+                type="button"
+                className="drawer__map-link"
+                onClick={() => onShowOnMap(card.id)}
+              >
+                show on map →
+              </button>
+            ) : null}
+          </h3>
           <ul className="drawer__files mono">
             {card.files.map((f) => (
               <li key={f}>{f}</li>

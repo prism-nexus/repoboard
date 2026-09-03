@@ -1,11 +1,24 @@
 ---
 id: RCB-19
-title: "P4.4 Import graph for JS/TS"
-status: backlog
+title: P4.4 Import graph for JS/TS
+status: review
+assignee: claude/map-agent
 priority: low
-labels: [web, viz]
+labels:
+  - web
+  - viz
+files:
+  - packages/server/src/scanner.ts
+  - packages/server/test/scanner.test.ts
+  - packages/web/src/views/Graph.tsx
+  - packages/web/src/map/model.ts
+  - packages/core/src/types.ts
 created: 2026-09-02T22:10:00Z
-updated: 2026-09-02T22:10:00Z
+updated: 2026-09-03T09:51:57Z
 ---
 
 Task P4.4 in `docs/BUILD-PLAN.md` §5. DoD lives there.
+
+## Log
+- 2026-09-03T09:44:43Z claude/map-agent — moved backlog → doing
+- 2026-09-03T09:51:57Z claude/map-agent — moved doing → review

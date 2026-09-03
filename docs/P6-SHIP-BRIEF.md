@@ -15,6 +15,39 @@ ids stay valid; events file `.repoboard/events.jsonl`; `localStorage` keys `rcb.
 `docs/HANDOFF.md` history lines and this repo's own card ids/prefix when you are done — paste
 that grep's output. Update `.gitignore`. Run the full suite after.
 
+### P6.0 additions (2026-09-03, orchestrator; these bind)
+- Scope of this dispatch is **P6.0 only**. Do not start K6, P6.1 or P6.2; they are separate
+  dispatches after the rename is committed.
+- Also rename: env var `RCB_ACTOR` → `REPOBOARD_ACTOR`; HTTP header `x-rcb-warnings` →
+  `x-repoboard-warnings`; the MCP registration line `claude mcp add repoboard -- npx repoboard mcp`;
+  the GitHub Actions workflow if it names the bin; `pnpm-lock.yaml` via `pnpm install` after
+  the package renames (do not hand-edit the lockfile).
+- **History stays as written:** `docs/P2-SERVER-BRIEF.md`, `P3-WEB-BRIEF.md`, `P4-MAP-BRIEF.md`,
+  `P5-MCP-BRIEF.md`, and HANDOFF §1/§7/§12 keep `rcb`. Change HANDOFF §0's line about
+  `.repoboard/events.jsonl (.rcb/ until P6.0)` to drop the parenthetical. Everything else —
+  `README.md`, `CLAUDE.md`, `docs/AGENTS.md`, `docs/BUILD-PLAN.md` (including §1 D1–D4, §2, §6),
+  `docs/NEXT-AGENT-PROMPT.md`, this brief — is user-facing and gets renamed. The final grep's
+  allowed remainder is therefore: those four old briefs, HANDOFF history lines, and this repo's
+  card ids / `prefix: RCB` in `.repoboard/board.yml` and `.repoboard/cards/`.
+- The board: move RCB-25 to `doing` with `--as claude/ship-agent` **and** set
+  `assignee: claude/ship-agent` in its frontmatter (HANDOFF §7.9); move to `review` when done.
+  Note the data dir moves under you: rebuild (`pnpm build`) after the `git mv` before the CLI
+  can find `.repoboard/`.
+- **Protective control, verified the CLAUDE.md way:** a test must pin the default prefix `RB`
+  and that `init` writes `.repoboard/board.yml` and `RB-1`. Perturb `defaultBoardConfig()` back
+  to `RCB`, read the file back (paste the line), typecheck with it in place (exit 0), run the
+  suite (paste the failing assertion), restore by targeted `sed` — never `git checkout`. Paste
+  all four outputs.
+- **Measurement, not verdict:** paste `grep -rniI '\brcb\b' --exclude-dir=node_modules
+  --exclude-dir=.git --exclude-dir=dist -c . | grep -v ':0$' | sort -t: -k2 -rn` before and
+  after, as two tables.
+- `biome check --write` before reporting (HANDOFF §7.6). Never commit.
+- DoD for this dispatch: `pnpm install && pnpm test && pnpm typecheck && pnpm lint` exit 0;
+  `pnpm build`; `node packages/server/dist/cli.js card list` on this repo shows 27 cards from
+  `.repoboard/`; in a temp dir **outside this repo** (`git init`, one commit), the built binary's
+  `init` writes `.repoboard/board.yml` containing `prefix: RB` and a card `RB-1`; `serve --port 4646`
+  there, `curl localhost:4646/api/board` shows `"prefix":"RB"`, kill it. Paste all of it.
+
 ## K6 (README) — compact list output
 `repoboard card list --json` currently emits 14.1 KB for 24 cards because it includes bodies;
 the table is 1.9 KB. Make `--json` compact by default (`id, title, status, assignee, priority,

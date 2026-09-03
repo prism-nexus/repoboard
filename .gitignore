@@ -15,3 +15,6 @@ coverage/
 
 # build / tool output
 .vitest/
+
+# rcb runtime event log (ephemeral, see plan §2)
+.rcb/events.jsonl

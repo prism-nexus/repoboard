@@ -16,3 +16,13 @@ Git is the history. Any agent that can edit a file can move a card; the board up
   written by the orchestrator (2026-09-02). Options: (a) document "quote your titles" in
   `AGENTS.md`; (b) a lenient fallback in `parseCard` for the `title` line only; (c) the CLI/MCP
   always quote on serialize (they do, via `yaml`). Doing (a) and (c); (b) is open.
+- **K2** `Event.type` in core is `'move'` only with `from: string`; the server needs
+  `'move' | 'update' | 'create'` and `from: string | null`, so it carries its own superset type.
+  Widen core and delete the server copy.
+- **K3** `RepoSnapshot.files[].lines` is `number`, so binary and >2 MB files report `0` instead
+  of `null`, against the "missing answer is null" convention. Make it `number | null` in core;
+  the scanner and the map follow.
+- **K4** `createCard` throws on an unknown status where `moveCard` returns `{ok:false}`. CLI and
+  HTTP catch it today; make it a result for consistency.
+- **K5** `@rcb/core` exports TS source only. The server bundles core with tsup, so this only
+  bites a third party importing `@rcb/core` on plain Node. Decide before publishing (P6).

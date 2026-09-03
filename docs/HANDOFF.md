@@ -31,3 +31,4 @@ task with verification output in the message. Subagents never commit. See `CLAUD
 - §12.0b (2026-09-02): P2 (server-agent) and P3 (web-agent) dispatched in parallel against plan §3. Next: reconcile their contract decisions, then P4 (`docs/P4-MAP-BRIEF.md`) and P5 (`docs/P5-MCP-BRIEF.md`) in parallel.
 - §12.0c (2026-09-03): P2 and P3 landed. Next: P4 (`docs/P4-MAP-BRIEF.md`) and P5 (`docs/P5-MCP-BRIEF.md`) in parallel; P5's agent also fixes K2–K4 in core since it is the only one touching server internals at that point.
 - §12.0d (2026-09-03): P4 and P5 landed. **Paused before P6 by the owner.** When resumed: dispatch `docs/P6-SHIP-BRIEF.md`; P6.3 needs O1–O3 answered first.
+- §12.0e (2026-09-03): O1–O3 answered (plan §11). P6 rename to `repoboard` is the first P6 step; K6 goes into P6.2's brief. Still paused until the owner says go.

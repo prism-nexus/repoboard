@@ -217,9 +217,25 @@ docs/               this plan, HANDOFF, AGENTS, briefs
 
 ---
 
-## §11 Owner decisions — open, not an agent's to make
-- **O1** Product name and npm package name. `rcb` is a placeholder and **is taken on npm** (v0.0.11,
-  checked 2026-09-02). Free at that check: `repoboard`, `kanbanrepo`. Taken: `agentboard`.
-- **O2** GitHub org/user and repo name; public from day one or after v0.1?
-- **O3** Should direct file edits by agents be *encouraged* in docs, or should docs push CLI/MCP
-  and treat file edits as the escape hatch? (Affects the tone of `AGENTS.md`.)
+## §11 Owner decisions
+Answered 2026-09-03:
+- **O1 — name: `repoboard`.** npm package `repoboard`, bin `repoboard`. Rename lands in P6 and
+  also renames the data directory `.rcb/` → `.repoboard/`, the default prefix `RCB` → `RB`, and
+  every doc; the old names must not survive in user-facing text. (Directory and prefix names are
+  the orchestrator's proposal; the owner can override before P6 starts.)
+- **O2 — GitHub: after v1.** The owner sets up the account/org. P6.3 stays closed until then;
+  P6.1 and P6.2 do not depend on it.
+- **O3 — docs steer to CLI first, MCP second, file edits as the escape hatch.** The owner's
+  question was token efficiency; measured 2026-09-03 on the built binary, bytes on the wire
+  (≈4 bytes per token):
+
+  | Surface | Fixed cost | Per move | Per list |
+  |---|---|---|---|
+  | CLI via shell | AGENTS.md read once: 5.2 KB | command ~40 B + output 33 B | table 1.9 KB |
+  | MCP | tool schema in context: 7.8 KB (every turn unless the harness defers it) | call ~80 B + result ~200 B | similar to table |
+  | direct file edit | same AGENTS.md | `sed` ~60 B, **but** a correct move also bumps `updated` and appends a log line, or the activity signal is wrong (and K1) | n/a |
+
+  So per operation the CLI is the cheapest by a wide margin and has no standing cost; MCP costs
+  roughly 2,000 tokens of schema per turn where it is loaded and pays off only when the agent
+  has no shell or its harness loads tool schemas on demand. Consequences: (a) `AGENTS.md` leads
+  with the CLI; (b) CLI output stays terse — one line per mutation, table for list; (c) K6.

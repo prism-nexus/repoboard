@@ -43,13 +43,17 @@ export interface BoardConfig {
   [key: string]: unknown;
 }
 
-/** One line of `.rcb/events.jsonl` (§2). */
+/**
+ * One line of `.rcb/events.jsonl` (§2). `move` is written by every surface that changes
+ * `status`; `update` (from === to) and `create` (from === null) are written by the store so
+ * the ticker sees every mutation (K2).
+ */
 export interface Event {
   ts: string;
   actor: string;
-  type: 'move';
+  type: 'move' | 'update' | 'create';
   cardId: string;
-  from: string;
+  from: string | null;
   to: string;
 }
 
@@ -60,7 +64,7 @@ export type RepoSnapshot = {
   files: {
     path: string;
     bytes: number;
-    lines: number;
+    lines: number | null; // null when not counted (binary, >2 MB) — K3
     lang: string;
     commits30d: number;
     commits90d: number;

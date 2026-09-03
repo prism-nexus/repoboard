@@ -3,7 +3,14 @@ import { mkdir, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
 import { afterEach, describe, expect, it } from 'vitest';
-import { langOf, parseGitLog, scanRepo } from '../src/scanner.js';
+import {
+  EDGE_CAP,
+  findImportSpecifiers,
+  langOf,
+  parseGitLog,
+  resolveImport,
+  scanRepo,
+} from '../src/scanner.js';
 import { makeTempDir } from './helpers.js';
 
 const execFileAsync = promisify(execFile);
@@ -70,8 +77,8 @@ describe('scanRepo in a git repo', () => {
     });
     expect(byPath['src/a.ts']?.lastCommitAt).toMatch(/^\d{4}-\d{2}-\d{2}T/);
     expect(byPath['README.md']).toMatchObject({ lines: 1, lang: 'markdown', commits90d: 1 });
-    // Binary: bytes counted, newlines deliberately not.
-    expect(byPath['logo.png']).toMatchObject({ bytes: 5, lines: 0, lang: 'image' });
+    // Binary: bytes counted, newlines deliberately not — null, never a plausible 0 (K3).
+    expect(byPath['logo.png']).toMatchObject({ bytes: 5, lines: null, lang: 'image' });
     expect(snap.head).toEqual({ branch: 'main', sha });
     expect(snap.edges).toEqual([]);
     expect(snap.truncated).toBe(false);
@@ -120,6 +127,92 @@ describe('scanRepo without git', () => {
     const capped = await scanRepo(root, { cap: 2 });
     expect(capped.files).toHaveLength(2);
     expect(capped.truncated).toBe(true);
+  });
+});
+
+describe('import graph (P4.4)', () => {
+  it('fills edges for three files that import each other, resolving .js → .ts and index', async () => {
+    const root = await tempDir();
+    await mkdir(join(root, 'src', 'util'), { recursive: true });
+    await writeFile(
+      join(root, 'src', 'a.ts'),
+      [
+        "import { b } from './b.js';", // TS ESM convention: .js specifier, .ts on disk
+        "import type { T } from './util';", // directory → util/index.ts
+        "import React from 'react';", // bare: ignored
+        "import './missing.js';", // unresolvable: ignored
+        'export const a = 1;',
+      ].join('\n'),
+    );
+    await writeFile(
+      join(root, 'src', 'b.ts'),
+      ["export * from './c';", "const lazy = () => import('./a.js');", 'export const b = 2;'].join(
+        '\n',
+      ),
+    );
+    await writeFile(
+      join(root, 'src', 'c.ts'),
+      ["const a = require('./a');", "import { b } from './b.js';", 'export const c = 3;'].join(
+        '\n',
+      ),
+    );
+    await writeFile(join(root, 'src', 'util', 'index.ts'), 'export type T = number;\n');
+    await writeFile(join(root, 'README.md'), "not code: import x from './a'\n");
+
+    const snap = await scanRepo(root);
+    const edges = snap.edges.map((e) => `${e.from} -> ${e.to}`).sort();
+    expect(edges).toEqual([
+      'src/a.ts -> src/b.ts',
+      'src/a.ts -> src/util/index.ts',
+      'src/b.ts -> src/a.ts',
+      'src/b.ts -> src/c.ts',
+      'src/c.ts -> src/a.ts',
+      'src/c.ts -> src/b.ts',
+    ]);
+    // The JS/TS files were line-counted from the same read.
+    expect(snap.files.find((f) => f.path === 'src/a.ts')?.lines).toBe(4);
+    expect(EDGE_CAP).toBe(5000);
+  });
+
+  it('findImportSpecifiers keeps only relative specifiers across all four forms', () => {
+    const src = [
+      "import a from './a';",
+      "import { b, c as d } from '../b.tsx';",
+      "import * as ns from './ns.js';",
+      "import type { X } from './x';",
+      "import './side-effect';",
+      "export { y } from './y';",
+      "export * from './z';",
+      "const p = import('./dyn');",
+      "const q = require('./req');",
+      "import bare from 'react';",
+      "import scoped from '@rcb/core';",
+      "require('node:fs');",
+      'export const notAnImport = 1;',
+    ].join('\n');
+    expect(findImportSpecifiers(src)).toEqual([
+      './a',
+      '../b.tsx',
+      './ns.js',
+      './x',
+      './side-effect',
+      './y',
+      './z',
+      './dyn',
+      './req',
+    ]);
+  });
+
+  it('resolveImport tries literal, .js→.ts, extensions, then index, and refuses to escape the root', () => {
+    const known = new Set(['src/a.ts', 'src/b.js', 'src/c.tsx', 'src/d/index.tsx', 'src/e.ts']);
+    expect(resolveImport('src/x.ts', './b.js', known)).toBe('src/b.js');
+    expect(resolveImport('src/x.ts', './a.js', known)).toBe('src/a.ts');
+    expect(resolveImport('src/x.ts', './c.js', known)).toBe('src/c.tsx');
+    expect(resolveImport('src/x.ts', './a', known)).toBe('src/a.ts');
+    expect(resolveImport('src/x.ts', './d', known)).toBe('src/d/index.tsx');
+    expect(resolveImport('src/d/index.tsx', '../e', known)).toBe('src/e.ts');
+    expect(resolveImport('src/x.ts', './nope', known)).toBeNull();
+    expect(resolveImport('src/x.ts', '../../outside', known)).toBeNull();
   });
 });
 

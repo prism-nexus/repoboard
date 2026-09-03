@@ -9,12 +9,15 @@ import { EventEmitter } from 'node:events';
 import { appendFile, mkdir, readdir, readFile, rename, stat, writeFile } from 'node:fs/promises';
 import { basename, join, relative, resolve, sep } from 'node:path';
 import {
+  appendLogLine,
   type BoardConfig,
   type Card,
   type CardPatch,
   type CreateCardInput,
   createCard,
   defaultBoardConfig,
+  type Event,
+  formatLogLine,
   moveCard,
   parseBoard,
   parseCard,
@@ -24,18 +27,8 @@ import {
 } from '@rcb/core';
 import { watch as chokidarWatch, type FSWatcher } from 'chokidar';
 
-/**
- * One line of `.rcb/events.jsonl`. Core's `Event` only knows `move`; the store also records
- * `update` (from === to) and `create` (from === null) so the ticker sees every mutation.
- */
-export interface StoreEvent {
-  ts: string;
-  actor: string;
-  type: 'move' | 'update' | 'create';
-  cardId: string;
-  from: string | null;
-  to: string;
-}
+/** One line of `.rcb/events.jsonl`: core's `Event` (K2). Kept as a name for the package index. */
+export type StoreEvent = Event;
 
 /** A card file that failed to parse. Reported, never thrown; the UI shows it red. */
 export interface InvalidCard {
@@ -48,7 +41,7 @@ export interface StoreEvents {
   'card:removed': [id: string];
   config: [config: BoardConfig];
   invalid: [invalid: InvalidCard[]];
-  event: [event: StoreEvent];
+  event: [event: Event];
   warning: [message: string];
 }
 
@@ -59,12 +52,14 @@ export interface OpenStoreOptions {
   now?: () => Date;
 }
 
+export type CreateOutcome = { ok: true; card: Card; event: Event } | { ok: false; error: string };
+
 export type MoveOutcome =
-  | { ok: true; card: Card; event: StoreEvent; warnings: string[] }
+  | { ok: true; card: Card; event: Event; warnings: string[] }
   | { ok: false; error: string; notFound?: boolean };
 
 export type UpdateOutcome =
-  | { ok: true; card: Card; event: StoreEvent }
+  | { ok: true; card: Card; event: Event }
   | { ok: false; error: string; notFound?: boolean };
 
 const CARD_FILE = /^[^/\\]+\.md$/;
@@ -95,7 +90,7 @@ export class CardStore extends EventEmitter<StoreEvents> {
   /** Per file: the card id it currently holds (null when invalid) and the content hash. */
   private readonly byPath = new Map<string, { id: string | null; hash: string }>();
   private readonly invalidByPath = new Map<string, InvalidCard>();
-  private eventLog: StoreEvent[] = [];
+  private eventLog: Event[] = [];
   private eventsBytes = 0;
   private watcher: FSWatcher | null = null;
   private queue: Promise<unknown> = Promise.resolve();
@@ -132,7 +127,7 @@ export class CardStore extends EventEmitter<StoreEvents> {
   }
 
   /** Events with `ts` strictly after `since` (all events when omitted). */
-  events(since?: string): StoreEvent[] {
+  events(since?: string): Event[] {
     if (since === undefined) return [...this.eventLog];
     const cutoff = Date.parse(since);
     if (Number.isNaN(cutoff)) return [...this.eventLog];
@@ -165,27 +160,34 @@ export class CardStore extends EventEmitter<StoreEvents> {
 
   // ---- mutations (each one funnels through @rcb/core and is serialised) ---------------
 
-  create(input: CreateCardInput, actor: string): Promise<Card> {
+  /** Never throws on user input (K4): a bad status or title is `{ok:false, error}`. */
+  create(input: CreateCardInput, actor: string): Promise<CreateOutcome> {
     return this.enqueue(async () => {
       const existingIds = [
         ...this.cards.keys(),
         ...[...this.invalidByPath.keys()].map((p) => basename(p, '.md')),
       ];
-      const card = createCard(input, { existingIds, now: this.now(), config: this.cfg });
+      const res = createCard(input, { existingIds, now: this.now(), config: this.cfg });
+      if (!res.ok) return { ok: false, error: res.error };
+      const card = res.card;
       const path = this.filePath(card.id);
       if (await exists(path)) {
-        throw new Error(`refusing to overwrite existing file ${relative(this.root, path)}`);
+        return {
+          ok: false,
+          error: `refusing to overwrite existing file ${relative(this.root, path)}`,
+        };
       }
       await this.writeCard(card);
-      await this.appendEvent({
+      const event: Event = {
         ts: card.created,
         actor,
         type: 'create',
         cardId: card.id,
         from: null,
         to: card.status,
-      });
-      return card;
+      };
+      await this.appendEvent(event);
+      return { ok: true, card, event };
     });
   }
 
@@ -205,7 +207,7 @@ export class CardStore extends EventEmitter<StoreEvents> {
       });
       if (!res.ok) return { ok: false, error: res.error };
       await this.writeCard(res.card);
-      const event: StoreEvent = res.event;
+      const event: Event = res.event;
       await this.appendEvent(event);
       return { ok: true, card: res.card, event, warnings: res.warnings };
     });
@@ -218,7 +220,7 @@ export class CardStore extends EventEmitter<StoreEvents> {
       const res = updateCard(card, patch, { actor, now: this.now() });
       if (!res.ok) return { ok: false, error: res.error };
       await this.writeCard(res.card);
-      const event: StoreEvent = {
+      const event: Event = {
         ts: res.card.updated,
         actor,
         type: 'update',
@@ -228,6 +230,37 @@ export class CardStore extends EventEmitter<StoreEvents> {
       };
       await this.appendEvent(event);
       return { ok: true, card: res.card, event };
+    });
+  }
+
+  /**
+   * Append one `- <ts> <actor> — <text>` bullet under `## Log` and bump `updated`. Unlike
+   * `update({body})` this writes exactly one log line. Newlines in `text` collapse to spaces
+   * so the bullet stays one line.
+   */
+  appendLog(id: string, text: string, actor: string): Promise<UpdateOutcome> {
+    return this.enqueue(async () => {
+      const card = this.cards.get(id);
+      if (!card) return { ok: false, error: `unknown card "${id}"`, notFound: true };
+      const line = text.replace(/\s+/g, ' ').trim();
+      if (line.length === 0) return { ok: false, error: 'text must not be empty' };
+      const ts = toIso(this.now());
+      const next: Card = {
+        ...card,
+        updated: ts,
+        body: appendLogLine(card.body, formatLogLine(ts, actor, line)),
+      };
+      await this.writeCard(next);
+      const event: Event = {
+        ts,
+        actor,
+        type: 'update',
+        cardId: id,
+        from: card.status,
+        to: card.status,
+      };
+      await this.appendEvent(event);
+      return { ok: true, card: next, event };
     });
   }
 
@@ -253,7 +286,7 @@ export class CardStore extends EventEmitter<StoreEvents> {
     this.emit('card', card);
   }
 
-  private async appendEvent(event: StoreEvent): Promise<void> {
+  private async appendEvent(event: Event): Promise<void> {
     const line = `${JSON.stringify(event)}\n`;
     await mkdir(this.rcbDir, { recursive: true });
     await appendFile(this.eventsPath, line, 'utf8');
@@ -351,7 +384,7 @@ export class CardStore extends EventEmitter<StoreEvents> {
 
     if (origin === 'watch') {
       const ts = toIso(this.now());
-      const event: StoreEvent = prevCard
+      const event: Event = prevCard
         ? prevCard.status !== card.status
           ? {
               ts,
@@ -421,8 +454,8 @@ export class CardStore extends EventEmitter<StoreEvents> {
 
 const EVENT_TYPES: ReadonlySet<string> = new Set(['move', 'update', 'create']);
 
-function parseEventLines(text: string): StoreEvent[] {
-  const out: StoreEvent[] = [];
+function parseEventLines(text: string): Event[] {
+  const out: Event[] = [];
   for (const line of text.split('\n')) {
     const trimmed = line.trim();
     if (!trimmed) continue;
@@ -439,7 +472,7 @@ function parseEventLines(text: string): StoreEvent[] {
     out.push({
       ts: o.ts,
       actor: typeof o.actor === 'string' ? o.actor : 'unknown',
-      type: o.type as StoreEvent['type'],
+      type: o.type as Event['type'],
       cardId: o.cardId,
       from: typeof o.from === 'string' ? o.from : null,
       to: typeof o.to === 'string' ? o.to : '',

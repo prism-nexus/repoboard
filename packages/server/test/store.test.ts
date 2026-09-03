@@ -5,6 +5,7 @@ import { parseCard } from '@rcb/core';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
   type CardStore,
+  type CreateOutcome,
   compareCardIds,
   type InvalidCard,
   openStore,
@@ -77,6 +78,12 @@ describe('openStore: load', () => {
   });
 });
 
+/** Unwrap a create outcome (K4) or fail the test with its error. */
+function created(res: CreateOutcome): Card {
+  if (!res.ok) throw new Error(res.error);
+  return res.card;
+}
+
 describe('create', () => {
   it('allocates the next id, writes the file via core, and appends a create event', async () => {
     const repo = await repoWith({
@@ -84,7 +91,7 @@ describe('create', () => {
       'RCB-7.md': cardText('RCB-7', 'done'),
     });
     const store = await open(repo, false);
-    const card = await store.create({ title: 'New one', labels: ['a'] }, 'tester');
+    const card = created(await store.create({ title: 'New one', labels: ['a'] }, 'tester'));
     expect(card.id).toBe('RCB-8');
     expect(card.status).toBe('backlog');
     expect(card.created).toBe('2026-09-02T22:41:10Z');
@@ -108,16 +115,17 @@ describe('create', () => {
   it('counts an invalid file toward id allocation so it is never overwritten', async () => {
     const repo = await repoWith({ 'RCB-4.md': 'garbage' });
     const store = await open(repo, false);
-    const card = await store.create({ title: 'x' }, 'tester');
+    const card = created(await store.create({ title: 'x' }, 'tester'));
     expect(card.id).toBe('RCB-5');
   });
 
-  it('rejects an unknown status (core throws) without writing anything', async () => {
+  it('rejects an unknown status as ok:false (K4) without writing anything', async () => {
     const repo = await repoWith({});
     const store = await open(repo, false);
-    await expect(store.create({ title: 'x', status: 'nope' }, 't')).rejects.toThrow(
-      /unknown column "nope"/,
-    );
+    expect(await store.create({ title: 'x', status: 'nope' }, 't')).toEqual({
+      ok: false,
+      error: expect.stringMatching(/unknown column "nope"/),
+    });
     expect(store.list()).toEqual([]);
   });
 });
@@ -196,7 +204,7 @@ describe('move and update', () => {
     const cards = await Promise.all(
       Array.from({ length: 5 }, (_, i) => store.create({ title: `c${i}` }, 't')),
     );
-    expect(cards.map((c) => c.id)).toEqual(['RCB-1', 'RCB-2', 'RCB-3', 'RCB-4', 'RCB-5']);
+    expect(cards.map((c) => created(c).id)).toEqual(['RCB-1', 'RCB-2', 'RCB-3', 'RCB-4', 'RCB-5']);
   });
 });
 

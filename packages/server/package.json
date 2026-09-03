@@ -21,6 +21,7 @@
     "dev": "tsup && node dist/cli.js serve"
   },
   "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.30.0",
     "@rcb/core": "workspace:*",
     "chokidar": "^5.0.0",
     "ws": "^8.21.3",

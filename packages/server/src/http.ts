@@ -503,13 +503,9 @@ export async function startServer(opts: ServerOptions): Promise<RunningServer> {
       const body = await readBody(req);
       const actor = optString(body, 'actor') ?? 'web';
       const input = toCreateInput(body);
-      let card: Card;
-      try {
-        card = await store.create(input, actor);
-      } catch (e) {
-        throw new HttpError(400, (e as Error).message.replace(/^createCard: /, ''));
-      }
-      return sendJson(res, 201, card);
+      const created = await store.create(input, actor);
+      if (!created.ok) throw new HttpError(400, created.error);
+      return sendJson(res, 201, created.card);
     }
     const m = /^\/api\/cards\/([^/]+)$/.exec(path);
     if (m?.[1] !== undefined) {

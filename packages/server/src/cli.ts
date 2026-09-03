@@ -19,6 +19,7 @@ import {
   serializeCard,
 } from '@rcb/core';
 import { type RunningServer, startServer } from './http.js';
+import { serveMcp } from './mcp.js';
 import { openStore } from './store.js';
 
 export const VERSION = '0.0.0';
@@ -52,9 +53,10 @@ Usage:
   rcb card show <id>                    print the card file
   rcb serve [--port 4242] [--open] [--no-fun]
                                         start the dashboard (binds 127.0.0.1)
+  rcb mcp [--root <dir>]                MCP server over stdio (for Claude Code etc.)
   rcb --help | --version
 
-Actor for --as defaults to $RCB_ACTOR, then $USER, then "cli".
+Actor for --as defaults to $RCB_ACTOR, then $USER, then "cli"; for mcp: $RCB_ACTOR, then "mcp".
 `;
 
 const PRIORITIES: ReadonlySet<string> = new Set(['high', 'medium', 'low']);
@@ -115,7 +117,7 @@ async function cmdInit(args: string[], io: CliIO): Promise<number> {
   if (present) throw new UserError(`${rcbDir} already exists; refusing to overwrite`);
   const config = defaultBoardConfig();
   const now = io.now?.() ?? new Date();
-  const card = createCard(
+  const welcome = createCard(
     {
       title: 'Welcome',
       body: [
@@ -128,6 +130,8 @@ async function cmdInit(args: string[], io: CliIO): Promise<number> {
     },
     { existingIds: [], now, config },
   );
+  if (!welcome.ok) throw new Error(`init: ${welcome.error}`); // default config: cannot happen
+  const card = welcome.card;
   await mkdir(join(rcbDir, 'cards'), { recursive: true });
   await writeFile(join(rcbDir, 'board.yml'), serializeBoard(config));
   await writeFile(join(rcbDir, 'cards', `${card.id}.md`), serializeCard(card));
@@ -157,12 +161,9 @@ async function cmdCardAdd(args: string[], io: CliIO): Promise<number> {
   if (values.label !== undefined) input.labels = values.label;
   if (values.file !== undefined) input.files = values.file;
   if (values.body !== undefined) input.body = values.body;
-  let card: Card;
-  try {
-    card = await store.create(input, actorFrom(values.as, io));
-  } catch (e) {
-    throw new UserError((e as Error).message.replace(/^createCard: /, ''));
-  }
+  const res = await store.create(input, actorFrom(values.as, io));
+  if (!res.ok) throw new UserError(res.error);
+  const { card } = res;
   io.stdout.write(`created ${card.id} (${card.status}) ${card.title}\n`);
   return 0;
 }
@@ -291,6 +292,25 @@ async function cmdServe(args: string[], io: CliIO): Promise<number> {
   return 0;
 }
 
+/**
+ * `rcb mcp [--root <dir>]`: the MCP server on stdin/stdout. Nothing else may write to stdout
+ * while it runs (the transport owns it); warnings go to stderr. Returns when stdin closes.
+ */
+async function cmdMcp(args: string[], io: CliIO): Promise<number> {
+  const { values } = parse(args, { root: { type: 'string' } });
+  const root = await requireRoot(values.root === undefined ? io : { ...io, cwd: values.root });
+  const env = io.env ?? process.env;
+  const err = io.stderr ?? process.stderr;
+  await serveMcp({
+    root,
+    defaultActor: env.RCB_ACTOR || 'mcp',
+    now: io.now,
+    signal: io.signal,
+    warn: (m) => err.write(`rcb mcp: warning: ${m}\n`),
+  });
+  return 0;
+}
+
 // ---- dispatch ---------------------------------------------------------------------------
 
 export async function run(argv: string[], io: CliIO): Promise<number> {
@@ -307,6 +327,7 @@ export async function run(argv: string[], io: CliIO): Promise<number> {
     }
     if (cmd === 'init') return await cmdInit(argv.slice(1), io);
     if (cmd === 'serve') return await cmdServe(argv.slice(1), io);
+    if (cmd === 'mcp') return await cmdMcp(argv.slice(1), io);
     if (cmd === 'card') {
       if (sub === 'add') return await cmdCardAdd(rest, io);
       if (sub === 'move') return await cmdCardMove(rest, io);

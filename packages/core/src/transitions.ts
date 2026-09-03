@@ -85,17 +85,21 @@ function escapeRegExp(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
+export type CreateResult = { ok: true; card: Card } | { ok: false; error: string };
+
 /**
- * Build a new Card. Throws on an unknown status or a config with no columns — both are
- * caller bugs, not user data errors. Status defaults to the first column.
+ * Build a new Card. Status defaults to the first column. An unknown status or a config with
+ * no columns is a result, not a throw, like `moveCard` (K4). Pure; the caller writes it.
  */
-export function createCard(input: CreateCardInput, opts: CreateCardOptions): Card {
+export function createCard(input: CreateCardInput, opts: CreateCardOptions): CreateResult {
   const first = opts.config.columns[0];
-  if (!first) throw new Error('createCard: board config has no columns');
+  if (!first) return { ok: false, error: 'board config has no columns' };
   const status = input.status ?? first.id;
   if (!findColumn(opts.config, status)) {
-    throw new Error(`createCard: unknown column "${status}"`);
+    const known = opts.config.columns.map((c) => c.id).join(', ');
+    return { ok: false, error: `unknown column "${status}" (columns: ${known})` };
   }
+  if (input.title.length === 0) return { ok: false, error: 'title must not be empty' };
   const ts = toIso(opts.now);
   const card: Card = {
     id: allocateCardId(opts.existingIds, opts.config.prefix),
@@ -109,7 +113,7 @@ export function createCard(input: CreateCardInput, opts: CreateCardOptions): Car
   if (input.priority !== undefined) card.priority = input.priority;
   if (input.labels !== undefined) card.labels = [...input.labels];
   if (input.files !== undefined) card.files = [...input.files];
-  return card;
+  return { ok: true, card };
 }
 
 /** Fields `updateCard` may change. Status changes go through `moveCard`. */

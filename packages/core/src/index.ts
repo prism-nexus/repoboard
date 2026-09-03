@@ -32,6 +32,7 @@ export type {
   CardPatch,
   CreateCardInput,
   CreateCardOptions,
+  CreateResult,
   MoveOptions,
   MoveResult,
   UpdateOptions,

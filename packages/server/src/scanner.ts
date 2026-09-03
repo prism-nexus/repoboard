@@ -1,11 +1,12 @@
 /**
  * P2.4 Repo scanner → RepoSnapshot (BUILD-PLAN §4).
  * Three git spawns total (ls-files, log, rev-parse), never one per file.
+ * P4.4: JS/TS import edges from a regex scan (no bundler), capped at EDGE_CAP.
  */
 import { execFile } from 'node:child_process';
 import { createReadStream } from 'node:fs';
-import { readdir, stat } from 'node:fs/promises';
-import { basename, extname, join, relative, resolve, sep } from 'node:path';
+import { readdir, readFile, stat } from 'node:fs/promises';
+import { basename, extname, join, posix, relative, resolve, sep } from 'node:path';
 import { promisify } from 'node:util';
 import type { RepoSnapshot } from '@rcb/core';
 import { toIso } from '@rcb/core';
@@ -28,7 +29,14 @@ export interface ScanOptions {
 }
 
 export const FILE_CAP = 20_000;
+/** §5 P4.4: the import graph stops growing here. */
+export const EDGE_CAP = 5_000;
 const MAX_LINE_COUNT_BYTES = 2 * 1024 * 1024;
+/** Files whose imports are scanned (P4.4). */
+const IMPORT_SCAN_EXT = new Set(['ts', 'tsx', 'js', 'jsx', 'mjs', 'cjs']);
+/** Resolution candidates for a relative specifier, tried after the literal path. */
+const RESOLVE_EXT = ['.ts', '.tsx', '.js', '.jsx'];
+const RESOLVE_INDEX = RESOLVE_EXT.map((e) => `/index${e}`);
 const WALK_SKIP = new Set(['node_modules', '.git', 'dist']);
 const CONCURRENCY = 32;
 const GIT_MAX_BUFFER = 256 * 1024 * 1024;
@@ -180,6 +188,61 @@ function countNewlines(path: string): Promise<number> {
   });
 }
 
+/**
+ * P4.4 import scan. Matches, in one pass over the source text:
+ *   import … from '…'   import '…'   export … from '…'   import('…')   require('…')
+ * Bare package specifiers are dropped; only `./` and `../` come back. Comments are not
+ * stripped, so a commented-out import counts — accepted for a regex scan with no parser.
+ */
+const IMPORT_RE =
+  /\b(?:import|export)\s+(?:[^'"`;]*?\s+from\s+)?['"]([^'"\n]+)['"]|\b(?:import|require)\(\s*['"]([^'"\n]+)['"]\s*\)/g;
+
+export function findImportSpecifiers(source: string): string[] {
+  const out: string[] = [];
+  for (const m of source.matchAll(IMPORT_RE)) {
+    const spec = m[1] ?? m[2];
+    if (spec && (spec.startsWith('./') || spec.startsWith('../'))) out.push(spec);
+  }
+  return out;
+}
+
+/**
+ * Resolve a relative specifier from `fromPath` (repo-relative, posix) to a repo path in `known`.
+ * Order: the literal path; a `.js/.jsx` specifier rewritten to `.ts/.tsx` (TS ESM convention);
+ * then `.ts .tsx .js .jsx`; then `/index.*`. Null when nothing matches (e.g. a `.vue` file).
+ */
+export function resolveImport(
+  fromPath: string,
+  spec: string,
+  known: ReadonlySet<string>,
+): string | null {
+  const base = posix.normalize(posix.join(posix.dirname(fromPath), spec));
+  if (base.startsWith('../')) return null; // escapes the repo
+  if (known.has(base)) return base;
+  const ext = posix.extname(base);
+  if (ext === '.js' || ext === '.jsx') {
+    const stem = base.slice(0, -ext.length);
+    for (const e of ext === '.js' ? ['.ts', '.tsx'] : ['.tsx', '.ts']) {
+      if (known.has(stem + e)) return stem + e;
+    }
+  }
+  for (const e of RESOLVE_EXT) if (known.has(base + e)) return base + e;
+  for (const e of RESOLVE_INDEX) if (known.has(base + e)) return base + e;
+  return null;
+}
+
+function scansImports(path: string, bytes: number, maxBytes: number): boolean {
+  return bytes <= maxBytes && IMPORT_SCAN_EXT.has(extname(path).slice(1).toLowerCase());
+}
+
+function countNewlinesIn(buf: Buffer): number {
+  let n = 0;
+  let i = -1;
+  // biome-ignore lint/suspicious/noAssignInExpressions: tight scan loop
+  while ((i = buf.indexOf(0x0a, i + 1)) !== -1) n++;
+  return n;
+}
+
 async function git(root: string, args: string[]): Promise<string> {
   const { stdout } = await execFileAsync('git', args, {
     cwd: root,
@@ -328,7 +391,8 @@ export async function scanRepo(rootIn: string, opts: ScanOptions = {}): Promise<
   const truncated = listed.length > cap;
   const paths = truncated ? listed.slice(0, cap) : listed;
 
-  const files = await mapLimit(paths, CONCURRENCY, async (path): Promise<RepoFile | null> => {
+  type Scanned = { file: RepoFile; specs: string[] };
+  const files = await mapLimit(paths, CONCURRENCY, async (path): Promise<Scanned | null> => {
     const full = join(root, path);
     let st: Awaited<ReturnType<typeof stat>>;
     try {
@@ -338,39 +402,71 @@ export async function scanRepo(rootIn: string, opts: ScanOptions = {}): Promise<
     }
     if (!st.isFile()) return null;
     const bytes = st.size;
-    let lines = 0;
-    if (shouldCountLines(path, bytes, maxLineBytes)) {
+    // K3: a file that is not line-counted (binary, lock file, > maxLineBytes) reports null.
+    let lines: number | null = null;
+    let specs: string[] = [];
+    if (scansImports(path, bytes, maxLineBytes)) {
+      // JS/TS: one read serves both the newline count and the import scan.
+      try {
+        const buf = await readFile(full);
+        lines = countNewlinesIn(buf);
+        specs = findImportSpecifiers(buf.toString('utf8'));
+      } catch {
+        lines = null;
+      }
+    } else if (shouldCountLines(path, bytes, maxLineBytes)) {
       try {
         lines = await countNewlines(full);
       } catch {
-        lines = 0;
+        lines = null;
       }
     }
     const act = activity.get(path);
     return {
-      path,
-      bytes,
-      lines,
-      lang: langOf(path),
-      commits30d: act?.commits30d ?? 0,
-      commits90d: act?.commits90d ?? 0,
-      lastCommitAt: act?.lastCommitAt ?? null,
+      file: {
+        path,
+        bytes,
+        lines,
+        lang: langOf(path),
+        commits30d: act?.commits30d ?? 0,
+        commits90d: act?.commits90d ?? 0,
+        lastCommitAt: act?.lastCommitAt ?? null,
+      },
+      specs,
     };
   });
 
   const languages: Record<string, number> = {};
   const kept: RepoFile[] = [];
-  for (const f of files) {
-    if (!f) continue;
-    kept.push(f);
-    languages[f.lang] = (languages[f.lang] ?? 0) + f.bytes;
+  const known = new Set<string>();
+  for (const s of files) {
+    if (!s) continue;
+    kept.push(s.file);
+    known.add(s.file.path);
+    languages[s.file.lang] = (languages[s.file.lang] ?? 0) + s.file.bytes;
+  }
+
+  // P4.4: resolve specifiers against the file set, dedupe, cap. Self-imports are dropped.
+  const edges: RepoSnapshot['edges'] = [];
+  const seen = new Set<string>();
+  outer: for (const s of files) {
+    if (!s || s.specs.length === 0) continue;
+    for (const spec of s.specs) {
+      const to = resolveImport(s.file.path, spec, known);
+      if (to === null || to === s.file.path) continue;
+      const key = `${s.file.path}\0${to}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      edges.push({ from: s.file.path, to });
+      if (edges.length >= EDGE_CAP) break outer;
+    }
   }
 
   return {
     root,
     scannedAt: toIso(now),
     files: kept,
-    edges: [],
+    edges,
     languages,
     head,
     truncated,

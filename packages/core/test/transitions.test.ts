@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { defaultBoardConfig } from '../src/board.js';
 import { parseCard, serializeCard } from '../src/card.js';
 import { allocateCardId, createCard, moveCard, updateCard } from '../src/transitions.js';
+import type { Event } from '../src/types.js';
 import { NOW, sampleCard } from './helpers.js';
 
 const config = defaultBoardConfig();
@@ -105,7 +106,9 @@ describe('allocateCardId / createCard', () => {
   });
 
   it('creates a card with defaults: first column, empty body, created == updated', () => {
-    const card = createCard({ title: 'New thing' }, { existingIds: ['RCB-2'], now: NOW, config });
+    const res = createCard({ title: 'New thing' }, { existingIds: ['RCB-2'], now: NOW, config });
+    if (!res.ok) throw new Error(res.error);
+    const card = res.card;
     expect(card).toEqual({
       id: 'RCB-3',
       title: 'New thing',
@@ -119,7 +122,7 @@ describe('allocateCardId / createCard', () => {
 
   it('honors every optional input and copies arrays', () => {
     const labels = ['a'];
-    const card = createCard(
+    const res = createCard(
       {
         title: 't',
         status: 'doing',
@@ -131,6 +134,8 @@ describe('allocateCardId / createCard', () => {
       },
       { existingIds: [], now: NOW, config },
     );
+    if (!res.ok) throw new Error(res.error);
+    const card = res.card;
     expect(card.status).toBe('doing');
     expect(card.assignee).toBe('me');
     expect(card.priority).toBe('low');
@@ -140,13 +145,30 @@ describe('allocateCardId / createCard', () => {
     expect(card.body).toBe('b\n');
   });
 
-  it('throws on an unknown status or a config with no columns', () => {
-    expect(() =>
+  it('returns ok:false (never throws) on an unknown status, no columns, or an empty title', () => {
+    expect(
       createCard({ title: 't', status: 'nope' }, { existingIds: [], now: NOW, config }),
-    ).toThrow(/unknown column "nope"/);
-    expect(() =>
+    ).toEqual({
+      ok: false,
+      error: expect.stringMatching(/unknown column "nope" \(columns: backlog/),
+    });
+    expect(
       createCard({ title: 't' }, { existingIds: [], now: NOW, config: { ...config, columns: [] } }),
-    ).toThrow(/no columns/);
+    ).toEqual({ ok: false, error: expect.stringMatching(/no columns/) });
+    expect(createCard({ title: '' }, { existingIds: [], now: NOW, config })).toEqual({
+      ok: false,
+      error: expect.stringMatching(/title/),
+    });
+  });
+
+  it('core Event accepts every type the store writes (K2): move, update, create', () => {
+    const events: Event[] = [
+      { ts: 't', actor: 'a', type: 'move', cardId: 'RCB-1', from: 'todo', to: 'doing' },
+      { ts: 't', actor: 'a', type: 'update', cardId: 'RCB-1', from: 'doing', to: 'doing' },
+      { ts: 't', actor: 'a', type: 'create', cardId: 'RCB-1', from: null, to: 'backlog' },
+    ];
+    expect(events.map((e) => e.type)).toEqual(['move', 'update', 'create']);
+    expect(events[2]?.from).toBeNull();
   });
 });
 

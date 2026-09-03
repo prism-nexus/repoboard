@@ -218,7 +218,8 @@ docs/               this plan, HANDOFF, AGENTS, briefs
 ---
 
 ## §11 Owner decisions — open, not an agent's to make
-- **O1** Product name and npm package name. `rcb` is a placeholder; check npm availability first.
+- **O1** Product name and npm package name. `rcb` is a placeholder and **is taken on npm** (v0.0.11,
+  checked 2026-09-02). Free at that check: `repoboard`, `kanbanrepo`. Taken: `agentboard`.
 - **O2** GitHub org/user and repo name; public from day one or after v0.1?
 - **O3** Should direct file edits by agents be *encouraged* in docs, or should docs push CLI/MCP
   and treat file edits as the escape hatch? (Affects the tone of `AGENTS.md`.)

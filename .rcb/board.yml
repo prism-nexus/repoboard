@@ -1,0 +1,17 @@
+prefix: RCB
+activeWindowMinutes: 30
+columns:
+  - id: backlog
+    title: Backlog
+  - id: todo
+    title: To do
+  - id: doing
+    title: Doing
+    active: true
+    wip: 3
+  - id: review
+    title: Review
+    active: true
+  - id: done
+    title: Done
+    done: true

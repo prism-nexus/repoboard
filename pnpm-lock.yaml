@@ -39,9 +39,6 @@ importers:
       '@modelcontextprotocol/sdk':
         specifier: ^1.30.0
         version: 1.30.0(zod@4.5.4)
-      '@repoboard/core':
-        specifier: workspace:*
-        version: link:../core
       chokidar:
         specifier: ^5.0.0
         version: 5.0.0
@@ -55,6 +52,9 @@ importers:
         specifier: ^4.5.4
         version: 4.5.4
     devDependencies:
+      '@repoboard/core':
+        specifier: workspace:*
+        version: link:../core
       '@types/node':
         specifier: ^26.4.1
         version: 26.4.1

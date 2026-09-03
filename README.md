@@ -26,10 +26,12 @@ Git is the history. Any agent that can edit a file can move a card; the board up
   bites a third party importing `@repoboard/core` on plain Node. Owner decided 2026-09-03: leave it for
   v0.1 (core stays private, only `repoboard` publishes); **must be resolved before the GitHub
   repo goes public** (plan §11 O4). Gate on P6.3.
-- **K6** `repoboard card list --json` is 14.1 KB against 1.9 KB for the table (2026-09-03, 24 cards)
-  because it includes every body. Agents will reach for `--json`. Make it compact by default
-  (id, title, status, assignee, priority, labels, files, updated) with `--full` for bodies, and
-  apply the same shape to the MCP `list_cards` result.
+- ~~**K6** `repoboard card list --json` is 14.1 KB against 1.9 KB for the table (2026-09-03, 24 cards)
+  because it includes every body.~~ Closed: `--json` is compact by default (id, title, status,
+  assignee, priority, labels, files, updated; one row per line), `--full` adds bodies; MCP
+  `list_cards` uses the same rows and formatter, with `full: true` for bodies. Measured on this
+  repo's 27 cards, bytes: CLI `--json` 18,290 → 6,433; `--json --full` 16,240; table 2,149;
+  MCP `list_cards` result 8,506 → 6,432 (`full: true` 16,239).
 - **K7** A card that points at a doc section (`Task P6.2 in docs/BUILD-PLAN.md §5`) shows only
   the pointer; the reader has to leave the board to learn what the task is. Owner's note
   (2026-09-03): cards should populate from the lines they reference so the drawer shows what the

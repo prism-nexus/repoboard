@@ -96,6 +96,23 @@ describe('repoboard mcp: create → list → move → get', () => {
       updated: '2026-09-02T22:41:10Z',
     });
     expect(rows[1]).not.toHaveProperty('body');
+    for (const row of rows) {
+      expect(Object.keys(row)).toEqual([
+        'id',
+        'title',
+        'status',
+        'assignee',
+        'priority',
+        'labels',
+        'files',
+        'updated',
+      ]);
+    }
+    const fullRows = await r.json<Array<{ id: string; body: string }>>('list_cards', {
+      full: true,
+    });
+    expect(fullRows.map((c) => c.id).sort()).toEqual(['RB-1', 'RB-2']);
+    expect(fullRows.find((c) => c.id === 'RB-2')?.body).toContain('Do the thing.');
     const byAssignee = await r.json<Array<{ id: string }>>('list_cards', { assignee: 'someone' });
     expect(byAssignee.map((c) => c.id)).toEqual(['RB-1']);
     const byLabel = await r.json<Array<{ id: string }>>('list_cards', { label: 'server' });

@@ -135,8 +135,55 @@ describe('repoboard card', () => {
     const todo = await repoboard(root, 'card', 'list', '--status', 'todo');
     expect(todo.out).not.toContain('Second');
     const asJson = await repoboard(root, 'card', 'list', '--json');
-    const parsed = JSON.parse(asJson.out) as { id: string }[];
+    const parsed = JSON.parse(asJson.out) as Record<string, unknown>[];
     expect(parsed.map((c) => c.id)).toEqual(['RB-1', 'RB-2', 'RB-10']);
+  });
+
+  it('list --json is compact (no body) unless --full; --full needs --json (K6)', async () => {
+    const root = await freshRepo({
+      'RB-1.md': cardText('RB-1', 'todo', { title: 'First', assignee: 'a', body: '\nSecret.\n' }),
+      'RB-2.md': cardText('RB-2', 'done', { title: 'Second' }),
+    });
+    const compact = await repoboard(root, 'card', 'list', '--json');
+    expect(compact.code).toBe(0);
+    const rows = JSON.parse(compact.out) as Record<string, unknown>[];
+    expect(rows).toHaveLength(2);
+    for (const row of rows) {
+      expect(Object.keys(row)).toEqual([
+        'id',
+        'title',
+        'status',
+        'assignee',
+        'priority',
+        'labels',
+        'files',
+        'updated',
+      ]);
+      expect(row).not.toHaveProperty('body');
+    }
+    expect(rows[0]).toEqual({
+      id: 'RB-1',
+      title: 'First',
+      status: 'todo',
+      assignee: 'a',
+      priority: null,
+      labels: [],
+      files: [],
+      updated: '2026-09-02T22:00:00Z',
+    });
+    expect(compact.out).not.toContain('Secret');
+    // One row per line inside the array: line 2 is exactly the first row.
+    expect(compact.out.split('\n')[1]).toBe(`${JSON.stringify(rows[0])},`);
+
+    const full = await repoboard(root, 'card', 'list', '--json', '--full');
+    expect(full.code).toBe(0);
+    const cards = JSON.parse(full.out) as { id: string; body: string }[];
+    expect(cards.map((c) => c.id)).toEqual(['RB-1', 'RB-2']);
+    expect(cards[0]?.body).toContain('Secret.');
+
+    const bare = await repoboard(root, 'card', 'list', '--full');
+    expect(bare.code).toBe(1);
+    expect(bare.err).toMatch(/--full only applies with --json/);
   });
 
   it('list reports invalid files on stderr without failing', async () => {

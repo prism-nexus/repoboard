@@ -19,10 +19,11 @@ import {
   serializeCard,
 } from '@repoboard/core';
 import { type RunningServer, startServer } from './http.js';
-import { serveMcp } from './mcp.js';
+import { formatRows, serveMcp, toRow } from './mcp.js';
 import { openStore } from './store.js';
+import { VERSION } from './version.js';
 
-export const VERSION = '0.0.0';
+export { VERSION };
 
 export interface CliIO {
   cwd: string;
@@ -49,7 +50,8 @@ Usage:
   repoboard card add "<title>" [options]      --status s --assignee a --priority high|medium|low
                                         --label l (repeatable) --file f (repeatable) --as actor
   repoboard card move <id> <status> [--as a]  move a card to a column
-  repoboard card list [--status s] [--json]   list cards
+  repoboard card list [--status s] [--json]   list cards; --json is compact (id, title, status,
+                                        assignee, priority, labels, files, updated); add --full for bodies
   repoboard card show <id>                    print the card file
   repoboard serve [--port 4242] [--open] [--no-fun]
                                         start the dashboard (binds 127.0.0.1)
@@ -205,14 +207,17 @@ async function cmdCardList(args: string[], io: CliIO): Promise<number> {
   const { values } = parse(args, {
     status: { type: 'string' },
     json: { type: 'boolean', default: false },
+    full: { type: 'boolean', default: false },
   });
+  if (values.full && !values.json) throw new UserError('--full only applies with --json');
   const root = await requireRoot(io);
   const store = await openStore(root, { watch: false, now: io.now });
   let cards = store.list();
   if (values.status !== undefined) cards = cards.filter((c) => c.status === values.status);
   cards.sort((a, b) => idNumber(a.id) - idNumber(b.id) || (a.id < b.id ? -1 : 1));
   if (values.json) {
-    io.stdout.write(`${JSON.stringify(cards, null, 2)}\n`);
+    // Compact rows by default (K6): bodies only with --full. Same shape as MCP list_cards.
+    io.stdout.write(`${formatRows(values.full ? cards : cards.map(toRow))}\n`);
     return 0;
   }
   io.stdout.write(`${formatTable(cards)}\n`);

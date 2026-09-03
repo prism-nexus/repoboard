@@ -12,6 +12,7 @@ import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import { type Card, type CardPatch, computeBoardSummary } from '@repoboard/core';
 import { z } from 'zod';
 import { type CardStore, openStore } from './store.js';
+import { VERSION } from './version.js';
 
 export const MCP_TOOL_NAMES = [
   'list_cards',
@@ -41,6 +42,14 @@ export interface CardRow {
   labels: string[];
   files: string[];
   updated: string;
+}
+
+/** Every list surface (CLI `--json`, MCP `list_cards`) formats rows here: one JSON object per
+ * line inside a JSON array. Still valid JSON; one `grep` finds a card; measured half the bytes of
+ * 2-space pretty printing on this repo's 27 cards (K6). */
+export function formatRows(rows: readonly unknown[]): string {
+  if (rows.length === 0) return '[]';
+  return `[\n${rows.map((r) => JSON.stringify(r)).join(',\n')}\n]`;
 }
 
 export function toRow(card: Card): CardRow {
@@ -92,7 +101,7 @@ export function createMcpServer(opts: McpServerOptions): McpServer {
   const now = opts.now ?? (() => new Date());
   const columnIds = () => store.config.columns.map((c) => c.id).join(', ');
   const server = new McpServer(
-    { name: 'repoboard', version: '0.0.0' },
+    { name: 'repoboard', version: VERSION },
     {
       instructions:
         `${CARD_INTRO}Column ids on this board: ${columnIds()}. Call list_cards or ` +
@@ -110,7 +119,9 @@ export function createMcpServer(opts: McpServerOptions): McpServer {
         `${CARD_INTRO}Returns a compact JSON array of {id, title, status, assignee, priority, ` +
         'labels, files, updated} without bodies. Call this first: it is the cheap way to learn ' +
         `what exists and which column ids are in use (this board: ${columnIds()}). Filters are ` +
-        'exact matches and combine with AND; omit them all for every card.',
+        'exact matches and combine with AND; omit them all for every card. Pass full: true ' +
+        'only when you need every body at once (several times the bytes); get_card is cheaper ' +
+        'for one.',
       inputSchema: {
         status: z
           .string()
@@ -118,15 +129,20 @@ export function createMcpServer(opts: McpServerOptions): McpServer {
           .describe(`Only cards in this column id (one of: ${columnIds()}).`),
         assignee: z.string().optional().describe('Only cards whose assignee equals this string.'),
         label: z.string().optional().describe('Only cards whose labels include this label.'),
+        full: z
+          .boolean()
+          .optional()
+          .describe("Include each card's markdown body and `## Log`. Default false."),
       },
       annotations: { readOnlyHint: true },
     },
-    ({ status, assignee, label }) => {
+    ({ status, assignee, label, full }) => {
       let cards = store.list();
       if (status !== undefined) cards = cards.filter((c) => c.status === status);
       if (assignee !== undefined) cards = cards.filter((c) => c.assignee === assignee);
       if (label !== undefined) cards = cards.filter((c) => (c.labels ?? []).includes(label));
-      return ok(cards.map(toRow));
+      const rows: readonly unknown[] = full ? cards : cards.map(toRow);
+      return { content: [{ type: 'text', text: formatRows(rows) }] };
     },
   );
 

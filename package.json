@@ -3,7 +3,7 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
-  "description": "repoboard (Remember · Connect · Build) — local-first repo dashboard and agent-driven Kanban board",
+  "description": "repoboard (Remember \u00b7 Connect \u00b7 Build) \u2014 local-first repo dashboard and agent-driven Kanban board",
   "license": "MIT",
   "packageManager": "pnpm@11.18.0",
   "engines": {
@@ -14,7 +14,7 @@
     "typecheck": "pnpm -r typecheck",
     "lint": "biome check .",
     "format": "biome format --write .",
-    "build": "pnpm -r build",
+    "build": "pnpm -r build && node scripts/copy-web.mjs",
     "dev": "pnpm -r --parallel dev"
   },
   "devDependencies": {

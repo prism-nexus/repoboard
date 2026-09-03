@@ -23,7 +23,9 @@ Git is the history. Any agent that can edit a file can move a card; the board up
 - ~~**K4** `createCard` throws on an unknown status.~~ Closed: returns `{ok:false, error}` like
   `moveCard`; CLI and HTTP use the result.
 - **K5** `@rcb/core` exports TS source only. The server bundles core with tsup, so this only
-  bites a third party importing `@rcb/core` on plain Node. Decide before publishing (P6).
+  bites a third party importing `@rcb/core` on plain Node. Owner decided 2026-09-03: leave it for
+  v0.1 (core stays private, only `repoboard` publishes); **must be resolved before the GitHub
+  repo goes public** (plan §11 O4). Gate on P6.3.
 - **K6** `rcb card list --json` is 14.1 KB against 1.9 KB for the table (2026-09-03, 24 cards)
   because it includes every body. Agents will reach for `--json`. Make it compact by default
   (id, title, status, assignee, priority, labels, files, updated) with `--full` for bodies, and

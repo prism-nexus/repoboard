@@ -239,3 +239,7 @@ Answered 2026-09-03:
   roughly 2,000 tokens of schema per turn where it is loaded and pays off only when the agent
   has no shell or its harness loads tool schemas on demand. Consequences: (a) `AGENTS.md` leads
   with the CLI; (b) CLI output stays terse — one line per mutation, table for list; (c) K6.
+- **O4 — K5 (core ships TS source only): leave for v0.1, resolve before GitHub goes public.**
+  Decided 2026-09-03. Core stays `private`; only `repoboard` publishes. Before the repo is made
+  public, either build core to JS and publish `@repoboard/core`, or document it as internal.
+  Gate on P6.3.

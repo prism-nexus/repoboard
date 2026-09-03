@@ -19,3 +19,4 @@ task with verification output in the message. Subagents never commit. See `CLAUD
 ## §12 What to work on next
 - §12.0a (2026-09-02): P0 and P1 are the current work. P2 and P3 can run in parallel once P1
   lands, because §3 fixes the wire contract between them.
+- §12.0b (2026-09-02): P2 (server-agent) and P3 (web-agent) dispatched in parallel against plan §3. Next: reconcile their contract decisions, then P4 (`docs/P4-MAP-BRIEF.md`) and P5 (`docs/P5-MCP-BRIEF.md`) in parallel.

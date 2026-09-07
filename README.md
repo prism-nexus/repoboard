@@ -140,7 +140,17 @@ repo until after v1 (O2).
   error. One path guard (`resolveRepoPath`) rejects absolute, `..`, `.git/` and symlinks out of
   the repo. Measured: RCB-22..26 converted from quoted blocks to refs, 5,306 → 3,895 body-file
   bytes (12 refs); tests 145 → 191.
-- **K8** A CLI `card move` followed by a hand edit of the same card's frontmatter (no status
-  change) puts two entries in the ticker: `ship-agent moved RCB-22 → doing` and, from the
-  watcher, `file moved RCB-22 → doing`. Observed 2026-09-03 during P6.1; not measured further.
-  Likely the watcher compares against a stale in-memory status. Not in scope for v0.1.
+- ~~**K8** A CLI `card move` while `serve` runs puts two entries in the ticker.~~ Closed
+  (2026-09-06). The recorded trigger was wrong twice over: the hand edit is incidental — a CLI
+  mutation alone is enough, because the CLI is a second process and the watcher sees both the card
+  file and `events.jsonl` — and the duplicate had two modes, because the two watcher deliveries
+  race. In the `cards/*.md`-first mode the ticker showed `file` twice and **the CLI's own event was
+  never emitted**: `appendEvent` added its own line's length to `eventsBytes`, a read offset, so a
+  foreign line appended since the last read left the offset short by exactly that much and the next
+  read sliced mid-line. Fix: `appendEvent` catches up before appending, and the watcher synthesises
+  only for a change nobody claimed — a claim being an event with `ts === card.updated`, counted
+  only when `updated` actually moved. That freshness test is load-bearing: without it a later `sed`
+  on `status:` alone matches a spent claim and the `file` event goes silent, which is the product's
+  headline behaviour. Measured on the built binary, events on the ticker per mutation:
+  `card add` 2 → 1, `card move` 2 → 1, `sed` after a CLI move 1 → 1, `sed` bumping `updated`
+  1 → 1; tests 191 → 197.

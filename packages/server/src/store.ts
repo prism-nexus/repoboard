@@ -289,10 +289,33 @@ export class CardStore extends EventEmitter<StoreEvents> {
   private async appendEvent(event: Event): Promise<void> {
     const line = `${JSON.stringify(event)}\n`;
     await mkdir(this.repoboardDir, { recursive: true });
+    // Catch up first (K8). `eventsBytes` must be the true file length before we add our own
+    // line to it: if another process appended since our last read, `+= line.length` leaves the
+    // offset short by exactly that much, and the next read then starts mid-line — dropping the
+    // other process's event and re-emitting our own. Measured: a CLI `card move` while `serve`
+    // ran emitted ["file","file"] and never the CLI's own event.
+    await this.loadEvents();
     await appendFile(this.eventsPath, line, 'utf8');
     this.eventsBytes += Buffer.byteLength(line);
     this.eventLog.push(event);
     this.emit('event', event);
+  }
+
+  /**
+   * Has some process already said, in `events.jsonl`, that it made this card's current state?
+   * Every mutation writes the card and appends an event with `ts === card.updated`
+   * (`moveCard`, `updateCard`, `appendLog` and `createCard` all set them from one clock), so
+   * `(cardId, ts) === (card.id, card.updated)` identifies that claim exactly.
+   *
+   * The `updated` comparison is what keeps the guarantee narrow: a claim only counts when
+   * `updated` actually moved. Without it, a hand edit of `status:` alone — which by definition
+   * leaves `updated` at the value the card's *previous* mutation set, and that mutation's event
+   * is still in the log — would be silently swallowed. That path is the product's headline
+   * behaviour, so it gets a check that cannot be argued away.
+   */
+  private isClaimed(card: Card, prevCard: Card | undefined): boolean {
+    if (prevCard && prevCard.updated === card.updated) return false;
+    return this.eventLog.some((e) => e.cardId === card.id && e.ts === card.updated);
   }
 
   private async loadConfig(): Promise<void> {
@@ -383,6 +406,13 @@ export class CardStore extends EventEmitter<StoreEvents> {
     this.emit('card', card);
 
     if (origin === 'watch') {
+      // Read the log before deciding (K8). Whoever made this change states so in
+      // `events.jsonl`; the watcher's own `events.jsonl` task may not have run yet — the
+      // ordering of the two chokidar deliveries is not guaranteed, and both orderings were
+      // observed. `loadEvents` is offset-based, so running it here and again from the watcher
+      // emits nothing twice, and both run on the same serial `enqueue` queue.
+      await this.loadEvents();
+      if (this.isClaimed(card, prevCard)) return;
       const ts = toIso(this.now());
       const event: Event = prevCard
         ? prevCard.status !== card.status

@@ -11,7 +11,7 @@ import {
   openStore,
   type StoreEvent,
 } from '../src/store.js';
-import { cardText, makeTempRepoboard, NOW, type TempRepo, waitForEvent } from './helpers.js';
+import { cardText, makeTempRepoboard, NOW, sleep, type TempRepo, waitForEvent } from './helpers.js';
 
 const opened: CardStore[] = [];
 const repos: TempRepo[] = [];
@@ -307,5 +307,159 @@ describe('compareCardIds', () => {
       'RB-2',
       'RB-10',
     ]);
+  });
+});
+
+/**
+ * K8 (RCB-28): one external mutation must produce exactly one ticker entry.
+ * Each test counts every `event` emission on the *watching* store across one mutation.
+ */
+describe('K8: one external mutation, one ticker entry', () => {
+  /** Longer than chokidar's awaitWriteFinish (100 ms) plus the serial queue. */
+  const settle = (): Promise<void> => sleep(700);
+
+  it('a second process running `card move` emits one event, not two', async () => {
+    const repo = await repoWith({ 'RB-1.md': cardText('RB-1', 'todo') });
+    const watching = await open(repo, true);
+    const events: StoreEvent[] = [];
+    watching.on('event', (e) => events.push(e));
+
+    // A second process (the CLI): its own store, no watcher, writing the same files.
+    const cli = await open(repo, false);
+    const res = await cli.move('RB-1', 'doing', 'claude/cli');
+    expect(res.ok).toBe(true);
+
+    await waitForEvent<Card>(watching, 'card', (c) => c.status === 'doing');
+    await settle();
+
+    expect(events.map((e) => `${e.actor}:${e.type}`)).toEqual(['claude/cli:move']);
+    expect(watching.get('RB-1')?.status).toBe('doing');
+  });
+
+  it('a second process running `card add` emits one event, not two', async () => {
+    const repo = await repoWith({});
+    const watching = await open(repo, true);
+    const events: StoreEvent[] = [];
+    watching.on('event', (e) => events.push(e));
+
+    const cli = await open(repo, false);
+    expect(created(await cli.create({ title: 'From the CLI' }, 'claude/cli')).id).toBe('RB-1');
+
+    await waitForEvent<Card>(watching, 'card', (c) => c.id === 'RB-1');
+    await settle();
+
+    expect(events.map((e) => `${e.actor}:${e.type}`)).toEqual(['claude/cli:create']);
+  });
+
+  it('a hand edit of status alone still yields exactly one file event', async () => {
+    const repo = await repoWith({ 'RB-1.md': cardText('RB-1', 'todo') });
+    const store = await open(repo, true);
+    const events: StoreEvent[] = [];
+    store.on('event', (e) => events.push(e));
+
+    const path = join(repo.cardsDir, 'RB-1.md');
+    const original = await readFile(path, 'utf8');
+    expect(original).toContain('updated: 2026-09-02T22:00:00Z');
+    await writeFile(path, original.replace('status: todo', 'status: doing'));
+
+    await waitForEvent<Card>(store, 'card', (c) => c.status === 'doing');
+    await settle();
+
+    expect(events).toEqual([
+      {
+        ts: '2026-09-02T22:41:10Z',
+        actor: 'file',
+        type: 'move',
+        cardId: 'RB-1',
+        from: 'todo',
+        to: 'doing',
+      },
+    ]);
+  });
+
+  it('a hand edit of status alone still speaks after a CLI move left a claim in the log', async () => {
+    const repo = await repoWith({ 'RB-1.md': cardText('RB-1', 'todo') });
+    const watching = await open(repo, true);
+    const cli = await open(repo, false);
+    expect((await cli.move('RB-1', 'doing', 'claude/cli')).ok).toBe(true);
+    await waitForEvent<Card>(watching, 'card', (c) => c.status === 'doing');
+    await settle();
+
+    // The log now holds an event whose (cardId, ts) equals this card's (id, updated).
+    const path = join(repo.cardsDir, 'RB-1.md');
+    const afterMove = await readFile(path, 'utf8');
+    expect(afterMove).toContain('updated: 2026-09-02T22:41:10Z');
+
+    const events: StoreEvent[] = [];
+    watching.on('event', (e) => events.push(e));
+    await writeFile(path, afterMove.replace('status: doing', 'status: review'));
+
+    await waitForEvent<Card>(watching, 'card', (c) => c.status === 'review');
+    await settle();
+
+    expect(events.map((e) => `${e.actor}:${e.type}:${e.from}->${e.to}`)).toEqual([
+      'file:move:doing->review',
+    ]);
+  });
+
+  it('an in-process mutation keeps, not loses, an event another process appended first', async () => {
+    // Guards the byte-offset accounting in appendEvent. `eventsBytes` is a read offset into
+    // events.jsonl; adding our own line's length to a stale offset drops the other process's
+    // line and makes the next read start mid-line. watch:false so nothing but the mutation
+    // itself can re-read the log.
+    const repo = await repoWith({ 'RB-1.md': cardText('RB-1', 'todo') });
+    const store = await open(repo, false);
+    const events: StoreEvent[] = [];
+    store.on('event', (e) => events.push(e));
+
+    const foreign: StoreEvent = {
+      ts: '2026-09-02T22:30:00Z',
+      actor: 'claude/cli',
+      type: 'update',
+      cardId: 'RB-9',
+      from: 'todo',
+      to: 'todo',
+    };
+    await writeFile(join(repo.root, '.repoboard', 'events.jsonl'), `${JSON.stringify(foreign)}\n`);
+
+    expect((await store.move('RB-1', 'doing', 'me')).ok).toBe(true);
+
+    expect(events).toEqual([
+      foreign,
+      {
+        ts: '2026-09-02T22:41:10Z',
+        actor: 'me',
+        type: 'move',
+        cardId: 'RB-1',
+        from: 'todo',
+        to: 'doing',
+      },
+    ]);
+    expect(store.events()).toEqual(events);
+    // The offset now matches the file, so a re-read adds nothing.
+    const before = store.events().length;
+    expect((await store.appendLog('RB-1', 'note', 'me')).ok).toBe(true);
+    expect(store.events()).toHaveLength(before + 1);
+  });
+
+  it('a hand edit that bumps updated but appends no event still yields one file event', async () => {
+    const repo = await repoWith({ 'RB-1.md': cardText('RB-1', 'todo') });
+    const store = await open(repo, true);
+    const events: StoreEvent[] = [];
+    store.on('event', (e) => events.push(e));
+
+    const path = join(repo.cardsDir, 'RB-1.md');
+    const original = await readFile(path, 'utf8');
+    await writeFile(
+      path,
+      original
+        .replace('status: todo', 'status: doing')
+        .replace('updated: 2026-09-02T22:00:00Z', 'updated: 2026-09-02T23:15:00Z'),
+    );
+
+    await waitForEvent<Card>(store, 'card', (c) => c.status === 'doing');
+    await settle();
+
+    expect(events.map((e) => `${e.actor}:${e.type}`)).toEqual(['file:move']);
   });
 });

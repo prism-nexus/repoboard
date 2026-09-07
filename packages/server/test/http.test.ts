@@ -499,3 +499,60 @@ describe('hasBoard (P7.2)', () => {
     expect(body.hasBoard).toBe(true);
   });
 });
+
+// ---- K10: HTTP refuses mutations against a boardless root with 409 ----------------------------
+
+describe('map-only mode refuses mutations over HTTP (K10)', () => {
+  async function boardlessRig() {
+    const repo = await makeTempRepoNoBoard({ 'src/a.ts': 'export const a = 1;\n' });
+    cleanups.push(repo.cleanup);
+    const store = await openStore(repo.root, { watch: true, now: () => NOW });
+    cleanups.push(() => store.close());
+    const server = await startServer({ store, port: 0, scan: false });
+    cleanups.push(() => server.close());
+    return { repo, store, url: server.url.replace(/\/$/, '') };
+  }
+
+  it('POST /api/cards is 409 and writes nothing into the target', async () => {
+    const r = await boardlessRig();
+    const res = await fetch(`${r.url}/api/cards`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ title: 'hole' }),
+    });
+    // K10's exact reproduction, now closed. On-disk first, asserted on the directory itself.
+    expect(await r.repo.hasRepoboard()).toBe(false);
+    expect(res.status).toBe(409);
+    expect(((await json(res)) as { error: string }).error).toContain('map-only');
+    expect(((await json(await fetch(`${r.url}/api/board`))) as { cards: Card[] }).cards).toEqual(
+      [],
+    );
+  });
+
+  it('PATCH of a card that cannot exist is still 404, not 409', async () => {
+    const r = await boardlessRig();
+    const res = await fetch(`${r.url}/api/cards/RB-1`, {
+      method: 'PATCH',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ status: 'doing' }),
+    });
+    expect(res.status).toBe(404);
+    expect(await r.repo.hasRepoboard()).toBe(false);
+  });
+
+  it('a repo with a board still creates on 201 and still rejects bad input with 400', async () => {
+    const r = await rig({ 'RB-1.md': cardText('RB-1', 'todo') });
+    const good = await fetch(`${r.url}/api/cards`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ title: 'fine' }),
+    });
+    expect(good.status).toBe(201);
+    const bad = await fetch(`${r.url}/api/cards`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ title: '' }),
+    });
+    expect(bad.status).toBe(400);
+  });
+});

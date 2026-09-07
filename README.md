@@ -93,7 +93,7 @@ columns:
 
 ```sh
 pnpm install
-pnpm test        # vitest (217 tests) + a gzipped-bundle size check (135.2 KB JS, limit 600 KB)
+pnpm test        # vitest (242 tests) + a gzipped-bundle size check (135.7 KB JS, limit 600 KB)
 pnpm typecheck && pnpm lint
 pnpm dev         # server + web with hot reload
 pnpm build       # packages/server/dist/cli.js, self-contained with the built web app
@@ -170,7 +170,7 @@ that call is the owner's. No GitHub repo until after v1 (O2).
   headline behaviour. Measured on the built binary, events on the ticker per mutation:
   `card add` 2 → 1, `card move` 2 → 1, `sed` after a CLI move 1 → 1, `sed` bumping `updated`
   1 → 1; tests 191 → 197.
-- **K10** Map-only mode (P7.2) is read-only in practice but not by construction. Serving a repo
+- ~~**K10** Map-only mode (P7.2) is read-only in practice but not by construction. Serving a repo
   with no `.repoboard/` writes nothing — verified on a throwaway clone and again by the
   orchestrator on its own fixture 2026-09-07: after a full start/scan/stop, `git status
   --porcelain` empty and `.repoboard/` absent. But a **mutating request still works**:
@@ -182,7 +182,17 @@ that call is the owner's. No GitHub repo until after v1 (O2).
   that nothing forbids. Fix: refuse every mutation when `hasBoard` is false, in the one funnel all
   four of `create`/`move`/`update`/`appendLog` pass through, so a fifth mutating method cannot
   forget it. `repoboard init` is unaffected — `cmdInit` writes files directly, not through the
-  store. Ticketed as RCB-35. Not started.
+  store.~~ Closed 2026-09-07 (RCB-35). The guard is not in `enqueue`: measured, the watcher queues
+  `loadConfig`, `loadEvents`, `refreshCard` and `removeCardFile` through that same funnel and they
+  must keep running in map-only mode. It sits one level narrower, in `writeCard` and `appendEvent`
+  — the only two functions in the store that put a byte on disk, `await mkdir|writeFile|appendFile|
+  rename` appears nowhere else in the file, and a test asserts that — where it throws `MapOnlyError`
+  before any directory is created. A `mutate()` funnel replaces `enqueue` in `create`/`move`/
+  `update`/`appendLog` and converts that throw to K4's `{ok:false, error, readOnly:true}`; HTTP maps
+  `readOnly` to **409**, MCP already surfaced any `{ok:false}` as an error result and needed no
+  change. A fifth mutating method cannot forget the guard: it cannot write without one of the two
+  writers. `POST /api/cards` against a boardless root is now `409` with `.repoboard/` still absent;
+  `repoboard init` still works there and unlocks the board after a restart. Tests 231 → 242.
 - **K9** There is no way to set a card's `assignee` after `card add`. The CLI has
   `add, move, list, show` only (`packages/server/src/cli.ts`); MCP has `update_card`, and HTTP
   has `PATCH`, so the gap is the CLI alone. HANDOFF §7.9 asked for exactly this in 2026-09-03

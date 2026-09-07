@@ -459,6 +459,46 @@ describe('map-only mode is read-only in the target repo (P7.2)', () => {
     expect(await fixture.hasRepoboard()).toBe(false);
   });
 
+  it('`repoboard init` is the escape hatch and is untouched by the K10 guard', async () => {
+    const fixture = await makeTempRepoNoBoard({ 'a.ts': 'export const a = 1;\n' });
+    dirs.push(fixture.root);
+
+    // Serving it refuses to create anything (K10)...
+    const before = await serve(fixture.root, '--root', fixture.root);
+    try {
+      const res = await fetch(`${before.url}api/cards`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ title: 'hole' }),
+      });
+      expect(res.status).toBe(409);
+    } finally {
+      expect(await before.stop()).toBe(0);
+    }
+    expect(await fixture.hasRepoboard()).toBe(false);
+
+    // ...but the user running `repoboard init` themselves still works. cmdInit writes with
+    // mkdir/writeFile and never opens the store, so a store-level guard cannot reach it.
+    const init = await repoboard(fixture.root, 'init');
+    expect(init.code).toBe(0);
+    expect(await fixture.hasRepoboard()).toBe(true);
+
+    // And after the restart the brief's copy promises, mutations work normally.
+    const after = await serve(fixture.root);
+    try {
+      const board = await getJson<BoardBody>(`${after.url}api/board`);
+      expect(board.hasBoard).toBe(true);
+      const res = await fetch(`${after.url}api/cards`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ title: 'now allowed' }),
+      });
+      expect(res.status).toBe(201);
+    } finally {
+      expect(await after.stop()).toBe(0);
+    }
+  });
+
   it('an empty but initialised .repoboard/ is hasBoard:true with zero cards', async () => {
     const fixture = await makeTempRepoNoBoard({ 'a.ts': 'export const a = 1;\n' });
     dirs.push(fixture.root);

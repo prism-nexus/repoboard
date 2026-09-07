@@ -189,6 +189,16 @@ function toPatch(body: Json): CardPatch {
 }
 
 /**
+ * K10: one place turns a store failure into a status. `readOnly` (the served root has no
+ * `.repoboard/`) is 409 — the request was well formed and the state of the target forbids it;
+ * `notFound` stays 404 and everything else stays 400.
+ */
+function failureStatus(res: { notFound?: boolean; readOnly?: boolean }): number {
+  if (res.readOnly === true) return 409;
+  return res.notFound === true ? 404 : 400;
+}
+
+/**
  * Apply a PATCH-shaped body: a `status` change goes through `move`, everything else through
  * `update`. Used by `PATCH /api/cards/:id` and both WS client messages.
  */
@@ -207,12 +217,12 @@ async function applyPatch(
   const warnings: string[] = [];
   if (status !== undefined && status !== current.status) {
     const res = await store.move(id, status, actor);
-    if (!res.ok) throw new HttpError(res.notFound ? 404 : 400, res.error);
+    if (!res.ok) throw new HttpError(failureStatus(res), res.error);
     warnings.push(...res.warnings);
   }
   if (Object.keys(patch).length > 0) {
     const res = await store.update(id, patch, actor);
-    if (!res.ok) throw new HttpError(res.notFound ? 404 : 400, res.error);
+    if (!res.ok) throw new HttpError(failureStatus(res), res.error);
   }
   const card = store.get(id);
   if (!card) throw new HttpError(404, `card "${id}" disappeared during update`);
@@ -516,7 +526,7 @@ export async function startServer(opts: ServerOptions): Promise<RunningServer> {
       const actor = optString(body, 'actor') ?? 'web';
       const input = toCreateInput(body);
       const created = await store.create(input, actor);
-      if (!created.ok) throw new HttpError(400, created.error);
+      if (!created.ok) throw new HttpError(failureStatus(created), created.error);
       return sendJson(res, 201, created.card);
     }
     // K7: the referenced lines, read from the files on every request (never cached). The only

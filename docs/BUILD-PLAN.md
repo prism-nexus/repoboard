@@ -309,8 +309,10 @@ Answered 2026-09-07:
   need the ability to point this project at different projects to see what is in them and get the
   full usability. pointing at our own repo is just a test to get up and running." Decision for
   this round: `serve --root <dir>` plus **map-only mode** for a directory with no `.repoboard/`.
-  Measured basis for why this is small: `scanner.ts` reads no `.repoboard/` path at all (its only
-  core import is types), `loadConfig` already returns `defaultBoardConfig()` on ENOENT
+  Measured basis for why this is small: `scanner.ts` reads no `.repoboard/` path at all
+  (**corrected 2026-09-07:** this entry first said its only core import is types; line 12 is a
+  value import of `toIso`. It touches no disk, so the conclusion stands, but the stated fact was
+  wrong — the implementing agent caught it), `loadConfig` already returns `defaultBoardConfig()` on ENOENT
   (`store.ts:326-328`) and `load()` already tolerates a missing cards directory (`:143-147`) — the
   server can already open a boardless repo; `requireRoot` (`cli.ts:95`) is what refuses. **Not in
   this round, deliberately:** multi-repo in one server with a UI switcher. `startServer` takes a

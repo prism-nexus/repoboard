@@ -1,5 +1,7 @@
+import { readFileSync } from 'node:fs';
 import { readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import type { BoardConfig, Card } from '@repoboard/core';
 import { parseCard } from '@repoboard/core';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -8,10 +10,20 @@ import {
   type CreateOutcome,
   compareCardIds,
   type InvalidCard,
+  MAP_ONLY_ERROR,
+  MapOnlyError,
   openStore,
   type StoreEvent,
 } from '../src/store.js';
-import { cardText, makeTempRepoboard, NOW, sleep, type TempRepo, waitForEvent } from './helpers.js';
+import {
+  cardText,
+  makeTempRepoboard,
+  makeTempRepoNoBoard,
+  NOW,
+  sleep,
+  type TempRepo,
+  waitForEvent,
+} from './helpers.js';
 
 const opened: CardStore[] = [];
 const repos: TempRepo[] = [];
@@ -461,5 +473,143 @@ describe('K8: one external mutation, one ticker entry', () => {
     await settle();
 
     expect(events.map((e) => `${e.actor}:${e.type}`)).toEqual(['file:move']);
+  });
+});
+
+// ---- K10: a root with no `.repoboard/` refuses every mutation ---------------------------------
+
+describe('map-only roots refuse every mutation (K10)', () => {
+  async function boardless() {
+    const repo = await makeTempRepoNoBoard({ 'src/a.ts': 'export const a = 1;\n' });
+    repos.push(repo);
+    const store = await openStore(repo.root, { watch: false, now: () => NOW });
+    opened.push(store);
+    expect(store.hasBoard).toBe(false);
+    return { repo, store };
+  }
+
+  it('create is refused as readOnly and materialises nothing', async () => {
+    const { repo, store } = await boardless();
+    const res = await store.create({ title: 'hole' }, 'test-actor');
+    // On-disk FIRST, and on the directory's existence rather than `git status` — git does not
+    // track empty directories, so a `git status` assertion here would pass while `.repoboard/`
+    // sat in a stranger's repo (HANDOFF §7, the sixth vacuous-control species).
+    expect(await repo.hasRepoboard()).toBe(false);
+    expect(store.list()).toEqual([]);
+    expect(store.events()).toEqual([]);
+    expect(res.ok).toBe(false);
+    if (res.ok) throw new Error('create should have been refused');
+    expect(res.readOnly).toBe(true);
+    expect(res.error).toBe(MAP_ONLY_ERROR);
+  });
+
+  it('move, update and appendLog cannot reach a write either', async () => {
+    const { repo, store } = await boardless();
+    // They stop earlier than the guard, at `unknown card`: a card can only be in memory if it was
+    // read out of `.repoboard/cards/`, which cannot exist here. So `notFound`, not `readOnly` —
+    // the refusal is honest either way, and neither reaches a writer.
+    for (const res of [
+      await store.move('RB-1', 'doing', 'test-actor'),
+      await store.update('RB-1', { title: 'x' }, 'test-actor'),
+      await store.appendLog('RB-1', 'x', 'test-actor'),
+    ]) {
+      expect(res.ok).toBe(false);
+      if (res.ok) throw new Error('should have been refused');
+      expect(res.notFound).toBe(true);
+    }
+    expect(await repo.hasRepoboard()).toBe(false);
+  });
+
+  /**
+   * The property the guard is placed for: a *fifth* mutating method, added later by someone who
+   * never read this file, cannot write even if it skips `mutate` entirely — because the only two
+   * functions in the store that put bytes on disk refuse first.
+   */
+  it('a caller that bypasses the mutate funnel still cannot write', async () => {
+    const { repo, store } = await boardless();
+    const internals = store as unknown as {
+      writeCard(card: Card): Promise<void>;
+      appendEvent(event: StoreEvent): Promise<void>;
+    };
+    const card: Card = {
+      id: 'RB-1',
+      title: 'bypass',
+      status: 'todo',
+      created: '2026-09-07T00:00:00Z',
+      updated: '2026-09-07T00:00:00Z',
+      body: '',
+    };
+    await expect(internals.writeCard(card)).rejects.toThrow(MapOnlyError);
+    await expect(
+      internals.appendEvent({
+        ts: '2026-09-07T00:00:00Z',
+        actor: 'bypass',
+        type: 'create',
+        cardId: 'RB-1',
+        from: null,
+        to: 'todo',
+      }),
+    ).rejects.toThrow(MapOnlyError);
+    expect(await repo.hasRepoboard()).toBe(false);
+  });
+
+  it('a repo that has a board is completely unaffected', async () => {
+    const repo = await repoWith({ 'RB-1.md': cardText('RB-1', 'todo') });
+    const store = await open(repo, false);
+    expect(store.hasBoard).toBe(true);
+    const created = await store.create({ title: 'fine' }, 'test-actor');
+    expect(created.ok).toBe(true);
+    const moved = await store.move('RB-1', 'doing', 'test-actor');
+    expect(moved.ok).toBe(true);
+    const logged = await store.appendLog('RB-1', 'still works', 'test-actor');
+    expect(logged.ok).toBe(true);
+  });
+});
+
+// ---- K10 structurally: the guard cannot be forgotten by a later method ------------------------
+//
+// Same idea as core's purity.test.ts: some guarantees are about the SHAPE of the source, and a
+// behavioural test can only ever cover the methods that exist today.
+
+describe('K10 structure of store.ts', () => {
+  const SRC = readFileSync(fileURLToPath(new URL('../src/store.ts', import.meta.url)), 'utf8');
+
+  /** `[start, end)` of a method body, from its declaration to the matching two-space `}`. */
+  function methodRange(decl: string): [number, number] {
+    const start = SRC.indexOf(decl);
+    expect(start, `${decl} not found`).toBeGreaterThan(-1);
+    const end = SRC.indexOf('\n  }', start);
+    expect(end, `end of ${decl} not found`).toBeGreaterThan(start);
+    return [start, end];
+  }
+
+  it('every method returning a *Outcome goes through this.mutate', () => {
+    const decls = [
+      ...SRC.matchAll(/^ {2}(\w+)\([^)]*\): Promise<(\w+Outcome)> \{\n {4}return this\.(\w+)\(/gm),
+    ];
+    expect(decls.map((d) => d[1]).sort()).toEqual(['appendLog', 'create', 'move', 'update']);
+    expect(decls.map((d) => d[3])).toEqual(['mutate', 'mutate', 'mutate', 'mutate']);
+  });
+
+  it('both disk writers open with the guard, on their first line', () => {
+    for (const decl of ['private async writeCard', 'private async appendEvent']) {
+      const [start, end] = methodRange(decl);
+      const first = SRC.slice(start, end).split('\n')[1]?.trim();
+      expect(first, `${decl} first statement`).toBe('this.refuseWriteWithoutBoard();');
+    }
+  });
+
+  it('and nothing else in the store writes to disk', () => {
+    const ranges = [
+      methodRange('private async writeCard'),
+      methodRange('private async appendEvent'),
+    ];
+    const writes = [...SRC.matchAll(/await (writeFile|appendFile|rename|mkdir)\(/g)];
+    expect(writes.length).toBeGreaterThan(0);
+    for (const w of writes) {
+      const i = w.index;
+      const inside = ranges.some(([a, b]) => i >= a && i < b);
+      expect(inside, `${w[1]} at index ${i} is outside the two guarded writers`).toBe(true);
+    }
   });
 });

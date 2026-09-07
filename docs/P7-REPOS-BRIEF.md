@@ -88,7 +88,10 @@ on content from `GET /api/board` (a card id that exists only in the fixture), no
 Today `requireRoot` (`cli.ts:95`) refuses to start without `.repoboard/`. But the map half of the
 product does not need a board at all — verified by the orchestrator 2026-09-07:
 
-- `packages/server/src/scanner.ts` reads no `.repoboard/` path; its only core import is types.
+- `packages/server/src/scanner.ts` reads no `.repoboard/` path. (**This brief originally added**
+  **"its only core import is types" — that was wrong**: line 12 is a value import of `toIso`. It
+  touches no disk, so the conclusion held; the agent reported the contradiction rather than
+  agreeing with the brief, which is the behaviour this project wants.)
 - `loadConfig` already returns `defaultBoardConfig()` on ENOENT (`store.ts:326-328`).
 - `load()` already tolerates a missing cards directory (`store.ts:143-147`).
 

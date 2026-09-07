@@ -52,15 +52,41 @@ export interface OpenStoreOptions {
   now?: () => Date;
 }
 
-export type CreateOutcome = { ok: true; card: Card; event: Event } | { ok: false; error: string };
+/**
+ * K10: `readOnly` marks the one refusal that is not about the request at all — the served root
+ * has no `.repoboard/`, so there is nothing to write to and repoboard will not invent one. HTTP
+ * maps it to 409; every other `{ok:false}` keeps the status it had.
+ */
+export type CreateOutcome =
+  | { ok: true; card: Card; event: Event }
+  | { ok: false; error: string; readOnly?: boolean };
 
 export type MoveOutcome =
   | { ok: true; card: Card; event: Event; warnings: string[] }
-  | { ok: false; error: string; notFound?: boolean };
+  | { ok: false; error: string; notFound?: boolean; readOnly?: boolean };
 
 export type UpdateOutcome =
   | { ok: true; card: Card; event: Event }
-  | { ok: false; error: string; notFound?: boolean };
+  | { ok: false; error: string; notFound?: boolean; readOnly?: boolean };
+
+/** The refusal text, in one place: the CLI, HTTP and MCP all surface this string. */
+export const MAP_ONLY_ERROR =
+  'this repo has no .repoboard/ — repoboard is serving it map-only and will not create one. ' +
+  'Run `repoboard init` in it yourself, then restart the server.';
+
+/**
+ * Thrown by `writeCard`/`appendEvent` when the served root has no board, and converted to
+ * `{ok:false, error, readOnly:true}` by `mutate`. It is an exception rather than a return value
+ * on purpose: the two functions it guards are the *only* way a byte of this store reaches disk,
+ * they return `void`, and a fifth mutating method added later cannot write without going through
+ * one of them. A check the caller has to remember is a check the caller eventually forgets.
+ */
+export class MapOnlyError extends Error {
+  constructor() {
+    super(MAP_ONLY_ERROR);
+    this.name = 'MapOnlyError';
+  }
+}
 
 const CARD_FILE = /^[^/\\]+\.md$/;
 
@@ -177,7 +203,7 @@ export class CardStore extends EventEmitter<StoreEvents> {
 
   /** Never throws on user input (K4): a bad status or title is `{ok:false, error}`. */
   create(input: CreateCardInput, actor: string): Promise<CreateOutcome> {
-    return this.enqueue(async () => {
+    return this.mutate(async () => {
       const existingIds = [
         ...this.cards.keys(),
         ...[...this.invalidByPath.keys()].map((p) => basename(p, '.md')),
@@ -207,7 +233,7 @@ export class CardStore extends EventEmitter<StoreEvents> {
   }
 
   move(id: string, status: string, actor: string): Promise<MoveOutcome> {
-    return this.enqueue(async () => {
+    return this.mutate(async () => {
       const card = this.cards.get(id);
       if (!card) return { ok: false, error: `unknown card "${id}"`, notFound: true };
       const columnCounts: Record<string, number> = {};
@@ -229,7 +255,7 @@ export class CardStore extends EventEmitter<StoreEvents> {
   }
 
   update(id: string, patch: CardPatch, actor: string): Promise<UpdateOutcome> {
-    return this.enqueue(async () => {
+    return this.mutate(async () => {
       const card = this.cards.get(id);
       if (!card) return { ok: false, error: `unknown card "${id}"`, notFound: true };
       const res = updateCard(card, patch, { actor, now: this.now() });
@@ -254,7 +280,7 @@ export class CardStore extends EventEmitter<StoreEvents> {
    * so the bullet stays one line.
    */
   appendLog(id: string, text: string, actor: string): Promise<UpdateOutcome> {
-    return this.enqueue(async () => {
+    return this.mutate(async () => {
       const card = this.cards.get(id);
       if (!card) return { ok: false, error: `unknown card "${id}"`, notFound: true };
       const line = text.replace(/\s+/g, ' ').trim();
@@ -287,8 +313,39 @@ export class CardStore extends EventEmitter<StoreEvents> {
     return next;
   }
 
+  /**
+   * K10: the funnel for every mutation. It is `enqueue` plus the one thing a mutation needs that
+   * the watcher's queued reads must not have — turning `MapOnlyError` into K4's
+   * `{ok:false, error}` instead of a throw. `enqueue` itself cannot carry the guard: the watcher
+   * queues `loadConfig`, `loadEvents`, `refreshCard` and `removeCardFile` through it too, and
+   * those must keep working in map-only mode (they are how the map stays live).
+   */
+  private mutate<T extends { ok: boolean }>(
+    fn: () => Promise<T>,
+  ): Promise<T | { ok: false; error: string; readOnly: true }> {
+    return this.enqueue(async () => {
+      try {
+        return await fn();
+      } catch (e) {
+        if (e instanceof MapOnlyError) {
+          return { ok: false as const, error: e.message, readOnly: true as const };
+        }
+        throw e;
+      }
+    });
+  }
+
+  /**
+   * K10 / plan §11 O7: pointing at a directory is a read-only act. Called first in both writers,
+   * before any directory is created, so a refused mutation leaves the target byte-identical.
+   */
+  private refuseWriteWithoutBoard(): void {
+    if (!this.board) throw new MapOnlyError();
+  }
+
   /** Atomic: write `<file>.tmp`, rename over the target, then update the cache. */
   private async writeCard(card: Card): Promise<void> {
+    this.refuseWriteWithoutBoard();
     const path = this.filePath(card.id);
     const text = serializeCard(card);
     await mkdir(this.cardsDir, { recursive: true });
@@ -302,6 +359,7 @@ export class CardStore extends EventEmitter<StoreEvents> {
   }
 
   private async appendEvent(event: Event): Promise<void> {
+    this.refuseWriteWithoutBoard();
     const line = `${JSON.stringify(event)}\n`;
     await mkdir(this.repoboardDir, { recursive: true });
     // Catch up first (K8). `eventsBytes` must be the true file length before we add our own

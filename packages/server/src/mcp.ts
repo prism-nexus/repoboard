@@ -239,7 +239,7 @@ export function createMcpServer(opts: McpServerOptions): McpServer {
     {
       title: 'Update card fields',
       description:
-        `${CARD_INTRO}Changes title, assignee, priority, labels and/or files, bumps ` +
+        `${CARD_INTRO}Changes title, assignee, priority, labels, files and/or refs, bumps ` +
         '`updated` and appends a `## Log` line naming the changed fields. Pass null to clear an ' +
         'optional field. Not for status (use move_card) or the body (use append_log).',
       inputSchema: {

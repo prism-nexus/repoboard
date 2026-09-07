@@ -28,6 +28,7 @@ published). It finds `.repoboard/` by walking up from the current directory.
 | `repoboard init` | `repoboard init` — creates `.repoboard/` with the default board and card `RB-1 Welcome` |
 | `repoboard card add "<title>" [--status s] [--assignee a] [--priority p] [--label l]... [--file f]... [--ref r]... [--body md] [--as actor]` | `repoboard card add "Treemap view: files by size" --status todo --label web --ref docs/BUILD-PLAN.md@P4.1 --as claude/web-agent` |
 | `repoboard card move <id> <status> [--as actor]` | `repoboard card move RB-12 doing --as claude/web-agent` |
+| `repoboard card update <id> [--title t] [--assignee a] [--priority p] [--label l]... [--file f]... [--ref r]... [--clear field]... [--as actor]` | `repoboard card update RB-12 --assignee claude/web-agent --priority high --as claude/web-agent` |
 | `repoboard card list [--status s] [--json [--full]]` | `repoboard card list --status doing` |
 | `repoboard card show <id> [--resolve]` | `repoboard card show RB-12` — prints the card file; `--resolve` appends each `refs:` target's live lines (section 4) |
 | `repoboard serve [--port 4242] [--open] [--no-fun]` | `repoboard serve --open` — the dashboard on 127.0.0.1 |
@@ -41,8 +42,22 @@ unless you need to parse it, and for `--full` only when you actually need bodies
 
 Exit codes: 0 ok, 1 user error (one line on stderr), 2 crash. `--as` defaults to `$REPOBOARD_ACTOR`,
 then `$USER`, then `cli`. A move that exceeds a column's `wip:` prints a warning and still moves.
-`move` sets the actor of the event, not the card's `assignee`; pass `--assignee` on `add`, or set
-`assignee:` in the file, so the map knows whose card it is.
+`move` sets the actor of the event, not the card's `assignee`; pass `--assignee` on `add`, or
+`repoboard card update <id> --assignee <you>` afterwards, so the map knows whose card it is. Do
+not hand-edit the frontmatter for this — `card update` writes the `## Log` line and the event too.
+
+`card update` is `updateCard` (`packages/core/src/transitions.ts`), the same code MCP `update_card`
+and `PATCH /api/cards/:id` go through, so all three surfaces mean the same thing:
+
+- A repeatable flag **replaces** the whole list, it never appends: `--label a --label b` leaves
+  exactly `[a, b]`, whatever was there before.
+- **`--clear <field>`** is how the shell says the `null` that MCP and HTTP send as JSON. Valid
+  fields: `assignee`, `priority`, `labels`, `files`, `refs`. There is no `--clear title`: a card
+  must have one. Naming a field with both a value and `--clear` is an error, not a precedence rule.
+- **No `--status`.** It is refused with a pointer to `card move`; a move is a status change and
+  setting a field is not.
+- At least one field is required, and the command prints what changed —
+  `updated RB-12 assignee, priority` — in the same order as the `## Log` line it wrote.
 
 ## 3. MCP (when you have no shell)
 
@@ -174,8 +189,9 @@ identical across calls: the board's avatar (emoji + color) is a hash of the exac
 
 ## 7. Paste this into a CLAUDE.md
 
-> This repo has a `.repoboard/` board. Before starting a task, move its card to `doing` with your
-> actor name; when done, move it to `review` and append what you verified.
-> (`repoboard card move RB-12 doing --as claude/<role>` first; the `move_card` / `append_log` MCP
-> tools if you have no shell; editing `.repoboard/cards/RB-12.md` by hand as a last resort —
-> `docs/AGENTS.md` has the details.)
+> This repo has a `.repoboard/` board. Before starting a task, move its card to `doing` and put
+> your actor name on it as the assignee; when done, move it to `review` and append what you
+> verified. (`repoboard card move RB-12 doing --as claude/<role>` and
+> `repoboard card update RB-12 --assignee claude/<role> --as claude/<role>` first; the `move_card`
+> / `update_card` / `append_log` MCP tools if you have no shell; editing
+> `.repoboard/cards/RB-12.md` by hand as a last resort — `docs/AGENTS.md` has the details.)

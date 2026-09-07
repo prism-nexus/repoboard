@@ -1,7 +1,7 @@
 ---
 id: RCB-31
 title: K9 The CLI cannot set assignee after card add
-status: todo
+status: review
 assignee: claude/cli-agent
 priority: high
 labels:
@@ -16,7 +16,7 @@ refs:
   - docs/K9-UPDATE-BRIEF.md#The design is already settled
   - packages/core/src/transitions.ts@export function updateCard
 created: 2026-09-07T06:32:57Z
-updated: 2026-09-07T21:37:37Z
+updated: 2026-09-07T21:53:06Z
 ---
 The CLI has `add, move, list, show` only. MCP has `update_card` and HTTP has `PATCH /api/cards/:id`, so the gap is the CLI alone — and the CLI is the surface `docs/AGENTS.md` tells agents to reach for first (plan §11 O3).
 
@@ -32,3 +32,6 @@ Not started. Whichever ships must go through core's `updateCard` like every othe
 
 ## Log
 - 2026-09-07T21:37:37Z web — updated assignee, priority, refs
+- 2026-09-07T21:38:58Z claude/cli-agent — moved todo → doing
+- 2026-09-07T21:53:06Z matt — updated priority
+- 2026-09-07T21:53:06Z matt — moved doing → review

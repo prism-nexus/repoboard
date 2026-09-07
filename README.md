@@ -38,7 +38,7 @@ plan §11 O3):
 
 | Surface | Standing cost | Per move | Per list |
 |---|---|---|---|
-| **CLI** — `repoboard card move RB-12 doing --as claude/dev` | `docs/AGENTS.md` read once: 10.1 KB | ~40 B in, 33 B out | table 2,529 B; `--json` 7,639 B; `--json --full` 20,758 B |
+| **CLI** — `repoboard card move RB-12 doing --as claude/dev` | `docs/AGENTS.md` read once: 11.5 KB | ~40 B in, 33 B out | table 2,529 B; `--json` 7,639 B; `--json --full` 20,758 B |
 | **MCP** — `claude mcp add repoboard -- npx repoboard mcp` | tool schema 8.6 KB per turn where the harness loads it | ~80 B call, ~200 B result | 7,638 B — the same formatter, to the byte |
 | **File edit** — `sed -i 's/^status: todo$/status: doing/' .repoboard/cards/RB-12.md` | same AGENTS.md | ~60 B, but a correct move also bumps `updated` and appends a `## Log` line | n/a |
 
@@ -93,7 +93,7 @@ columns:
 
 ```sh
 pnpm install
-pnpm test        # vitest (242 tests) + a gzipped-bundle size check (135.7 KB JS, limit 600 KB)
+pnpm test        # vitest (250 tests) + a gzipped-bundle size check (135.7 KB JS, limit 600 KB)
 pnpm typecheck && pnpm lint
 pnpm dev         # server + web with hot reload
 pnpm build       # packages/server/dist/cli.js, self-contained with the built web app
@@ -193,11 +193,24 @@ that call is the owner's. No GitHub repo until after v1 (O2).
   change. A fifth mutating method cannot forget the guard: it cannot write without one of the two
   writers. `POST /api/cards` against a boardless root is now `409` with `.repoboard/` still absent;
   `repoboard init` still works there and unlocks the board after a restart. Tests 231 → 242.
-- **K9** There is no way to set a card's `assignee` after `card add`. The CLI has
+- ~~**K9** There is no way to set a card's `assignee` after `card add`. The CLI has
   `add, move, list, show` only (`packages/server/src/cli.ts`); MCP has `update_card`, and HTTP
   has `PATCH`, so the gap is the CLI alone. HANDOFF §7.9 asked for exactly this in 2026-09-03
   ("briefs should say to set both, or the CLI's `move` should offer `--assign`") and it never got
   a ticket; all three agents on 2026-09-06 were briefed to run `card update --assignee`, all
   three hit `unknown card command "update"`, and all three set the field by hand-editing
   frontmatter. Options: `card update <id> [--assignee|--priority|--label|--file|--ref]`, or
-  `--assign` on `card move`. Not started.
+  `--assign` on `card move`.~~ Closed 2026-09-07 (RCB-31, plan §11 O8 chose `card update`).
+  `repoboard card update <id> --title --assignee --priority --label --file --ref --clear --as` is
+  the CLI's surface onto the same `updateCard` MCP `update_card` and `PATCH /api/cards/:id` already
+  call, so core gained nothing: a repeatable flag **replaces** its list rather than appending, and
+  `--clear assignee|priority|labels|files|refs` is the one new concept — the shell's way to send
+  the `null` the other two surfaces carry as JSON. The finding that mattered is where the `--status`
+  refusal actually lives: **not in core**. Measured by deleting the CLI check and reading the card
+  back — `card update RB-1 --status doing --assignee a` then exits **0**, sets the assignee and
+  drops the status silently, because the CLI never puts `status` into the patch, so core's
+  `'status' in patch` guard (`transitions.ts:147`) is unreachable from this surface. The CLI check
+  is the whole guarantee, and the test asserts the card is byte-identical afterwards. `docs/AGENTS.md`
+  no longer tells agents to hand-edit frontmatter for this. Verified on the built binary against a
+  throwaway fixture, and one `card update` with `serve` running put **exactly one** line in
+  `events.jsonl` (4 → 5, zero `actor: "file"` events); tests 242 → 250.

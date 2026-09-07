@@ -516,6 +516,235 @@ describe('map-only mode is read-only in the target repo (P7.2)', () => {
   });
 });
 
+// ---- K9: `card update <id>` (plan §11 O8) -----------------------------------------------------
+//
+// The CLI is the third surface onto core's `updateCard`; these assert it means the same thing MCP
+// `update_card` and `PATCH /api/cards/:id` mean, not something CLI-shaped.
+
+describe('repoboard card update (K9)', () => {
+  it('sets assignee on a card that has none — K9’s actual complaint', async () => {
+    const root = await freshRepo({ 'RB-1.md': cardText('RB-1', 'todo') });
+    const before = await readFile(join(root, '.repoboard', 'cards', 'RB-1.md'), 'utf8');
+    expect(before).not.toContain('assignee:');
+
+    const res = await repoboard(root, 'card', 'update', 'RB-1', '--assignee', 'claude/cli-agent');
+    expect(res.code).toBe(0);
+    expect(res.out).toBe('updated RB-1 assignee\n');
+    const text = await readFile(join(root, '.repoboard', 'cards', 'RB-1.md'), 'utf8');
+    expect(text).toContain('assignee: claude/cli-agent');
+    expect(text).toContain('test-actor — updated assignee');
+    const log = await readFile(join(root, '.repoboard', 'events.jsonl'), 'utf8');
+    expect(JSON.parse(log.trim())).toMatchObject({
+      type: 'update',
+      cardId: 'RB-1',
+      actor: 'test-actor',
+      from: 'todo',
+      to: 'todo',
+    });
+  });
+
+  it('sets every field it offers, and names them in the log line’s order', async () => {
+    const root = await freshRepo({ 'RB-1.md': cardText('RB-1', 'todo') });
+    const res = await repoboard(
+      root,
+      'card',
+      'update',
+      'RB-1',
+      '--title',
+      'Renamed',
+      '--assignee',
+      'claude/a',
+      '--priority',
+      'high',
+      '--label',
+      'web',
+      '--file',
+      'src/a.ts',
+      '--ref',
+      'README.md#Known issues',
+      '--as',
+      'someone',
+    );
+    expect(res.code).toBe(0);
+    expect(res.out).toBe('updated RB-1 title, assignee, priority, labels, files, refs\n');
+    const text = await readFile(join(root, '.repoboard', 'cards', 'RB-1.md'), 'utf8');
+    expect(text).toContain('title: Renamed');
+    expect(text).toContain('assignee: claude/a');
+    expect(text).toContain('priority: high');
+    expect(text).toContain('labels:\n  - web\n');
+    expect(text).toContain('files:\n  - src/a.ts\n');
+    expect(text).toContain('refs:\n  - README.md#Known issues\n');
+    // The printed field list is the same list, in the same order, as core's `## Log` line.
+    expect(text).toContain('someone — updated title, assignee, priority, labels, files, refs');
+  });
+
+  it('--clear removes each of the five optional fields', async () => {
+    const root = await freshRepo({ 'RB-1.md': cardText('RB-1', 'todo') });
+    const filled = await repoboard(
+      root,
+      'card',
+      'update',
+      'RB-1',
+      '--assignee',
+      'a',
+      '--priority',
+      'low',
+      '--label',
+      'x',
+      '--file',
+      'f.ts',
+      '--ref',
+      'f.ts',
+    );
+    expect(filled.code).toBe(0);
+    const cleared = await repoboard(
+      root,
+      'card',
+      'update',
+      'RB-1',
+      '--clear',
+      'assignee',
+      '--clear',
+      'priority',
+      '--clear',
+      'labels',
+      '--clear',
+      'files',
+      '--clear',
+      'refs',
+    );
+    expect(cleared.code).toBe(0);
+    // State first, report second: a `--clear` that quietly did nothing must fail here, on the
+    // value still being in the file, not merely on the summary line.
+    const text = await readFile(join(root, '.repoboard', 'cards', 'RB-1.md'), 'utf8');
+    for (const field of ['assignee:', 'priority:', 'labels:', 'files:', 'refs:']) {
+      expect(text).not.toContain(field);
+    }
+    expect(text).toContain('id: RB-1');
+    expect(cleared.out).toBe('updated RB-1 assignee, priority, labels, files, refs\n');
+  });
+
+  it('a repeatable flag REPLACES the list rather than appending to it', async () => {
+    const root = await freshRepo({ 'RB-1.md': cardText('RB-1', 'todo') });
+    expect(
+      (await repoboard(root, 'card', 'update', 'RB-1', '--label', 'old', '--label', 'stale')).code,
+    ).toBe(0);
+    const seeded = await readFile(join(root, '.repoboard', 'cards', 'RB-1.md'), 'utf8');
+    expect(seeded).toContain('labels:\n  - old\n  - stale\n');
+
+    const res = await repoboard(root, 'card', 'update', 'RB-1', '--label', 'a', '--label', 'b');
+    expect(res.code).toBe(0);
+    const text = await readFile(join(root, '.repoboard', 'cards', 'RB-1.md'), 'utf8');
+    expect(text).toContain('labels:\n  - a\n  - b\n');
+    expect(text).not.toContain('- old');
+    expect(text).not.toContain('- stale');
+  });
+
+  it('refuses --status with a pointer to card move, and leaves the card untouched', async () => {
+    const root = await freshRepo({ 'RB-1.md': cardText('RB-1', 'todo') });
+    const before = await readFile(join(root, '.repoboard', 'cards', 'RB-1.md'), 'utf8');
+    // The case that matters first: with a real field alongside it, an unguarded `--status` is
+    // silently dropped and the rest of the update succeeds — the CLI never puts `status` into the
+    // patch, so core's own refusal (transitions.ts:147) is never reached from here. The whole
+    // command must be refused, and the card must be byte-identical afterwards.
+    const withField = await repoboard(
+      root,
+      'card',
+      'update',
+      'RB-1',
+      '--status',
+      'doing',
+      '--assignee',
+      'a',
+    );
+    expect(await readFile(join(root, '.repoboard', 'cards', 'RB-1.md'), 'utf8')).toBe(before);
+    expect(withField.code).toBe(1);
+    expect(withField.err).toContain('card update cannot change status');
+    expect(withField.err).toContain('repoboard card move');
+
+    const res = await repoboard(root, 'card', 'update', 'RB-1', '--status', 'doing');
+    expect(res.code).toBe(1);
+    expect(res.err).toContain('card update cannot change status');
+    expect(res.err).toContain('repoboard card move');
+    expect(await readFile(join(root, '.repoboard', 'cards', 'RB-1.md'), 'utf8')).toBe(before);
+  });
+
+  it('refuses an empty patch, an unknown card, a bad priority and a bad --clear field', async () => {
+    const root = await freshRepo({ 'RB-1.md': cardText('RB-1', 'todo') });
+    const bare = await repoboard(root, 'card', 'update', 'RB-1');
+    expect(bare.code).toBe(1);
+    expect(bare.err).toMatch(/needs at least one of/);
+
+    expect((await repoboard(root, 'card', 'update')).code).toBe(1);
+    const unknown = await repoboard(root, 'card', 'update', 'RB-9', '--assignee', 'a');
+    expect(unknown.code).toBe(1);
+    expect(unknown.err).toMatch(/unknown card "RB-9"/);
+    expect((await repoboard(root, 'card', 'update', 'RB-1', '--priority', 'urgent')).code).toBe(1);
+
+    const badClear = await repoboard(root, 'card', 'update', 'RB-1', '--clear', 'title');
+    expect(badClear.code).toBe(1);
+    expect(badClear.err).toMatch(
+      /--clear must name one of assignee, priority, labels, files, refs/,
+    );
+    expect(badClear.err).toMatch(/cannot be cleared/);
+
+    const both = await repoboard(
+      root,
+      'card',
+      'update',
+      'RB-1',
+      '--assignee',
+      'a',
+      '--clear',
+      'assignee',
+    );
+    expect(both.code).toBe(1);
+    expect(both.err).toMatch(/contradicts/);
+
+    // Every refusal above left the card exactly as it was.
+    expect(await readFile(join(root, '.repoboard', 'cards', 'RB-1.md'), 'utf8')).toBe(
+      cardText('RB-1', 'todo'),
+    );
+  });
+
+  it('appears in --help and in the unknown-subcommand list', async () => {
+    const root = await freshRepo();
+    const help = await repoboard(root, '--help');
+    expect(help.out).toContain('repoboard card update <id>');
+    expect(help.out).toMatch(/REPLACES/);
+    const unknown = await repoboard(root, 'card', 'nope');
+    expect(unknown.err).toContain('add, move, update, list, show');
+  });
+
+  it('appends exactly one events.jsonl line while `serve` is watching the same repo (K8)', async () => {
+    const root = await freshRepo({ 'RB-1.md': cardText('RB-1', 'todo') });
+    const eventsPath = join(root, '.repoboard', 'events.jsonl');
+    await writeFile(eventsPath, '');
+    const s = await serve(root);
+    try {
+      const countLines = async (): Promise<number> =>
+        (await readFile(eventsPath, 'utf8')).split('\n').filter((l) => l.trim()).length;
+      const before = await countLines();
+      expect(before).toBe(0);
+
+      const res = await repoboard(root, 'card', 'update', 'RB-1', '--assignee', 'claude/x');
+      expect(res.code).toBe(0);
+      // Give the watcher every chance to add a spurious `actor: "file"` line before counting.
+      await new Promise((r) => setTimeout(r, 1500));
+      const after = await countLines();
+      expect(after - before).toBe(1);
+      const [line] = (await readFile(eventsPath, 'utf8')).trim().split('\n');
+      expect(JSON.parse(line ?? '{}')).toMatchObject({
+        type: 'update',
+        cardId: 'RB-1',
+        actor: 'test-actor',
+      });
+    } finally {
+      expect(await s.stop()).toBe(0);
+    }
+  });
+});
+
 describe('formatTable', () => {
   it('renders an empty board as just the header', () => {
     expect(formatTable([])).toBe('ID  STATUS  ASSIGNEE  TITLE');

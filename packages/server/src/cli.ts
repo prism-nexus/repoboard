@@ -11,6 +11,7 @@ import { fileURLToPath } from 'node:url';
 import { type ParseArgsConfig, parseArgs } from 'node:util';
 import {
   type Card,
+  type CardPatch,
   type CreateCardInput,
   createCard,
   defaultBoardConfig,
@@ -52,6 +53,11 @@ Usage:
                                         --label l (repeatable) --file f (repeatable) --ref r (repeatable)
                                         --as actor
   repoboard card move <id> <status> [--as a]  move a card to a column
+  repoboard card update <id> [options]        --title t --assignee a --priority high|medium|low
+                                        --label l --file f --ref r (repeatable; each one REPLACES
+                                        the whole list, it does not append)
+                                        --clear assignee|priority|labels|files|refs (repeatable)
+                                        --as actor; status changes go through \`card move\`
   repoboard card list [--status s] [--json]   list cards; --json is compact (id, title, status,
                                         assignee, priority, labels, files, updated); add --full for bodies
   repoboard card show <id> [--resolve]        print the card file; --resolve appends the lines each
@@ -220,6 +226,108 @@ async function cmdCardMove(args: string[], io: CliIO): Promise<number> {
   return 0;
 }
 
+/**
+ * K9 / plan §11 O8. The fields `--clear` may name — exactly the optional ones `updateCard` will
+ * take a `null` for (`applyOptional`, core transitions.ts:181). `title` is absent on purpose:
+ * core refuses an empty title, so there is no null to send.
+ */
+const CLEARABLE = ['assignee', 'priority', 'labels', 'files', 'refs'] as const;
+type Clearable = (typeof CLEARABLE)[number];
+
+function clearedFields(flags: string[] | undefined): Set<Clearable> {
+  const out = new Set<Clearable>();
+  for (const f of flags ?? []) {
+    if (!(CLEARABLE as readonly string[]).includes(f)) {
+      throw new UserError(
+        `--clear must name one of ${CLEARABLE.join(', ')} (got "${f}")${
+          f === 'title' ? '; a card must have a title, so it cannot be cleared' : ''
+        }`,
+      );
+    }
+    out.add(f as Clearable);
+  }
+  return out;
+}
+
+/**
+ * `undefined` = leave alone, `null` = clear, a value = set — the same three-way meaning
+ * `applyOptional` gives a `CardPatch` field. `--clear x` is how a shell flag says the `null` that
+ * MCP and HTTP send as JSON; naming the same field twice is a contradiction, not a precedence rule.
+ */
+function setOrClear<T>(
+  value: T | undefined,
+  field: Clearable,
+  clear: Set<Clearable>,
+): T | null | undefined {
+  if (!clear.has(field)) return value;
+  if (value !== undefined) {
+    throw new UserError(
+      `--clear ${field} contradicts the value given for it; pass one or the other`,
+    );
+  }
+  return null;
+}
+
+/**
+ * K9 / plan §11 O8: the third surface onto `updateCard`, speaking the `CardPatch` semantics MCP
+ * `update_card` and `PATCH /api/cards/:id` already speak. A repeatable list flag REPLACES the
+ * list (core copies it wholesale, transitions.ts:166-168) — a CLI that appended where the other
+ * two replace would be a worse bug than the missing command. Status is not a field here.
+ */
+async function cmdCardUpdate(args: string[], io: CliIO): Promise<number> {
+  const { values, positionals } = parse(args, {
+    title: { type: 'string' },
+    assignee: { type: 'string' },
+    priority: { type: 'string' },
+    label: { type: 'string', multiple: true },
+    file: { type: 'string', multiple: true },
+    ref: { type: 'string', multiple: true },
+    clear: { type: 'string', multiple: true },
+    // Declared so a user who tries it gets a pointer instead of `unknown option` — and because
+    // this is the ONLY layer that can catch it. Core's `'status' in patch` refusal
+    // (transitions.ts:147-149) is unreachable from here: `status` never enters the patch, so
+    // without the check below `--status doing --assignee a` exits 0, sets the assignee and drops
+    // the status silently. Measured 2026-09-07 by deleting the check and reading the card back.
+    status: { type: 'string' },
+    as: { type: 'string' },
+  });
+  if (values.status !== undefined) {
+    throw new UserError(
+      'card update cannot change status; use `repoboard card move <id> <status>`',
+    );
+  }
+  const [id] = positionals;
+  if (!id) throw new UserError('usage: repoboard card update <id> [options] (see --help)');
+  const clear = clearedFields(values.clear);
+  // Insertion order matches core's PATCH_KEYS (transitions.ts:140), so the fields we print are
+  // named in the same order as the `## Log` line core writes for the same update.
+  const patch: CardPatch = {};
+  if (values.title !== undefined) patch.title = values.title;
+  const assignee = setOrClear(values.assignee, 'assignee', clear);
+  if (assignee !== undefined) patch.assignee = assignee;
+  const priority = setOrClear(priorityFrom(values.priority), 'priority', clear);
+  if (priority !== undefined) patch.priority = priority;
+  const labels = setOrClear(values.label, 'labels', clear);
+  if (labels !== undefined) patch.labels = labels;
+  const files = setOrClear(values.file, 'files', clear);
+  if (files !== undefined) patch.files = files;
+  const refs = setOrClear(values.ref, 'refs', clear);
+  if (refs !== undefined) patch.refs = refs;
+  const changed = Object.keys(patch);
+  if (changed.length === 0) {
+    throw new UserError(
+      'card update needs at least one of --title, --assignee, --priority, --label, --file, ' +
+        '--ref or --clear <field>',
+    );
+  }
+  const root = await requireRoot(io);
+  const store = await openStore(root, { watch: false, now: io.now });
+  const res = await store.update(id, patch, actorFrom(values.as, io));
+  if (!res.ok) throw new UserError(res.error);
+  io.stdout.write(`updated ${res.card.id} ${changed.join(', ')}\n`);
+  return 0;
+}
+
 function idNumber(id: string): number {
   const m = /-(\d+)$/.exec(id);
   return m?.[1] ? Number.parseInt(m[1], 10) : Number.MAX_SAFE_INTEGER;
@@ -383,9 +491,10 @@ export async function run(argv: string[], io: CliIO): Promise<number> {
     if (cmd === 'card') {
       if (sub === 'add') return await cmdCardAdd(rest, io);
       if (sub === 'move') return await cmdCardMove(rest, io);
+      if (sub === 'update') return await cmdCardUpdate(rest, io);
       if (sub === 'list') return await cmdCardList(rest, io);
       if (sub === 'show') return await cmdCardShow(rest, io);
-      throw new UserError(`unknown card command "${sub ?? ''}" (add, move, list, show)`);
+      throw new UserError(`unknown card command "${sub ?? ''}" (add, move, update, list, show)`);
     }
     throw new UserError(`unknown command "${cmd}" (try repoboard --help)`);
   } catch (e) {

@@ -324,3 +324,14 @@ Answered 2026-09-07:
   owner's Job Seeker repos are never written to, from any repo on this machine) now has a feature
   that could violate it by accident — every test for P7 uses a fixture repo it created itself.
   Tasks P7.1, P7.2. Brief: `docs/P7-REPOS-BRIEF.md`.
+- **O8 — K9: the CLI gets `card update <id>`, not `--assign` on `card move`.** Decided
+  2026-09-07; the owner picked the first of the two shapes RCB-31 offered. Rationale it settles:
+  `update_card` (MCP) and `PATCH /api/cards/:id` (HTTP) already exist and already take
+  title/assignee/priority/labels/files/refs, so the CLI is the odd surface out — the complaint in
+  K9 — and `--assign` on `move` would have fixed only `assignee` while conflating two operations
+  (a move is a status change; setting a field is not). Consequence: `card update` **mirrors the
+  existing `CardPatch` semantics exactly and invents nothing** — a list flag replaces the list,
+  status is refused with a pointer to `card move`, an empty patch is an error. The one thing the
+  CLI must add is a way to say `null`, which a shell flag cannot carry; that is `--clear <field>`,
+  and it is the only new concept in the change. Brief: `docs/K9-UPDATE-BRIEF.md`. Card: RCB-31.
+

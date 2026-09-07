@@ -217,6 +217,21 @@ one commit carrying verification output.
 shell moves a card with `sed` and the board updates within 1 s; the treemap renders; the card's
 files glow with the agent's color.
 
+### P7 Other repos (post-v0.1; owner decisions O6 and O7, 2026-09-07)
+- **P7.1** `repoboard serve --root <dir>` — the flag `repoboard mcp` has had since P5.1. One repo
+  per process; the port stays the user's to pick with `--port`.
+- **P7.2** A directory with no `.repoboard/` opens in **map-only** mode instead of being refused:
+  treemap, churn heat and the import graph render; the Board tab says the project has no board
+  and offers `repoboard init` as a *command to run*, not an action the server takes. **Read-only
+  is the guarantee** — serving a foreign repo must never create, move or write anything inside it.
+- **P7.3** Columns editable in the app (O6): `PATCH /api/board` writes `board.yml` through
+  `serializeBoard`, and the UI edits the column set. **Next round, not P7.1/P7.2's dispatch.**
+
+**Exit criterion for P7:** `repoboard serve --root <a repo that has never seen repoboard>` renders
+that repo's map, writes nothing into it (verified by `git status` in the target being clean and
+`.repoboard/` still absent), and the Board tab explains itself rather than showing five empty
+columns.
+
 ---
 
 ## §6 Repo layout
@@ -269,3 +284,36 @@ Answered 2026-09-03:
   Decision: cards get an optional `refs:` list; the drawer, `card show --resolve` and MCP
   `get_card` render the referenced lines live from the file. Agents point, they do not paste.
   Brief: `docs/K7-REFS-BRIEF.md`.
+
+Answered 2026-09-07:
+- **O6 — `review` stays in the default; the column set becomes editable in the app.** The owner
+  first chose to delete `review` outright, then reversed it: "lets make it an option in the app
+  itself since different users could have different use cases." So `defaultBoardConfig()` and §2
+  are **unchanged** — `backlog, todo, doing, review, done` — and the fix for a column a user does
+  not want is that they can remove it themselves, visibly, instead of the project picking for
+  everyone. Measured basis: on this repo `review` took 14 cards and released 0 across the whole
+  project (no card ever transited `review → done`; the 15 in Done arrived from `doing`) until the
+  owner drained it on 2026-09-07 — HANDOFF §12.0l. That is an argument about *this* workflow, not
+  about every workflow, which is why it changes the UI and not the default. Foundation already in
+  place: `serializeBoard()` writes `board.yml` today (`cli.ts:143`), the store watches that file
+  and reloads on change (`store.ts:461`), and a card whose `status` names no column already
+  renders in a column marked `unconfigured: true` / "not in board.yml"
+  (`packages/web/src/store.ts:297`, `Column.tsx:41`) — so removing a column cannot lose cards.
+  Task P7.3.
+- **O7 — repoboard points at any repo, and the map works without a board.** The owner: "we also
+  need the ability to point this project at different projects to see what is in them and get the
+  full usability. pointing at our own repo is just a test to get up and running." Decision for
+  this round: `serve --root <dir>` plus **map-only mode** for a directory with no `.repoboard/`.
+  Measured basis for why this is small: `scanner.ts` reads no `.repoboard/` path at all (its only
+  core import is types), `loadConfig` already returns `defaultBoardConfig()` on ENOENT
+  (`store.ts:326-328`) and `load()` already tolerates a missing cards directory (`:143-147`) — the
+  server can already open a boardless repo; `requireRoot` (`cli.ts:95`) is what refuses. **Not in
+  this round, deliberately:** multi-repo in one server with a UI switcher. `startServer` takes a
+  single `store` and `http.ts` closes over `store.root` in four places (`:358`, `:385`, `:424`,
+  `:526`), so that is a store registry, repo-scoped API paths and per-repo WS channels — revisit
+  once `--root` has been used enough to say what the switcher should do. **Standing constraint
+  this decision creates:** pointing at a directory is a read-only act. Nothing may be written
+  into a target repo without the user explicitly asking, and CLAUDE.md non-negotiable 1 (the
+  owner's Job Seeker repos are never written to, from any repo on this machine) now has a feature
+  that could violate it by accident — every test for P7 uses a fixture repo it created itself.
+  Tasks P7.1, P7.2. Brief: `docs/P7-REPOS-BRIEF.md`.

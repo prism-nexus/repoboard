@@ -66,6 +66,52 @@ function splitFrontmatter(
   };
 }
 
+/** The one line the K1(b) fallback may rewrite: a top-level, non-empty `title:` value. */
+const TITLE_LINE = /^title:[ \t]+(.*)$/m;
+/**
+ * A value starting with one of these is not a plain scalar, so quoting it would change what the
+ * document means (`|`/`>` block, `&`/`*` anchor, `!` tag, `#` comment, `{`/`[` flow collection)
+ * — plus the two quote characters, which mean the value is already quoted.
+ */
+const UNSAFE_TITLE_STARTS: ReadonlySet<string> = new Set([
+  '|',
+  '>',
+  '&',
+  '*',
+  '!',
+  '#',
+  '{',
+  '[',
+  '"',
+  "'",
+]);
+
+/**
+ * K1(b): `title: P3.1 Board view: columns` is invalid YAML, and 7 of the first 24 hand-written
+ * cards were written that way (HANDOFF §7.1). Return `yamlText` with only that one line's value
+ * quoted, or `null` when there is nothing that can be safely quoted.
+ *
+ * This is a recovery attempt, not a parse strategy: `parseCard` calls it only after `YAML.parse`
+ * has thrown, so a document that parses keeps exactly its own meaning.
+ */
+function quoteTitleValue(yamlText: string): string | null {
+  const m = TITLE_LINE.exec(yamlText);
+  const raw = m?.[1];
+  if (m === null || raw === undefined) return null;
+  // A plain scalar drops trailing spaces and a stray CR; keep the same value YAML would have.
+  const value = raw.replace(/[ \t\r]+$/, '');
+  const first = value[0];
+  if (first === undefined || UNSAFE_TITLE_STARTS.has(first)) return null;
+  // Let the YAML writer do the escaping — a hand-rolled `"` + value + `"` gets `\` and `"` wrong.
+  const quoted = YAML.stringify(value, {
+    defaultStringType: 'QUOTE_DOUBLE',
+    lineWidth: 0,
+  }).replace(/\n$/, '');
+  // A quoted scalar that still spans lines would shift every line below it; refuse instead.
+  if (quoted.includes('\n')) return null;
+  return `${yamlText.slice(0, m.index)}title: ${quoted}${yamlText.slice(m.index + m[0].length)}`;
+}
+
 function isPlainObject(v: unknown): v is Record<string, unknown> {
   return typeof v === 'object' && v !== null && !Array.isArray(v);
 }
@@ -88,7 +134,16 @@ export function parseCard(text: string): CardParseResult {
     // YAML 1.2 core schema: timestamps stay strings, which is what we want.
     data = YAML.parse(split.yaml, { schema: 'core' });
   } catch (e) {
-    return { ok: false, error: `frontmatter is not valid YAML: ${(e as Error).message}` };
+    const original = `frontmatter is not valid YAML: ${(e as Error).message}`;
+    // K1(b): one retry, with only the `title:` value quoted. Anything else stays as written.
+    const retried = quoteTitleValue(split.yaml);
+    if (retried === null) return { ok: false, error: original };
+    try {
+      data = YAML.parse(retried, { schema: 'core' });
+    } catch {
+      // The user never wrote the rewrite, so they must not be shown its error.
+      return { ok: false, error: original };
+    }
   }
   if (data === null || data === undefined) {
     return { ok: false, error: 'frontmatter is empty' };

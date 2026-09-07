@@ -110,11 +110,17 @@ repo until after v1 (O2).
 
 ## Known issues
 (numbered `K1` upward; a commit that closes one says `Closes K<n>` and edits this list)
-- **K1** A card whose `title:` contains a colon (`P3.1 Board view: columns`) is invalid YAML unless
-  quoted, and an agent writing frontmatter by hand will do this. Found on 7 of the first 24 cards
-  written by the orchestrator (2026-09-02). Options: (a) document "quote your titles" in
-  `AGENTS.md`; (b) a lenient fallback in `parseCard` for the `title` line only; (c) the CLI/MCP
-  always quote on serialize (they do, via `yaml`). Doing (a) and (c); (b) is open.
+- ~~**K1** A card whose `title:` contains a colon (`P3.1 Board view: columns`) is invalid YAML
+  unless quoted, and an agent writing frontmatter by hand will do this. Found on 7 of the first 24
+  cards written by the orchestrator (2026-09-02).~~ Closed 2026-09-06 with all three options:
+  (a) `AGENTS.md` says quote it; (c) every surface quotes on serialize, so a recovered card
+  self-heals on its first write; and now (b) — after `YAML.parse` throws, `parseCard` retries
+  **once** with only the `title:` value quoted (by the YAML writer, not by concatenating quotes),
+  and returns the **original** error if that also fails, since the reader never wrote the rewrite.
+  It never runs on a document that parsed, so no valid file changes meaning; it declines values
+  starting `| > & * ! # { [ " '` and any rewrite that would span lines. What it cannot do is read
+  minds: a trailing `# comment` on an unquoted title line is folded into the title. Measured:
+  parse outcome differs on 0 of this repo's 30 cards; tests 197 → 210.
 - ~~**K2** `Event.type` narrow in core; server carried its own superset.~~ Closed: core widened to
   `'move' | 'update' | 'create'` with `from: string | null`; server type deleted.
 - ~~**K3** `lines` reported `0` for binary and >2 MB files.~~ Closed: `number | null` in core,

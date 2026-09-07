@@ -1,4 +1,7 @@
+import { existsSync, readdirSync, readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
+import * as YAML from 'yaml';
 import { parseCard, serializeCard } from '../src/card.js';
 import type { Card } from '../src/types.js';
 import { rng, sampleCard } from './helpers.js';
@@ -195,5 +198,145 @@ describe('serializeCard / round-trip', () => {
       if (rand() < 0.5) card.extra = { n: Math.floor(rand() * 10), s: randStr() };
       expect(mustParse(serializeCard(card))).toEqual(card);
     }
+  });
+});
+
+/**
+ * K1(b) (RCB-29): `title: P3.1 Board view: columns` is invalid YAML and 7 of the first 24
+ * hand-written cards were written that way. `parseCard` retries once with only that value
+ * quoted. The two dangers are opposite: a strict parser rejecting a fixable file, and a lenient
+ * one silently changing what a file that already parsed means. Both are asserted below.
+ */
+describe('parseCard: unquoted title recovery (K1(b))', () => {
+  const card = (titleLine: string, tail = '') =>
+    `---\nid: RCB-1\n${titleLine}\nstatus: todo\n${tail}created: 2026-01-01T00:00:00Z\nupdated: 2026-01-02T00:00:00Z\n---\nbody\n`;
+
+  it('recovers a title containing a colon', () => {
+    const c = mustParse(card('title: P3.1 Board view: columns'));
+    expect(c.title).toBe('P3.1 Board view: columns');
+  });
+
+  it('the recovered card equals the same card written with the title quoted', () => {
+    const recovered = mustParse(card('title: P3.1 Board view: columns'));
+    const quoted = mustParse(card('title: "P3.1 Board view: columns"'));
+    expect(recovered).toEqual(quoted);
+  });
+
+  it('round-trips through serializeCard, with the title quoted', () => {
+    const first = mustParse(card('title: P3.1 Board view: columns'));
+    const text = serializeCard(first);
+    expect(text).toContain('title: "P3.1 Board view: columns"');
+    expect(mustParse(text)).toEqual(first);
+    expect(serializeCard(mustParse(text))).toBe(text);
+  });
+
+  it('escapes rather than concatenating quotes: backslashes and double quotes survive', () => {
+    for (const title of [
+      'C:\\tmp: a path',
+      'He said: "no"',
+      'both: a "b" and a \\ and: another',
+      'trailing spaces: kept?   ',
+    ]) {
+      const c = mustParse(card(`title: ${title}`));
+      expect(c.title).toBe(title.replace(/[ \t]+$/, ''));
+      expect(mustParse(serializeCard(c))).toEqual(c);
+    }
+  });
+
+  it('recovers a colon title on a card that also has other keys', () => {
+    const c = mustParse(
+      card('title: RCB-9: refs: resolve', 'assignee: claude/core-agent\npriority: high\n'),
+    );
+    expect(c.title).toBe('RCB-9: refs: resolve');
+    expect(c.assignee).toBe('claude/core-agent');
+    expect(c.priority).toBe('high');
+  });
+
+  it('a colon in some OTHER value still fails, with the ORIGINAL error, not the retry\u2019s', () => {
+    // Frontmatter line 2 is the title, line 3 the status. The first parse throws on line 2; the
+    // retry (title quoted) throws on line 3. The user never wrote the retry, so must not see it.
+    const r = parseCard(
+      card('title: Board view: columns', 'ignored: no\n').replace(
+        'status: todo',
+        'status: doing: now',
+      ),
+    );
+    expect(r.ok).toBe(false);
+    if (r.ok) return;
+    expect(r.error).toMatch(/frontmatter is not valid YAML/);
+    expect(r.error).toContain('line 2');
+    expect(r.error).not.toContain('line 3');
+  });
+
+  it('bad indentation is not a title problem and still fails', () => {
+    const r = parseCard('---\nid: RCB-1\n  title: t\nstatus: todo\n---\n');
+    expect(r.ok).toBe(false);
+    if (r.ok) return;
+    expect(r.error).toMatch(/frontmatter is not valid YAML/);
+  });
+
+  it('does not quote a value whose first character would change meaning', () => {
+    // `&` starts an anchor; quoting it is a rewrite, not a recovery. Broken stays broken.
+    for (const titleLine of ['title: &a x: y', 'title: !!str x: y', 'title: {a: b: c}']) {
+      const r = parseCard(card(titleLine));
+      expect(r.ok).toBe(false);
+      if (!r.ok) expect(r.error).toMatch(/frontmatter is not valid YAML/);
+    }
+  });
+
+  // Three separate cases, because the fear is one bug — a fallback that runs on a document that
+  // already parsed — and each of these is a different way that bug corrupts a valid file.
+  it('a trailing comment on the title line stays a comment', () => {
+    expect(mustParse(card('title: hello   # a note')).title).toBe('hello');
+    expect(mustParse(card('title: "a: b"')).title).toBe('a: b');
+    expect(mustParse(card("title: 'a: b'")).title).toBe('a: b');
+  });
+
+  it('a multi-line plain scalar and a block scalar title keep folding', () => {
+    expect(mustParse(card('title: first\n  second')).title).toBe('first second');
+    expect(mustParse(card('title: |-\n  Board view: columns')).title).toBe('Board view: columns');
+  });
+
+  it('`title: null` stays a missing title; leniency would invent the string "null"', () => {
+    expect(parseCard(card('title: null'))).toEqual({
+      ok: false,
+      error: 'missing required key: title',
+    });
+  });
+});
+
+/**
+ * The recovery must be invisible to every card this repo already has: if none of them makes
+ * `YAML.parse` throw, none of them can reach the fallback, so none can change meaning. Read-only,
+ * and skipped when the directory is absent (a packed copy, a clean checkout of the package alone).
+ */
+const CARDS_DIR = fileURLToPath(new URL('../../../.repoboard/cards', import.meta.url));
+const FRONTMATTER = /^---[ \t]*\r?\n([\s\S]*?)^---[ \t]*(\r?\n|$)/m;
+
+describe.skipIf(!existsSync(CARDS_DIR))('this repo’s own cards are unaffected', () => {
+  const files = existsSync(CARDS_DIR)
+    ? readdirSync(CARDS_DIR)
+        .filter((f) => f.endsWith('.md'))
+        .sort()
+    : [];
+
+  it('every card file parses', () => {
+    expect(files.length).toBeGreaterThanOrEqual(20);
+    const failures = files.filter((f) => !parseCard(readFileSync(`${CARDS_DIR}/${f}`, 'utf8')).ok);
+    expect(failures).toEqual([]);
+  });
+
+  it('none of them reaches the fallback: their frontmatter is valid YAML as written', () => {
+    const needFallback: string[] = [];
+    for (const f of files) {
+      const m = FRONTMATTER.exec(readFileSync(`${CARDS_DIR}/${f}`, 'utf8'));
+      expect(m?.[1]).toBeDefined();
+      try {
+        YAML.parse(m?.[1] ?? '', { schema: 'core' });
+      } catch {
+        needFallback.push(f);
+      }
+    }
+    expect(needFallback).toEqual([]);
   });
 });

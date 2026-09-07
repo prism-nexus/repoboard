@@ -134,10 +134,13 @@ Rules:
 - `id`, `title`, `status`, `created`, `updated` are required; everything else is optional.
 - `status` must be a column `id` from `.repoboard/board.yml` (default board: `backlog`, `todo`,
   `doing`, `review`, `done`). `id` is `<prefix>-<n>`; the next `n` is max existing + 1.
-- **Quote a title that contains a colon.** `title: P3.1 Board view: columns` is invalid YAML
-  and the card turns red as "invalid" on the board; `title: "P3.1 Board view: columns"` is fine.
-  The CLI and MCP quote for you; this bites only when you write frontmatter by hand (it hit 7 of
-  the first 24 cards written on this repo). Colons in `id` or `status` do not occur.
+- **Quote a title that contains a colon.** `title: "P3.1 Board view: columns"`. Unquoted, that
+  line is not valid YAML; since 2026-09-06 the parser recovers it by quoting the `title:` value
+  and retrying once (K1(b)), and the next write through any surface stores it quoted — so the
+  card is no longer red, but do not rely on it. The recovery runs only after a parse has already
+  failed and it can only guess: a trailing `# comment` on an unquoted title line becomes part of
+  the title. A colon in any *other* value is still an error, and still points at the real line.
+  Colons in `id` or `status` do not occur.
 - Unknown frontmatter keys are kept on round-trip. The body is preserved byte-for-byte except
   when a surface appends under `## Log`.
 - Timestamps are ISO 8601 UTC with seconds, as above.

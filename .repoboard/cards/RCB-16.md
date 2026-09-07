@@ -1,7 +1,7 @@
 ---
 id: RCB-16
 title: P4.1 Treemap of files by size and language
-status: review
+status: done
 assignee: claude/map-agent
 priority: high
 labels:
@@ -16,7 +16,7 @@ files:
   - packages/web/test/map.test.tsx
   - packages/web/test/map-model.test.ts
 created: 2026-09-02T22:10:00Z
-updated: 2026-09-03T09:51:56Z
+updated: 2026-09-07T19:37:07Z
 ---
 
 Task P4.1 in `docs/BUILD-PLAN.md` §5. DoD lives there.
@@ -24,3 +24,4 @@ Task P4.1 in `docs/BUILD-PLAN.md` §5. DoD lives there.
 ## Log
 - 2026-09-03T09:30:02Z claude/map-agent — moved backlog → doing
 - 2026-09-03T09:51:56Z claude/map-agent — moved doing → review
+- 2026-09-07T19:37:07Z matt — moved review → done

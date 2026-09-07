@@ -1,8 +1,8 @@
-# Next agent prompt — rewritten 2026-09-07 (after K8, K1(b), K5, and the K9 ticket)
+# Next agent prompt — rewritten 2026-09-07 (after K8, K1(b), K5, the K9 ticket, and the Review drain)
 
 Check this date against the highest `docs/HANDOFF.md` §12.0x letter before trusting it; if a
 higher letter exists, that letter wins and this file is stale. Highest letter when this was
-written: **§12.0k**.
+written: **§12.0l**.
 
 You are the orchestrator for **repoboard** (working dir name `Remember-Connect-Build`). Read
 `CLAUDE.md`, then `docs/BUILD-PLAN.md` §1 and §11, then `docs/HANDOFF.md` §12 (highest letter),
@@ -14,10 +14,15 @@ P0–P6.2, K7, then K8 / K1(b) / K5 are committed and verified. Test count, bund
 numbers are in HANDOFF §1 (newest lines) — take them from there, not from memory. The board
 dogfoods itself: `pnpm build && pnpm dev`, open localhost:4242.
 
-- **31 cards.** Fourteen in Review for the owner (P4, P5, P6.0–P6.2, K7, RCB-28/29/30). One in
-  `todo`: **RCB-31 (K9)**. One in Backlog: **RCB-24 (P6.3)**, the owner's.
-- Review is **not** an approval gate — `review` carries only `active: true`, which is a map flag.
-  Nothing in the product enforces a workflow; a card is approved when a human moves it to `done`.
+- **31 cards, 29 `done`.** The owner drained Review on 2026-09-07: the fourteen cards that sat
+  there (P4, P5, P6.0–P6.2, K7, RCB-28/29/30) are `done`. **Review is empty.** One in `todo`:
+  **RCB-31 (K9)**. One in Backlog: **RCB-24 (P6.3)**, the owner's.
+- Review is **not** an approval gate — `review` carries only `active: true`, which is a map flag,
+  and `isActive` also requires `updated` within `activeWindowMinutes`. Nothing in the product
+  enforces a workflow; a card is approved when a human moves it to `done`. **Do not park cards
+  in Review expecting a sweep** — before the drain it had taken 14 cards and released 0, and
+  every Done card had reached `done` from `doing` directly. The owner has an open question as to
+  whether the column earns its place; do not change the column set to answer it (plan §2).
 - Known issues open: **K5** (publish `@repoboard/core` — one line, the owner's) and **K9**.
   K1–K4, K6, K7, K8 are closed.
 - `README.md` is the public face; `docs/AGENTS.md` is the agent page; plan §2–§4 are the

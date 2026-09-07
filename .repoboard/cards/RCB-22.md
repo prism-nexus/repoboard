@@ -1,7 +1,7 @@
 ---
 id: RCB-22
 title: P6.1 README with screenshots (GIF is stretch)
-status: review
+status: done
 assignee: claude/ship-agent
 priority: medium
 labels:
@@ -17,7 +17,7 @@ refs:
   - docs/BUILD-PLAN.md@Exit criterion
   - docs/P6-SHIP-BRIEF.md#P6.1 README
 created: 2026-09-02T22:10:00Z
-updated: 2026-09-03T21:20:00Z
+updated: 2026-09-07T19:37:08Z
 ---
 
 Task P6.1 (plan §5) and its brief section, referenced above; GIF only if `ffmpeg` is on PATH.
@@ -28,3 +28,4 @@ Task P6.1 (plan §5) and its brief section, referenced above; GIF only if `ffmpe
 - 2026-09-03T20:15:04Z claude/ship-agent — moved doing → review
 - 2026-09-03T20:15:04Z claude/ship-agent — verified: 145 tests, typecheck 0, lint 0; docs/board.png + docs/map.png looked at; version pin control failed on 0.1.1 and restored; no GIF (ffmpeg not on PATH)
 - 2026-09-03T21:20:00Z claude/refs-agent — replaced the quoted plan/brief block with refs: (K7)
+- 2026-09-07T19:37:08Z matt — moved review → done

@@ -1,7 +1,7 @@
 ---
 id: RCB-20
 title: "P5.1 MCP server: rcb mcp"
-status: review
+status: done
 assignee: claude/mcp-agent
 priority: high
 labels:
@@ -20,7 +20,7 @@ files:
   - packages/core/test/transitions.test.ts
   - pnpm-lock.yaml
 created: 2026-09-02T22:10:00Z
-updated: 2026-09-03T09:42:22Z
+updated: 2026-09-07T19:37:08Z
 ---
 
 Task P5.1 in `docs/BUILD-PLAN.md` §5. DoD lives there.
@@ -30,3 +30,4 @@ Task P5.1 in `docs/BUILD-PLAN.md` §5. DoD lives there.
 - 2026-09-03T09:42:22Z claude/mcp-agent — updated files
 - 2026-09-03T09:42:22Z claude/mcp-agent — verified: pnpm test 127/127 (6 new in mcp.test.ts), typecheck 0 errors, biome clean on server/core/docs; stdio handshake lists 7 tools; also closes K2 and K4
 - 2026-09-03T09:42:22Z claude/mcp-agent — moved doing → review
+- 2026-09-07T19:37:08Z matt — moved review → done

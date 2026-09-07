@@ -53,9 +53,9 @@ page an agent needs, including a paragraph to paste into a `CLAUDE.md`.
   and how many files and refs it names. Drag and drop writes the card file. A card's `refs:`
   (`docs/BUILD-PLAN.md@P6.2`, `README.md#Known issues`, `src/x.ts:L10-L20`) render in the
   drawer as the referenced lines, read from the file on every open — point, don't paste.
-- **Map** — a treemap of the repo (files by size, colored by language; this repo: 127 files,
+- **Map** — a treemap of the repo (files by size, colored by language; this repo: 140 files,
   layout under 1.2 ms on every run recorded in `docs/HANDOFF.md`), heat modes for churn over 30 and 90 days and for
-  recent edits, an import graph for JS/TS (117 edges here), and *who is where*: files named on
+  recent edits, an import graph for JS/TS (131 edges here), and *who is where*: files named on
   cards in an active column, updated within `activeWindowMinutes`, glow in the assignee's color.
 - **Ticker** — the events in `.repoboard/events.jsonl`, newest first, including moves made by
   hand-editing a file.
@@ -91,7 +91,7 @@ columns:
 
 ```sh
 pnpm install
-pnpm test        # vitest (191 tests) + a gzipped-bundle size check (134.6 KB JS, limit 600 KB)
+pnpm test        # vitest (217 tests) + a gzipped-bundle size check (135.2 KB JS, limit 600 KB)
 pnpm typecheck && pnpm lint
 pnpm dev         # server + web with hot reload
 pnpm build       # packages/server/dist/cli.js, self-contained with the built web app

@@ -13,9 +13,20 @@
   "files": [
     "dist"
   ],
+  "publishConfig": {
+    "main": "./dist/index.js",
+    "types": "./dist/index.d.ts",
+    "exports": {
+      ".": {
+        "types": "./dist/index.d.ts",
+        "default": "./dist/index.js"
+      }
+    }
+  },
   "scripts": {
     "typecheck": "tsc --noEmit && tsc -p tsconfig.build.json --noEmit",
     "build": "tsc -p tsconfig.build.json",
+    "prepack": "tsc -p tsconfig.build.json",
     "dev": "echo '@repoboard/core: nothing to run (library)'"
   },
   "dependencies": {

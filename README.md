@@ -104,9 +104,10 @@ the running record: `docs/HANDOFF.md`.
 ## Status
 
 Pre-1.0. `repoboard@0.1.0` packs to a 267 KB tarball of 8 files and runs from `npx` in a foreign
-repo (2026-09-03), but it is not published yet. `@repoboard/core` is internal for v0.1 (plan §11
-O4): it ships TypeScript source only and does not publish; depend on `repoboard`. No GitHub
-repo until after v1 (O2).
+repo (2026-09-03), but it is not published yet. `@repoboard/core` stays `private` for v0.1 (plan
+§11 O4) — depend on `repoboard`. It now packs as built JS with `.d.ts` (23,896 bytes, 38 entries,
+no `src/`), so removing one `"private": true` line is all that stands between it and a publish;
+that call is the owner's. No GitHub repo until after v1 (O2).
 
 ## Known issues
 (numbered `K1` upward; a commit that closes one says `Closes K<n>` and edits this list)
@@ -127,10 +128,17 @@ repo until after v1 (O2).
   scanner emits null (1 file in this repo), map shows "—".
 - ~~**K4** `createCard` throws on an unknown status.~~ Closed: returns `{ok:false, error}` like
   `moveCard`; CLI and HTTP use the result.
-- **K5** `@repoboard/core` exports TS source only. The server bundles core with tsup, so this only
-  bites a third party importing `@repoboard/core` on plain Node. Owner decided 2026-09-03: leave it for
-  v0.1 (core stays private, only `repoboard` publishes); **must be resolved before the GitHub
-  repo goes public** (plan §11 O4). Gate on P6.3.
+- **K5** `@repoboard/core` is not published. The packaging half is done (2026-09-06): a
+  `publishConfig` block carries the published shape — `main`, `types` and an `exports` map into
+  `./dist` — while the top-level keys stay on `./src/index.ts`, so the workspace still resolves
+  core from source and `pnpm test` on a clean clone needs no build. A `prepack` script builds
+  `dist/` so a pack cannot ship a manifest naming files it does not contain. Verified by content,
+  not by exit code: `pnpm pack` produces 23,896 bytes / 38 entries with 0 `src/` entries, the
+  packed manifest has `main`/`types`/`exports` rewritten to `./dist` and lifecycle scripts
+  stripped, and the tarball, extracted into a throwaway consumer outside the repo, imports by
+  bare specifier on plain Node with `parseCard`/`serializeCard`/`moveCard`/`createCard` all
+  present. **What remains is the owner's**: delete `"private": true` and publish. That is the one
+  step, and it is gated on P6.3 with O2 (plan §11 O4).
 - ~~**K6** `repoboard card list --json` is 14.1 KB against 1.9 KB for the table (2026-09-03, 24 cards)
   because it includes every body.~~ Closed: `--json` is compact by default (id, title, status,
   assignee, priority, labels, files, updated; one row per line), `--full` adds bodies; MCP
@@ -160,3 +168,11 @@ repo until after v1 (O2).
   headline behaviour. Measured on the built binary, events on the ticker per mutation:
   `card add` 2 → 1, `card move` 2 → 1, `sed` after a CLI move 1 → 1, `sed` bumping `updated`
   1 → 1; tests 191 → 197.
+- **K9** There is no way to set a card's `assignee` after `card add`. The CLI has
+  `add, move, list, show` only (`packages/server/src/cli.ts`); MCP has `update_card`, and HTTP
+  has `PATCH`, so the gap is the CLI alone. HANDOFF §7.9 asked for exactly this in 2026-09-03
+  ("briefs should say to set both, or the CLI's `move` should offer `--assign`") and it never got
+  a ticket; all three agents on 2026-09-06 were briefed to run `card update --assignee`, all
+  three hit `unknown card command "update"`, and all three set the field by hand-editing
+  frontmatter. Options: `card update <id> [--assignee|--priority|--label|--file|--ref]`, or
+  `--assign` on `card move`. Not started.

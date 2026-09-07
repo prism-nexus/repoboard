@@ -10,8 +10,9 @@ tasks in §5, owner-only decisions in §11. `docs/HANDOFF.md` is the running rec
 subsections are append-only and the highest letter is current.
 
 **Picking this up cold as orchestrator:** `docs/NEXT-AGENT-PROMPT.md` (check its date against the
-highest HANDOFF §12.0x letter), then plan §11, then `git log`. Briefs live in `docs/P*-BRIEF.md`;
-the most recent is the pattern. Lessons that cost time are HANDOFF §7, numbered.
+highest HANDOFF §12.0x letter), then plan §11, then `git log`. Briefs live in `docs/*-BRIEF.md`
+— phase briefs `P*`, known-issue briefs like `K7-REFS-BRIEF.md` and `K-CLEANUP-BRIEF.md`; the
+most recent is the pattern. Lessons that cost time are HANDOFF §7, numbered.
 - Unfinished work: `README.md` §"Known issues", a numbered list `K1` upward. A commit that closes
   one says `Closes K<n>` and edits that list in the same commit.
 

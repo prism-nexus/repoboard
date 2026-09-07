@@ -10,12 +10,13 @@ same core code, so whichever you use, the others see it within a second. There i
 no registration step: a card is on the board when its file exists, and it is in a column when its
 `status:` says so.
 
-Use the surfaces in the order below. Measured 2026-09-03 (bytes on the wire, ≈4 bytes per token):
-the CLI costs ~40 B in and 33 B out per move with no standing cost beyond reading this page once
-(5.2 KB); MCP costs 7.8 KB of tool schema per turn where the harness loads it, ~80 B per call and
-~200 B per result; a direct `sed` is ~60 B but a correct move also bumps `updated` and appends a
-log line. The CLI is cheapest per operation; MCP pays off when you have no shell or your harness
-loads schemas on demand; the file edit always works.
+Use the surfaces in the order below. Per-operation costs measured 2026-09-03, standing costs
+re-measured 2026-09-07 (bytes on the wire, ≈4 bytes per token): the CLI costs ~40 B in and 33 B
+out per move with no standing cost beyond reading this page once (10.1 KB); MCP costs 8.6 KB of
+tool schema per turn where the harness loads it, ~80 B per call and ~200 B per result; a direct
+`sed` is ~60 B but a correct move also bumps `updated` and appends a log line. The CLI is
+cheapest per operation; MCP pays off when you have no shell or your harness loads schemas on
+demand; the file edit always works.
 
 ## 2. CLI (first choice)
 
@@ -25,17 +26,18 @@ published). It finds `.repoboard/` by walking up from the current directory.
 | Command | Example |
 |---|---|
 | `repoboard init` | `repoboard init` — creates `.repoboard/` with the default board and card `RB-1 Welcome` |
-| `repoboard card add "<title>" [--status s] [--assignee a] [--priority p] [--label l]... [--file f]... [--body md] [--as actor]` | `repoboard card add "Treemap view: files by size" --status todo --label web --as claude/web-agent` |
+| `repoboard card add "<title>" [--status s] [--assignee a] [--priority p] [--label l]... [--file f]... [--ref r]... [--body md] [--as actor]` | `repoboard card add "Treemap view: files by size" --status todo --label web --ref docs/BUILD-PLAN.md@P4.1 --as claude/web-agent` |
 | `repoboard card move <id> <status> [--as actor]` | `repoboard card move RB-12 doing --as claude/web-agent` |
 | `repoboard card list [--status s] [--json [--full]]` | `repoboard card list --status doing` |
-| `repoboard card show <id>` | `repoboard card show RB-12` — prints the card file |
+| `repoboard card show <id> [--resolve]` | `repoboard card show RB-12` — prints the card file; `--resolve` appends each `refs:` target's live lines (section 4) |
 | `repoboard serve [--port 4242] [--open] [--no-fun]` | `repoboard serve --open` — the dashboard on 127.0.0.1 |
 | `repoboard mcp [--root <dir>]` | `repoboard mcp` — the MCP server on stdio (section 3) |
 
 `card list` prints a table by default. `--json` prints one compact row per line, without the body:
 `{id, title, status, assignee, priority, labels, files, updated}`, absent scalars as `null`;
-`--json --full` adds `body` and the rest of the frontmatter. On this repo's 27 cards that is
-2.1 KB (table), 6.4 KB (`--json`), 16.8 KB (`--json --full`).
+`--json --full` adds `body` and the rest of the frontmatter. On this repo's 31 cards, measured
+2026-09-07: 2,529 B (table), 7,639 B (`--json`), 20,758 B (`--json --full`). Ask for the table
+unless you need to parse it, and for `--full` only when you actually need bodies.
 
 Exit codes: 0 ok, 1 user error (one line on stderr), 2 crash. `--as` defaults to `$REPOBOARD_ACTOR`,
 then `$USER`, then `cli`. A move that exceeds a column's `wip:` prints a warning and still moves.
@@ -75,7 +77,9 @@ launched from somewhere else. Tools: `list_cards`, `get_card`, `create_card`, `m
 `update_card`, `append_log`, `board_summary`. Call `list_cards` or `board_summary` first: they
 are cheap and return the column ids. `list_cards` takes optional `status`, `assignee`, `label`
 filters (exact match, AND) and `full: true` to include bodies; without it, rows are the same
-compact shape as the CLI's `--json` (6.4 KB vs 16.2 KB for `full` on this repo's 27 cards). A
+compact shape as the CLI's `--json` — byte-for-byte the same formatter: on this repo's 31 cards
+the `list_cards` content is 7,638 B against the CLI's 7,639 B, and 20,757 B with `full: true`
+(measured 2026-09-07). A
 tool-level mistake (unknown card, unknown column, empty patch) comes back as an error result
 naming the field; a WIP breach comes back as a warning with the moved card. The tool actor
 defaults to `$REPOBOARD_ACTOR`, then `mcp`.
@@ -107,6 +111,11 @@ repo-relative. Set it with `card add --ref <spec>` (repeatable), `refs` on the M
 The card file is the source of truth, so `sed`, an editor, or a heredoc all work; the watcher
 picks the change up and synthesizes an event with `actor: file`. Do three things the CLI would
 have done for you: set `status:`, bump `updated:`, and append a `## Log` line (section 6).
+
+You get exactly one ticker entry either way (K8): the watcher synthesizes an event only for a
+change no surface claimed in `events.jsonl`, so a CLI or MCP move is reported once under its own
+actor, and your hand edit is reported once as `file`. You do not need to write to
+`events.jsonl` yourself, and you should not.
 
 ```markdown
 ---

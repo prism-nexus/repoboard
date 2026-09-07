@@ -32,13 +32,14 @@ path; the agents bring the intelligence, and the board only shows it.
 ## For agents
 
 Three surfaces write the same files through the same core code. Use them in this order — the
-ranking is by tokens, measured 2026-09-03 on the built binary (bytes on the wire, ≈4 bytes per
-token; plan §11 O3):
+ranking is by tokens; per-operation costs measured 2026-09-03 on the built binary, standing costs
+and list sizes re-measured 2026-09-07 on 31 cards (bytes on the wire, ≈4 bytes per token;
+plan §11 O3):
 
 | Surface | Standing cost | Per move | Per list |
 |---|---|---|---|
-| **CLI** — `repoboard card move RB-12 doing --as claude/dev` | `docs/AGENTS.md` read once: 5.2 KB | ~40 B in, 33 B out | table 2.1 KB; `--json` 6.4 KB; `--json --full` 16.8 KB (27 cards) |
-| **MCP** — `claude mcp add repoboard -- npx repoboard mcp` | tool schema 7.8 KB per turn where the harness loads it | ~80 B call, ~200 B result | same as the table |
+| **CLI** — `repoboard card move RB-12 doing --as claude/dev` | `docs/AGENTS.md` read once: 10.1 KB | ~40 B in, 33 B out | table 2,529 B; `--json` 7,639 B; `--json --full` 20,758 B |
+| **MCP** — `claude mcp add repoboard -- npx repoboard mcp` | tool schema 8.6 KB per turn where the harness loads it | ~80 B call, ~200 B result | 7,638 B — the same formatter, to the byte |
 | **File edit** — `sed -i 's/^status: todo$/status: doing/' .repoboard/cards/RB-12.md` | same AGENTS.md | ~60 B, but a correct move also bumps `updated` and appends a `## Log` line | n/a |
 
 The CLI is the cheapest per operation and has no standing cost. MCP pays off when the agent has
@@ -53,12 +54,13 @@ page an agent needs, including a paragraph to paste into a `CLAUDE.md`.
   and how many files and refs it names. Drag and drop writes the card file. A card's `refs:`
   (`docs/BUILD-PLAN.md@P6.2`, `README.md#Known issues`, `src/x.ts:L10-L20`) render in the
   drawer as the referenced lines, read from the file on every open — point, don't paste.
-- **Map** — a treemap of the repo (files by size, colored by language; this repo: 140 files,
+- **Map** — a treemap of the repo (files by size, colored by language; this repo: 141 files,
   layout under 1.2 ms on every run recorded in `docs/HANDOFF.md`), heat modes for churn over 30 and 90 days and for
   recent edits, an import graph for JS/TS (131 edges here), and *who is where*: files named on
   cards in an active column, updated within `activeWindowMinutes`, glow in the assignee's color.
 - **Ticker** — the events in `.repoboard/events.jsonl`, newest first, including moves made by
-  hand-editing a file.
+  hand-editing a file. One entry per mutation, whichever surface made it: a CLI or MCP move is
+  reported under its own actor, a hand edit as `file`, and neither is reported twice (K8).
 
 ## Config
 

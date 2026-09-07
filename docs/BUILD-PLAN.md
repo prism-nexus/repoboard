@@ -100,7 +100,13 @@ byte-for-byte except when a surface explicitly appends to `## Log`.
 ### `.repoboard/events.jsonl` (optional, append-only)
 One JSON object per line: `{ts, actor, type, cardId, from, to}`. Written by CLI/HTTP/MCP moves.
 Direct file edits produce no event; the watcher synthesizes one from the diff (`actor: "file"`).
-The ticker reads this. Safe to delete; safe to gitignore.
+**Exactly one entry per mutation** (K8, 2026-09-06): a surface that writes the file also appends
+its event, so the watcher synthesizes only for a change nobody claimed — a claim being an event
+whose `ts` equals the card's `updated`, counted only when `updated` actually moved. Without that
+freshness test a later hand edit of `status:` alone matches a spent claim and goes unreported,
+which would break §0.3. A reader of this file must also catch up before appending: the byte
+offset cannot be maintained by arithmetic when another process appends too. The ticker reads
+this. Safe to delete; safe to gitignore.
 
 ---
 
@@ -246,6 +252,12 @@ Answered 2026-09-03:
   roughly 2,000 tokens of schema per turn where it is loaded and pays off only when the agent
   has no shell or its harness loads tool schemas on demand. Consequences: (a) `AGENTS.md` leads
   with the CLI; (b) CLI output stays terse — one line per mutation, table for list; (c) K6.
+
+  Re-measured 2026-09-07 (the table above is left as the record of what the decision was made
+  on): `AGENTS.md` 10.1 KB, MCP tool schema 8.6 KB for 7 tools, and on 31 cards the CLI table is
+  2,529 B against `--json` 7,639 B. The MCP `list_cards` content is 7,638 B — within one byte of
+  the CLI, which is K6's shared-formatter claim still holding. Both standing costs grew with the
+  docs and the tool surface; the ranking and every consequence above are unchanged.
 - **O4 — K5 (core ships TS source only): leave for v0.1, resolve before GitHub goes public.**
   Decided 2026-09-03. Core stays `private`; only `repoboard` publishes. Before the repo is made
   public, either build core to JS and publish `@repoboard/core`, or document it as internal.

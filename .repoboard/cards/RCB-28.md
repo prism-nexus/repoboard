@@ -12,7 +12,8 @@ files:
   - packages/server/test/store.test.ts
 refs:
   - README.md#Known issues
-  - packages/server/src/store.ts@origin === 'watch'
+  - packages/server/src/store.ts@private isClaimed
+  - packages/server/src/store.ts@private async appendEvent
 created: 2026-09-07T06:13:06Z
 updated: 2026-09-07T06:26:23Z
 ---

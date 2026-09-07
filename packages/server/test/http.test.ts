@@ -5,7 +5,14 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { WebSocket } from 'ws';
 import { type RunningServer, startServer } from '../src/http.js';
 import { type CardStore, openStore } from '../src/store.js';
-import { cardText, makeTempDir, makeTempRepoboard, NOW, type TempRepo } from './helpers.js';
+import {
+  cardText,
+  makeTempDir,
+  makeTempRepoboard,
+  makeTempRepoNoBoard,
+  NOW,
+  type TempRepo,
+} from './helpers.js';
 
 const cleanups: Array<() => Promise<void>> = [];
 afterEach(async () => {
@@ -437,5 +444,58 @@ describe('GET /api/cards/:id/refs (K7)', () => {
       body: JSON.stringify({ refs: 'docs/plan.md' }),
     });
     expect(bad.status).toBe(400);
+  });
+});
+
+// ---- P7.2: hasBoard on the wire (plan §3) ----------------------------------------------------
+
+describe('hasBoard (P7.2)', () => {
+  /** A rig whose root has whatever `.repoboard/` the caller made — or none at all. */
+  async function boardlessRig(init: (root: string) => Promise<unknown> = async () => {}) {
+    const repo = await makeTempRepoNoBoard({ 'src/a.ts': 'export const a = 1;\n' });
+    cleanups.push(repo.cleanup);
+    await init(repo.root);
+    const store = await openStore(repo.root, { watch: true, now: () => NOW });
+    cleanups.push(() => store.close());
+    const server = await startServer({ store, port: 0, scan: false });
+    cleanups.push(() => server.close());
+    return { repo, store, url: server.url.replace(/\/$/, '') };
+  }
+
+  it('is false on GET /api/board and in the ws snapshot when there is no .repoboard/', async () => {
+    const r = await boardlessRig();
+    expect(r.store.hasBoard).toBe(false);
+    const body = (await json(await fetch(`${r.url}/api/board`))) as {
+      hasBoard: boolean;
+      cards: Card[];
+    };
+    expect(body.hasBoard).toBe(false);
+    expect(body.cards).toEqual([]);
+
+    const client = await connect(r.url);
+    cleanups.push(async () => client.close());
+    const snap = await nextMessage<{ type: string; board: { hasBoard: boolean } }>(
+      client,
+      (m) => m.type === 'snapshot',
+    );
+    expect(snap.board.hasBoard).toBe(false);
+    expect(await r.repo.hasRepoboard()).toBe(false);
+  });
+
+  it('is true for an empty but initialised .repoboard/, which still has zero cards', async () => {
+    const r = await boardlessRig((root) => mkdir(join(root, '.repoboard'), { recursive: true }));
+    expect(r.store.hasBoard).toBe(true);
+    const body = (await json(await fetch(`${r.url}/api/board`))) as {
+      hasBoard: boolean;
+      cards: Card[];
+    };
+    expect(body.hasBoard).toBe(true);
+    expect(body.cards).toEqual([]);
+  });
+
+  it('is true for a normal board', async () => {
+    const r = await rig({ 'RB-1.md': cardText('RB-1', 'todo') });
+    const body = (await json(await fetch(`${r.url}/api/board`))) as { hasBoard: boolean };
+    expect(body.hasBoard).toBe(true);
   });
 });

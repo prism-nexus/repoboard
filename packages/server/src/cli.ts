@@ -56,8 +56,10 @@ Usage:
                                         assignee, priority, labels, files, updated); add --full for bodies
   repoboard card show <id> [--resolve]        print the card file; --resolve appends the lines each
                                         refs: entry points at, read live from the file
-  repoboard serve [--port 4242] [--open] [--no-fun]
-                                        start the dashboard (binds 127.0.0.1)
+  repoboard serve [--root <dir>] [--port 4242] [--open] [--no-fun]
+                                        start the dashboard (binds 127.0.0.1); --root serves that
+                                        directory as given — a directory with no .repoboard/ opens
+                                        map-only, and nothing is ever written into it
   repoboard mcp [--root <dir>]                MCP server over stdio (for Claude Code etc.)
   repoboard --help | --version
 
@@ -97,6 +99,34 @@ async function requireRoot(io: CliIO): Promise<string> {
     throw new UserError(
       `no .repoboard directory found in ${io.cwd} or above (run \`repoboard init\`)`,
     );
+  return root;
+}
+
+/**
+ * P7.1/P7.2: where `serve` opens.
+ *
+ * `--root` is taken **as given** and never searched upward — board or no board. That is what
+ * makes map-only mode an explicit act: a bare `repoboard serve` in some random directory keeps
+ * today's meaning (climb to the nearest `.repoboard/`, refuse if there is none) and cannot
+ * silently turn into "serve whatever is here". The only difference is that its error now names
+ * `--root` as the way to open a project that has no board.
+ */
+async function serveRoot(rootFlag: string | undefined, io: CliIO): Promise<string> {
+  if (rootFlag === undefined) {
+    const found = await findRoot(io.cwd);
+    if (!found)
+      throw new UserError(
+        `no .repoboard directory found in ${io.cwd} or above (run \`repoboard init\`, or ` +
+          '`repoboard serve --root <dir>` to open a project that has no board)',
+      );
+    return found;
+  }
+  const root = resolve(io.cwd, rootFlag);
+  const dir = await stat(root).then(
+    (s) => s.isDirectory(),
+    () => false,
+  );
+  if (!dir) throw new UserError(`--root ${root} is not a directory`);
   return root;
 }
 
@@ -268,6 +298,7 @@ function openInBrowser(url: string): void {
 
 async function cmdServe(args: string[], io: CliIO): Promise<number> {
   const { values } = parse(args, {
+    root: { type: 'string' },
     port: { type: 'string', default: '4242' },
     open: { type: 'boolean', default: false },
     'no-fun': { type: 'boolean', default: false },
@@ -276,7 +307,7 @@ async function cmdServe(args: string[], io: CliIO): Promise<number> {
   if (!Number.isInteger(port) || port < 0 || port > 65535) {
     throw new UserError(`--port must be 0–65535 (got "${values.port}")`);
   }
-  const root = await requireRoot(io);
+  const root = await serveRoot(values.root, io);
   const err = io.stderr ?? io.stdout;
   const store = await openStore(root, { watch: true, now: io.now });
   store.on('warning', (m) => err.write(`warning: ${m}\n`));
@@ -290,6 +321,9 @@ async function cmdServe(args: string[], io: CliIO): Promise<number> {
     throw e;
   }
   io.stdout.write(`repoboard: serving ${root}\n  ${server.url}\n`);
+  if (!store.hasBoard) {
+    io.stdout.write('  (no .repoboard/ here: map-only, and nothing will be written)\n');
+  }
   if (!server.webDir) io.stdout.write('  (web not built: API only, see the page)\n');
   if (values.open) (io.openUrl ?? openInBrowser)(server.url);
   io.onServe?.(server);

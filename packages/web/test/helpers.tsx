@@ -29,8 +29,15 @@ export function testStore(
   return createStore(createMockTransport({ tick: null }), { storage, ...opts });
 }
 
-export function snapshot(store: Store, cards: Card[], config: BoardConfig = defaultBoardConfig()) {
-  store.dispatch({ type: 'snapshot', board: { config, cards }, repo: null });
+export function snapshot(
+  store: Store,
+  cards: Card[],
+  config: BoardConfig = defaultBoardConfig(),
+  /** P7.2. Omit to send a payload with no `hasBoard` at all (a pre-P7.2 server). */
+  hasBoard?: boolean,
+) {
+  const board = hasBoard === undefined ? { config, cards } : { config, cards, hasBoard };
+  store.dispatch({ type: 'snapshot', board, repo: null });
 }
 
 export function renderApp(store: Store) {

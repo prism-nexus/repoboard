@@ -16,6 +16,12 @@ export interface Toast {
 
 export interface State {
   config: BoardConfig | null;
+  /**
+   * P7.2: false when the served repo has no `.repoboard/` — map-only. `config` is then the
+   * server's default board standing in for one that does not exist, so this flag is the only
+   * thing that tells the two apart. True until a snapshot says otherwise.
+   */
+  hasBoard: boolean;
   cards: Card[];
   repo: RepoSnapshot | null;
   events: Event[];
@@ -82,6 +88,7 @@ export function createStore(factory: TransportFactory, opts: StoreOptions = {}):
 
   let state: State = {
     config: null,
+    hasBoard: true,
     cards: [],
     repo: null,
     events: [],
@@ -159,12 +166,18 @@ export function createStore(factory: TransportFactory, opts: StoreOptions = {}):
           // The fun flag comes from config unless the user has chosen in this browser.
           const funFromConfig = (config as { fun?: unknown }).fun !== false;
           const chosen = storage?.getItem(STORAGE_FUN);
+          // P7.2: absent means "there is a board" — see wire.ts.
+          const hasBoard = msg.board.hasBoard !== false;
           set({
             config,
+            hasBoard,
             cards: msg.board.cards,
             repo: msg.repo,
             everConnected: true,
             fun: chosen === null || chosen === undefined ? funFromConfig : chosen === '1',
+            // Map is the default tab in map-only mode, but only on the FIRST snapshot: a
+            // reconnect must not yank the user off a tab they chose themselves.
+            view: !hasBoard && !state.everConnected ? 'map' : state.view,
           });
           break;
         }

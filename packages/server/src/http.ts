@@ -362,10 +362,13 @@ export async function startServer(opts: ServerOptions): Promise<RunningServer> {
   let repoFingerprint = '';
   const wss = new WebSocketServer({ noServer: true });
 
+  // §3: one payload for `GET /api/board` and the `board` half of the WS snapshot, so `hasBoard`
+  // cannot be true on one and absent on the other.
   const boardPayload = () => ({
     config: { ...store.config, fun },
     cards: store.list(),
     invalid: store.invalid,
+    hasBoard: store.hasBoard,
   });
 
   function broadcast(msg: unknown): void {

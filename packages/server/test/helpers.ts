@@ -1,8 +1,8 @@
 /** Test helpers. Everything lives under os.tmpdir(); the repo's own .repoboard is never touched. */
 import type { EventEmitter } from 'node:events';
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { defaultBoardConfig, serializeBoard } from '@repoboard/core';
 
 export const NOW = new Date('2026-09-02T22:41:10Z');
@@ -43,6 +43,33 @@ export async function makeTempRepoboard(cards: Record<string, string> = {}): Pro
 
 export async function makeTempDir(prefix = 'repoboard-test-'): Promise<string> {
   return mkdtemp(join(tmpdir(), prefix));
+}
+
+/**
+ * P7.2 map-only fixture: a temp root holding `files` (paths relative to the root) and **no**
+ * `.repoboard/` at all. Like every fixture here it lives under `os.tmpdir()`; nothing outside the
+ * directory this function created is ever touched.
+ */
+export async function makeTempRepoNoBoard(
+  files: Record<string, string> = {},
+): Promise<TempRepo & { hasRepoboard(): Promise<boolean> }> {
+  const root = await mkdtemp(join(tmpdir(), 'repoboard-noboard-'));
+  for (const [rel, text] of Object.entries(files)) {
+    const path = join(root, rel);
+    await mkdir(dirname(path), { recursive: true });
+    await writeFile(path, text);
+  }
+  const repoboardDir = join(root, '.repoboard');
+  return {
+    root,
+    cardsDir: join(repoboardDir, 'cards'),
+    hasRepoboard: () =>
+      stat(repoboardDir).then(
+        () => true,
+        () => false,
+      ),
+    cleanup: () => rm(root, { recursive: true, force: true }),
+  };
 }
 
 /** Resolve with the first emission of `event` whose payload passes `pred`, or reject on timeout. */

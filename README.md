@@ -170,6 +170,19 @@ that call is the owner's. No GitHub repo until after v1 (O2).
   headline behaviour. Measured on the built binary, events on the ticker per mutation:
   `card add` 2 → 1, `card move` 2 → 1, `sed` after a CLI move 1 → 1, `sed` bumping `updated`
   1 → 1; tests 191 → 197.
+- **K10** Map-only mode (P7.2) is read-only in practice but not by construction. Serving a repo
+  with no `.repoboard/` writes nothing — verified on a throwaway clone and again by the
+  orchestrator on its own fixture 2026-09-07: after a full start/scan/stop, `git status
+  --porcelain` empty and `.repoboard/` absent. But a **mutating request still works**:
+  `POST /api/cards` against a boardless root returns `201` and materialises
+  `.repoboard/cards/RB-1.md` plus `events.jsonl` inside a repo that never opted in, because
+  `writeCard`/`appendEvent` both `mkdir(..., {recursive:true})` unconditionally. The web UI never
+  sends that request, and the server binds `127.0.0.1`, so no user action reaches it today — but
+  plan §11 O7 states the guarantee about *serving*, and this is a write path into a foreign repo
+  that nothing forbids. Fix: refuse every mutation when `hasBoard` is false, in the one funnel all
+  four of `create`/`move`/`update`/`appendLog` pass through, so a fifth mutating method cannot
+  forget it. `repoboard init` is unaffected — `cmdInit` writes files directly, not through the
+  store. Ticketed as RCB-35. Not started.
 - **K9** There is no way to set a card's `assignee` after `card add`. The CLI has
   `add, move, list, show` only (`packages/server/src/cli.ts`); MCP has `update_card`, and HTTP
   has `PATCH`, so the gap is the CLI alone. HANDOFF §7.9 asked for exactly this in 2026-09-03

@@ -113,7 +113,11 @@ this. Safe to delete; safe to gitignore.
 ## §3 Wire contract (server ↔ web)
 
 HTTP, JSON, localhost only:
-- `GET /api/board` → `{ config, cards: Card[] }`
+- `GET /api/board` → `{ config, cards: Card[], hasBoard: boolean }` — `hasBoard` (additive, P7.2)
+  is false when the served root has no `.repoboard/` directory: the map works, `config` is
+  `defaultBoardConfig()` standing in for a board that does not exist, and `cards` is empty. An
+  empty but initialized `.repoboard/` is `hasBoard: true` with zero cards; the two states are
+  different. Read once at start — a `.repoboard/` created while the server runs needs a restart.
 - `POST /api/cards` `{title, status?, ...}` → `Card`
 - `PATCH /api/cards/:id` `{status?, assignee?, title?, ...}` → `Card`
 - `GET /api/repo` → `RepoSnapshot` (§4)
@@ -123,7 +127,8 @@ HTTP, JSON, localhost only:
   resolve has `text: null` and an `error`
 
 WebSocket `/ws`, server → client:
-- `{type:"snapshot", board, repo}` on connect
+- `{type:"snapshot", board, repo}` on connect — `board` is the `GET /api/board` payload verbatim,
+  `hasBoard` included (one function builds both, so they cannot disagree)
 - `{type:"card", card}` · `{type:"card:removed", id}`
 - `{type:"repo", repo}` (debounced, ≤ 1 per 2 s)
 - `{type:"event", event}`

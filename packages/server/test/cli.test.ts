@@ -1,8 +1,12 @@
+import { execFile } from 'node:child_process';
 import { mkdir, readdir, readFile, rm, writeFile } from 'node:fs/promises';
-import { join } from 'node:path';
+import { basename, dirname, join } from 'node:path';
+import { promisify } from 'node:util';
 import { afterEach, describe, expect, it } from 'vitest';
-import { formatTable, run } from '../src/cli.js';
-import { cardText, makeTempDir, makeTempRepoboard, NOW } from './helpers.js';
+import { findRoot, formatTable, run } from '../src/cli.js';
+import { cardText, makeTempDir, makeTempRepoboard, makeTempRepoNoBoard, NOW } from './helpers.js';
+
+const execFileAsync = promisify(execFile);
 
 const dirs: string[] = [];
 afterEach(async () => {
@@ -286,6 +290,189 @@ describe('repoboard serve', () => {
     const res = await repoboard(root, 'serve', '--port', 'abc');
     expect(res.code).toBe(1);
     expect(res.err).toMatch(/--port/);
+  });
+});
+
+// ---- P7.1 / P7.2: serve --root, and map-only for a repo with no board -------------------------
+//
+// Every fixture below is a directory this file created under os.tmpdir() and removes again. No
+// test here points at a path outside its own fixture, this repo included (CLAUDE.md §1).
+
+interface Serving {
+  url: string;
+  out: Sink;
+  /** Abort the server and return `run`'s exit code. */
+  stop(): Promise<number>;
+}
+
+/** Start `repoboard serve --port 0 <argv>` from `cwd` and wait until it is listening. */
+async function serve(cwd: string, ...argv: string[]): Promise<Serving> {
+  const stdout = new Sink();
+  const stderr = new Sink();
+  const ac = new AbortController();
+  const state = { url: '', exited: null as number | null };
+  const running = run(['serve', '--port', '0', '--no-fun', ...argv], {
+    cwd,
+    stdout,
+    stderr,
+    signal: ac.signal,
+    now: () => NOW,
+    onServe: (s) => {
+      state.url = s.url;
+    },
+  });
+  void running.then((code) => {
+    state.exited = code;
+  });
+  for (let i = 0; i < 250 && !state.url && state.exited === null; i++) {
+    await new Promise((r) => setTimeout(r, 20));
+  }
+  if (!state.url) {
+    throw new Error(`serve never listened (exit ${state.exited}): ${stderr.text}${stdout.text}`);
+  }
+  return {
+    url: state.url,
+    out: stdout,
+    stop: () => {
+      ac.abort();
+      return running;
+    },
+  };
+}
+
+interface BoardBody {
+  cards: { id: string }[];
+  hasBoard: boolean;
+}
+
+async function getJson<T>(url: string): Promise<T> {
+  const res = await fetch(url);
+  return (await res.json()) as T;
+}
+
+async function git(cwd: string, ...args: string[]): Promise<string> {
+  const { stdout } = await execFileAsync('git', args, { cwd });
+  return stdout;
+}
+
+describe('repoboard serve --root (P7.1)', () => {
+  it('serves the directory given, not the cwd, and resolves a relative path against the cwd', async () => {
+    const cwdRepo = await freshRepo({ 'CWD-1.md': cardText('CWD-1', 'todo') });
+    const fixture = await makeTempRepoboard({ 'FIX-1.md': cardText('FIX-1', 'doing') });
+    dirs.push(fixture.root);
+
+    const abs = await serve(cwdRepo, '--root', fixture.root);
+    try {
+      const board = await getJson<BoardBody>(`${abs.url}api/board`);
+      expect(board.cards.map((c) => c.id)).toEqual(['FIX-1']);
+      expect(abs.out.text).toContain(`repoboard: serving ${fixture.root}`);
+    } finally {
+      expect(await abs.stop()).toBe(0);
+    }
+
+    // Relative --root: same fixture, addressed as `<basename>` from its parent.
+    const rel = await serve(dirname(fixture.root), '--root', basename(fixture.root));
+    try {
+      const board = await getJson<BoardBody>(`${rel.url}api/board`);
+      expect(board.cards.map((c) => c.id)).toEqual(['FIX-1']);
+    } finally {
+      expect(await rel.stop()).toBe(0);
+    }
+  });
+
+  it('never searches upward from --root: a subdirectory of a board repo is map-only', async () => {
+    const parent = await freshRepo({ 'PARENT-1.md': cardText('PARENT-1', 'todo') });
+    const child = join(parent, 'sub', 'deeper');
+    await mkdir(child, { recursive: true });
+    await writeFile(join(child, 'a.ts'), 'export const a = 1;\n');
+
+    // Sanity: the cwd path DOES climb, so the two behaviours are genuinely different.
+    expect(await findRoot(child)).toBe(parent);
+
+    const s = await serve(parent, '--root', child);
+    try {
+      const board = await getJson<BoardBody>(`${s.url}api/board`);
+      expect(board.hasBoard).toBe(false);
+      expect(board.cards).toEqual([]);
+      expect(s.out.text).toContain('map-only');
+    } finally {
+      expect(await s.stop()).toBe(0);
+    }
+  });
+
+  it('rejects a --root that is not a directory with exit 1', async () => {
+    const root = await makeTempDir('repoboard-cli-');
+    dirs.push(root);
+    await writeFile(join(root, 'afile'), 'x');
+    const res = await repoboard(root, 'serve', '--root', join(root, 'afile'));
+    expect(res.code).toBe(1);
+    expect(res.err).toMatch(/is not a directory/);
+  });
+
+  it('without --root the missing-board error names --root as the way in', async () => {
+    const root = await makeTempDir('repoboard-cli-');
+    dirs.push(root);
+    const res = await repoboard(root, 'serve');
+    expect(res.code).toBe(1);
+    expect(res.err).toContain('no .repoboard directory found');
+    expect(res.err).toContain('repoboard serve --root <dir>');
+  });
+});
+
+describe('map-only mode is read-only in the target repo (P7.2)', () => {
+  it('scans a boardless repo, reports hasBoard:false, and writes nothing into it', async () => {
+    const fixture = await makeTempRepoNoBoard({
+      'src/index.ts': "import { helper } from './helper.js';\nexport const main = helper;\n",
+      'src/helper.ts': 'export const helper = 42;\n',
+      'README.md': '# fixture\n',
+    });
+    dirs.push(fixture.root);
+    await git(fixture.root, 'init', '-q');
+    await git(fixture.root, 'add', '-A');
+    await git(
+      fixture.root,
+      '-c',
+      'user.email=test@example.invalid',
+      '-c',
+      'user.name=repoboard test',
+      'commit',
+      '-q',
+      '-m',
+      'fixture',
+    );
+    expect(await git(fixture.root, 'status', '--porcelain')).toBe('');
+    expect(await fixture.hasRepoboard()).toBe(false);
+
+    const s = await serve(fixture.root, '--root', fixture.root);
+    try {
+      const board = await getJson<BoardBody>(`${s.url}api/board`);
+      expect(board.hasBoard).toBe(false);
+      expect(board.cards).toEqual([]);
+      const repo = await getJson<{ root: string; files: unknown[] }>(`${s.url}api/repo`);
+      expect(repo.files.length).toBeGreaterThan(0);
+    } finally {
+      expect(await s.stop()).toBe(0);
+    }
+
+    // The whole point: a full start / scan / stop cycle left the target untouched.
+    expect(await git(fixture.root, 'status', '--porcelain')).toBe('');
+    expect(await fixture.hasRepoboard()).toBe(false);
+  });
+
+  it('an empty but initialised .repoboard/ is hasBoard:true with zero cards', async () => {
+    const fixture = await makeTempRepoNoBoard({ 'a.ts': 'export const a = 1;\n' });
+    dirs.push(fixture.root);
+    await mkdir(join(fixture.root, '.repoboard'), { recursive: true });
+
+    const s = await serve(fixture.root);
+    try {
+      const board = await getJson<BoardBody>(`${s.url}api/board`);
+      expect(board.hasBoard).toBe(true);
+      expect(board.cards).toEqual([]);
+      expect(s.out.text).not.toContain('map-only');
+    } finally {
+      expect(await s.stop()).toBe(0);
+    }
   });
 });
 

@@ -131,7 +131,7 @@ function openMock(handlers: TransportHandlers, options: MockOptions): MockTransp
 
   later(0, () => {
     handlers.onConnected(true);
-    emit({ type: 'snapshot', board: { config, cards }, repo: mockRepo() });
+    emit({ type: 'snapshot', board: { config, cards, hasBoard: true }, repo: mockRepo() });
     // A little history so the ticker has something to say.
     const now = Date.now();
     const history: Array<[string, string, string, string, number]> = [

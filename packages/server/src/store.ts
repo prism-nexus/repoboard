@@ -86,6 +86,7 @@ export class CardStore extends EventEmitter<StoreEvents> {
   readonly eventsPath: string;
 
   private cfg: BoardConfig = defaultBoardConfig();
+  private board = false;
   private readonly cards = new Map<string, Card>();
   /** Per file: the card id it currently holds (null when invalid) and the content hash. */
   private readonly byPath = new Map<string, { id: string | null; hash: string }>();
@@ -108,6 +109,19 @@ export class CardStore extends EventEmitter<StoreEvents> {
 
   get config(): BoardConfig {
     return this.cfg;
+  }
+
+  /**
+   * P7.2: does this root actually have a `.repoboard/` directory? False means map-only — the
+   * config above is `defaultBoardConfig()` standing in for a board that does not exist, and
+   * nothing distinguishes it from a real board with the default columns. Read from disk in
+   * `load()`, the one code path every store goes through, so no caller can forget to set it.
+   *
+   * Deliberately NOT re-derived while the server runs (plan §5 P7.2, brief §3): a `.repoboard/`
+   * that appears later needs a restart, and the UI says so.
+   */
+  get hasBoard(): boolean {
+    return this.board;
   }
 
   get invalid(): InvalidCard[] {
@@ -138,6 +152,7 @@ export class CardStore extends EventEmitter<StoreEvents> {
 
   /** Read board.yml, every card, and the event log. Then optionally start watching. */
   async load(watch: boolean): Promise<void> {
+    this.board = await isDirectory(this.repoboardDir);
     await this.loadConfig();
     let names: string[] = [];
     try {
@@ -515,6 +530,14 @@ async function exists(path: string): Promise<boolean> {
   try {
     await stat(path);
     return true;
+  } catch {
+    return false;
+  }
+}
+
+async function isDirectory(path: string): Promise<boolean> {
+  try {
+    return (await stat(path)).isDirectory();
   } catch {
     return false;
   }

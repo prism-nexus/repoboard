@@ -264,3 +264,12 @@ that call is the owner's. No GitHub repo until after v1 (O2).
   over the root — does it honour `.gitignore`?) or the churn scan (`git log` per file) is the cost.
   Measure both before fixing; the P7.2 read-only guarantee held throughout (`git status` clean,
   `.repoboard/` absent). Filed by the orchestrator; the process was killed to free the box.
+- **K13** `repoboard check` reports `stale-state` when STATE.md's stamp EQUALS the newest log block's
+  header second. Reproduced 2026-09-17 22:37:39Z on this repo's own first `init --practices`: `log`
+  then `state --set-section LIVE` within one second → stamp `22:37:39Z`, newest `##### ` header
+  `22:37:39Z`, `check` exit 1; restamping two seconds later → `ok`. The comparison is `<=` where the
+  contract ("stamp OLDER than the newest log entry") is `<` — the same boundary P8.2's C3 control guards
+  for leases (`until < now` is stale, equal is live). Also unmeasured: whether the log FILE's mtime
+  (sub-second) is compared against the second-resolution stamp, which would produce the same false
+  positive for any same-second write. Fix in `checkFindings` with a same-second test; filed by the
+  orchestrator from the first dogfood run.

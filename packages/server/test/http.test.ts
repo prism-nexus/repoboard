@@ -1051,3 +1051,45 @@ describe('state/log/check over HTTP (P8.3)', () => {
     expect(msg.state.text).toContain('Tree is dev.');
   });
 });
+
+describe('cost over HTTP (P8.4)', () => {
+  it('GET /api/cost: 200, absent CLAUDE.md, never over', async () => {
+    const r = await rig({});
+    const res = await fetch(`${r.url}/api/cost`);
+    expect(res.status).toBe(200);
+    const body = (await json(res)) as { claudeMdBytes: null; over: boolean };
+    expect(body.claudeMdBytes).toBeNull();
+    expect(body.over).toBe(false);
+  });
+
+  it('GET /api/cost?budget= overrides board.yml, and 200 either side of OVER (a pure read, never 4xx)', async () => {
+    const r = await rig({});
+    await writeFile(join(r.repo.root, 'CLAUDE.md'), 'x'.repeat(100));
+    const atBudget = await fetch(`${r.url}/api/cost?budget=100`);
+    expect(atBudget.status).toBe(200);
+    expect(((await json(atBudget)) as { over: boolean }).over).toBe(false);
+    const overBudget = await fetch(`${r.url}/api/cost?budget=99`);
+    expect(overBudget.status).toBe(200);
+    const overBody = (await json(overBudget)) as { over: boolean; claudeMdBytes: number };
+    expect(overBody.over).toBe(true);
+    expect(overBody.claudeMdBytes).toBe(100);
+  });
+
+  it('GET /api/cost?budget=0 is a 400 (not a positive integer)', async () => {
+    const r = await rig({});
+    const res = await fetch(`${r.url}/api/cost?budget=0`);
+    expect(res.status).toBe(400);
+  });
+
+  it('map-only: GET /api/cost still works (a pure read of the filesystem, not the board)', async () => {
+    const repo = await makeTempRepoNoBoard({ 'CLAUDE.md': 'x'.repeat(50) });
+    cleanups.push(repo.cleanup);
+    const store = await openStore(repo.root, { watch: true, now: () => NOW });
+    cleanups.push(() => store.close());
+    const server = await startServer({ store, port: 0, scan: false });
+    cleanups.push(() => server.close());
+    const res = await fetch(`${server.url.replace(/\/$/, '')}/api/cost`);
+    expect(res.status).toBe(200);
+    expect(((await json(res)) as { claudeMdBytes: number }).claudeMdBytes).toBe(50);
+  });
+});

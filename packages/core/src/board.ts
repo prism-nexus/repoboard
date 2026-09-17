@@ -37,6 +37,8 @@ export const BoardConfigSchema = z
       .regex(/^[A-Za-z][A-Za-z0-9_]*$/, 'must start with a letter and contain only [A-Za-z0-9_]')
       .default('RB'),
     activeWindowMinutes: z.number().positive().default(30),
+    /** P8.4: `repoboard cost`'s CLAUDE.md budget in bytes. Absent = the CLI's own default. */
+    claudeMdBudgetBytes: z.number().int().positive().optional(),
     // An absent `columns` key means "the defaults"; an explicit empty list is an error.
     columns: z
       .array(ColumnSchema)
@@ -84,7 +86,7 @@ export function parseBoard(text: string): BoardParseResult {
   return { ok: true, config: result.data };
 }
 
-const CONFIG_ORDER = ['prefix', 'activeWindowMinutes', 'columns'] as const;
+const CONFIG_ORDER = ['prefix', 'activeWindowMinutes', 'claudeMdBudgetBytes', 'columns'] as const;
 const COLUMN_ORDER = ['id', 'title', 'active', 'wip', 'done', 'decision'] as const;
 
 function orderKeys(

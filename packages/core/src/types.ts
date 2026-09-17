@@ -109,6 +109,9 @@ export interface Column {
 export interface BoardConfig {
   prefix: string;
   activeWindowMinutes: number;
+  /** P8.4: `repoboard cost`'s budget for the root `CLAUDE.md`, in bytes. A CLI `--budget` flag
+   * wins over this; absent here AND on the flag means `DEFAULT_CLAUDE_MD_BUDGET_BYTES` (cost.ts). */
+  claudeMdBudgetBytes?: number;
   columns: Column[];
   [key: string]: unknown;
 }

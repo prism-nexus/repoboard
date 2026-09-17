@@ -14,13 +14,16 @@ import {
   type CardPatch,
   type CreateCardInput,
   createCard,
+  DEFAULT_CLAUDE_MD_BUDGET_BYTES,
   type DecisionOption,
   dailyLogHeader,
   defaultBoardConfig,
+  formatCostTable,
   formatLogBlock,
   initialStateText,
   needsDecision,
   type Priority,
+  parseBoard,
   renderState,
   resolveTimeSpec,
   type StateSectionName,
@@ -29,6 +32,7 @@ import {
   serializeLeases,
   toIso,
 } from '@repoboard/core';
+import { gatherCost } from './cost.js';
 import { type RunningServer, startServer } from './http.js';
 import {
   formatRows,
@@ -116,7 +120,19 @@ Usage:
                                         print a day's log (default today), optionally one seat's blocks
   repoboard check [--json] [--strict]  exit 0 "ok" / 1 with one line per finding: stale-state,
                                         active-without-lease (warning; blocks only with --strict),
-                                        stale-lease, needs-decision (informational, never fails)
+                                        stale-lease, needs-decision (informational, never fails),
+                                        cost-over-budget (error; see \`repoboard cost\`)
+  repoboard cost [--root <dir>] [--budget <bytes>] [--json]
+                                        "cold context": bytes (and ≈tokens at 4 B/token) of what a
+                                        cold agent loads — CLAUDE.md/.claude/CLAUDE.md/CLAUDE.local.md
+                                        if present, AGENTS.md/docs/AGENTS.md if present, every
+                                        repo-relative path CLAUDE.md names in backticks that exists
+                                        (first-order only, no recursion, no globs), and the NAMES of
+                                        any .mcp.json MCP servers (not their schema bytes — those are
+                                        per-harness). Exit 1 when CLAUDE.md exceeds --budget (default
+                                        8192, or board.yml's claudeMdBudgetBytes); exit 0 otherwise.
+                                        An absent CLAUDE.md is reported, never OVER. --root measures
+                                        ANY directory, with or without a .repoboard/ board.
   repoboard serve [--root <dir>] [--port 4242] [--open] [--no-fun]
                                         start the dashboard (binds 127.0.0.1); --root serves that
                                         directory as given — a directory with no .repoboard/ opens
@@ -885,6 +901,63 @@ async function cmdCheck(args: string[], io: CliIO): Promise<number> {
   return exitCode;
 }
 
+/**
+ * P8.4 locked decision 6: `--root` measures ANY directory, with or without `.repoboard/` — a
+ * `.repoboard/`-less repo (freshpickedjobs, measured read-only) is exactly the motivating case.
+ * With no `--root`, climb to the nearest `.repoboard/` like every other command (so a bare
+ * `repoboard cost` inside a repoboard-managed repo needs no flag).
+ */
+async function costRoot(rootFlag: string | undefined, io: CliIO): Promise<string> {
+  if (rootFlag === undefined) return requireRoot(io);
+  const root = resolve(io.cwd, rootFlag);
+  const isDir = await stat(root).then(
+    (s) => s.isDirectory(),
+    () => false,
+  );
+  if (!isDir) throw new UserError(`--root ${root} is not a directory`);
+  return root;
+}
+
+/** CLI flag wins over `board.yml`'s `claudeMdBudgetBytes`, which wins over the built-in default
+ * (locked decision 2). `root` may have no `.repoboard/board.yml` at all (costRoot above) — that
+ * is not an error here, just "no configured budget". */
+async function budgetFor(root: string, flag: string | undefined): Promise<number> {
+  if (flag !== undefined) {
+    const n = Number.parseInt(flag, 10);
+    if (!Number.isInteger(n) || n <= 0) {
+      throw new UserError(`--budget must be a positive integer (got "${flag}")`);
+    }
+    return n;
+  }
+  try {
+    const text = await readFile(join(root, '.repoboard', 'board.yml'), 'utf8');
+    const parsed = parseBoard(text);
+    if (parsed.ok && parsed.config.claudeMdBudgetBytes !== undefined) {
+      return parsed.config.claudeMdBudgetBytes;
+    }
+  } catch {
+    // no board.yml (or it does not parse) — fall through to the built-in default.
+  }
+  return DEFAULT_CLAUDE_MD_BUDGET_BYTES;
+}
+
+async function cmdCost(args: string[], io: CliIO): Promise<number> {
+  const { values } = parse(args, {
+    root: { type: 'string' },
+    budget: { type: 'string' },
+    json: { type: 'boolean', default: false },
+  });
+  const root = await costRoot(values.root, io);
+  const budget = await budgetFor(root, values.budget);
+  const report = await gatherCost(root, budget);
+  if (values.json) {
+    io.stdout.write(`${JSON.stringify(report, null, 2)}\n`);
+    return report.over ? 1 : 0;
+  }
+  io.stdout.write(`${formatCostTable(report)}\n`);
+  return report.over ? 1 : 0;
+}
+
 function openInBrowser(url: string): void {
   const [cmd, args] =
     process.platform === 'darwin'
@@ -1015,6 +1088,7 @@ export async function run(argv: string[], io: CliIO): Promise<number> {
       return await cmdLogAppend(argv.slice(1), io);
     }
     if (cmd === 'check') return await cmdCheck(argv.slice(1), io);
+    if (cmd === 'cost') return await cmdCost(argv.slice(1), io);
     throw new UserError(`unknown command "${cmd}" (try repoboard --help)`);
   } catch (e) {
     if (e instanceof UserError) {

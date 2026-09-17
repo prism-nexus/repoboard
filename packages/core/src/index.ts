@@ -19,6 +19,15 @@ export {
   REQUIRED_CARD_KEYS,
   serializeCard,
 } from './card.js';
+export type { CostEntry, CostReport, CostWhy, SummarizeCostOptions } from './cost.js';
+export {
+  approxTokens,
+  DEFAULT_CLAUDE_MD_BUDGET_BYTES,
+  extractLinkedPaths,
+  formatCostTable,
+  MCP_SCHEMA_NOTE,
+  summarizeCost,
+} from './cost.js';
 export type {
   AskDecisionOptions,
   AskDecisionResult,

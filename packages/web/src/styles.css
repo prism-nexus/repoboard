@@ -1126,6 +1126,61 @@ button {
   display: grid;
   grid-template-rows: auto 1fr auto;
   height: 100%;
+  position: relative; /* anchors the cost panel drawer (P8.4) */
+}
+
+/* ---- cost tile + panel (P8.4) ---- */
+.cost-tile {
+  margin-left: auto;
+  font: inherit;
+  font-size: 12px;
+  color: var(--ink);
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 4px 10px;
+  cursor: pointer;
+}
+.cost-tile:hover {
+  border-color: var(--line-strong);
+}
+.cost-tile__mark {
+  color: var(--ok);
+  font-weight: 700;
+}
+.cost-tile__mark--over {
+  color: var(--amber);
+}
+.cost-panel {
+  padding-top: 14px;
+}
+.cost-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+  margin-top: 10px;
+}
+.cost-table th,
+.cost-table td {
+  text-align: left;
+  padding: 3px 8px 3px 0;
+  border-bottom: 1px solid var(--line);
+}
+.cost-table td:nth-child(1) {
+  word-break: break-all;
+}
+.cost-table tfoot td {
+  border-bottom: none;
+  border-top: 1px solid var(--line-strong);
+  font-weight: 700;
+}
+.cost-panel__verdict {
+  margin-top: 10px;
+  font-weight: 600;
+  color: var(--ok);
+}
+.cost-panel__verdict--over {
+  color: var(--amber);
 }
 .map__bar {
   display: flex;

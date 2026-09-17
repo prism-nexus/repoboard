@@ -18,10 +18,12 @@ import {
   type Card,
   type CardPatch,
   type CheckResourceResult,
+  type CostReport,
   type CreateCardInput,
   checkFindings,
   checkResource,
   createCard,
+  DEFAULT_CLAUDE_MD_BUDGET_BYTES,
   type DecisionOption,
   dailyLogHeader,
   decide as decideCard,
@@ -55,6 +57,7 @@ import {
   updateCard,
 } from '@repoboard/core';
 import { watch as chokidarWatch, type FSWatcher } from 'chokidar';
+import { gatherCost } from './cost.js';
 
 /** One line of `.repoboard/events.jsonl`: core's `Event` (K2). Kept as a name for the package index. */
 export type StoreEvent = Event;
@@ -488,6 +491,18 @@ export class CardStore extends EventEmitter<StoreEvents> {
   }
 
   /**
+   * P8.4: read-only (`gatherCost` only `stat`/`readFile`s), so it works in map-only mode too.
+   * `budget` overrides board.yml's `claudeMdBudgetBytes`, which overrides
+   * `DEFAULT_CLAUDE_MD_BUDGET_BYTES` — the same precedence the CLI flag documents.
+   */
+  cost(budget?: number): Promise<CostReport> {
+    return gatherCost(
+      this.root,
+      budget ?? this.cfg.claudeMdBudgetBytes ?? DEFAULT_CLAUDE_MD_BUDGET_BYTES,
+    );
+  }
+
+  /**
    * P8.3: replace one STATE.md section and restamp. A missing STATE.md is scaffolded fresh first
    * (`initialStateText`) rather than refused — a hand-deleted STATE.md should not brick the one
    * command that rewrites it.
@@ -578,6 +593,10 @@ export class CardStore extends EventEmitter<StoreEvents> {
   async check(strict: boolean): Promise<CheckOutcome> {
     const now = this.now();
     const logs = await this.loadAllLogInfo();
+    // P8.4: read-only, so a check never fails to gather it; a read error (e.g. a permissions
+    // problem on a linked path) yields `null` and `costFinding` reports nothing rather than
+    // throwing `check` itself.
+    const cost = await this.cost().catch(() => null);
     const findings = checkFindings({
       state: this.stateDoc,
       logs,
@@ -585,6 +604,7 @@ export class CardStore extends EventEmitter<StoreEvents> {
       config: this.cfg,
       leases: this.leasesDoc,
       now,
+      cost,
     });
     return { findings, exitCode: exitCodeForFindings(findings, strict) };
   }

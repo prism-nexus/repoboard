@@ -10,6 +10,7 @@
  * access, so it is exactly as testable as everything else in this package (§0.5).
  */
 import { findColumn } from './board.js';
+import type { CostReport } from './cost.js';
 import { needsDecision } from './decisions.js';
 import { holdsLiveLease, staleLeases } from './leases.js';
 import { isActive } from './presence.js';
@@ -220,12 +221,25 @@ export interface CheckInput {
   config: BoardConfig;
   leases: LeasesDoc;
   now: Date;
+  /** P8.4: gathered (with I/O) by the caller — core stays I/O-free (§0.5). `null`/absent when the
+   * caller could not gather it (e.g. a read error); `costFinding` then reports nothing rather
+   * than guessing. */
+  cost?: CostReport | null;
 }
 
-/** P8.4 fills this in; for now `check` never emits a `cost-over-budget` finding. */
-// P8.4
-export function costFinding(): Finding | null {
-  return null;
+/**
+ * P8.4 (locked decision 4): error-grade, like `stale-lease` — a CLAUDE.md over budget is loaded
+ * into every turn of every agent and nobody notices without this. `null` when there is no report
+ * to judge, or when the report itself says CLAUDE.md is absent or within budget — an absent
+ * CLAUDE.md can never be OVER (locked decision 2).
+ */
+export function costFinding(report: CostReport | null | undefined): Finding | null {
+  if (!report?.over || report.claudeMdBytes === null) return null;
+  return {
+    kind: 'cost-over-budget',
+    level: 'error',
+    message: `cost-over-budget: CLAUDE.md ${report.claudeMdBytes} B > budget ${report.budget} B`,
+  };
 }
 
 /** The later of a log file's own mtime and the newest parseable `#####` header time inside it. */
@@ -298,7 +312,7 @@ export function checkFindings(input: CheckInput): Finding[] {
     });
   }
 
-  const cf = costFinding();
+  const cf = costFinding(input.cost);
   if (cf) findings.push(cf);
 
   return findings;

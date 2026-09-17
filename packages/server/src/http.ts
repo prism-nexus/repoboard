@@ -875,6 +875,19 @@ export async function startServer(opts: ServerOptions): Promise<RunningServer> {
       const outcome = await store.check(strict);
       return sendJson(res, 200, outcome);
     }
+    // P8.4: a pure read, always 200 — `over: true` is a well-formed answer, not a failed request
+    // (same reasoning as `GET /api/leases/check/:resource`).
+    if (method === 'GET' && path === '/api/cost') {
+      const budgetParam = url.searchParams.get('budget');
+      let budget: number | undefined;
+      if (budgetParam !== null) {
+        budget = Number.parseInt(budgetParam, 10);
+        if (!Number.isInteger(budget) || budget <= 0) {
+          throw new HttpError(400, 'budget must be a positive integer');
+        }
+      }
+      return sendJson(res, 200, await store.cost(budget));
+    }
     if (method === 'GET' && path === '/api/repo') {
       if (!repo) throw new HttpError(404, 'repo scanning is disabled');
       return sendJson(res, 200, repo);

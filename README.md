@@ -67,6 +67,15 @@ card working with no lease held) round-trip through MCP `get_state`/`set_state_s
 root `NEXT-AGENT-PROMPT.md`), never overwriting a file that already exists. See `docs/AGENTS.md`
 §10.
 
+`repoboard cost [--root <dir>] [--budget <bytes>]` (P8.4) answers what a COLD agent loads before
+it does anything: bytes (and ≈tokens at 4 B/token) of `CLAUDE.md` and its variants, `AGENTS.md`
+and its variants, every repo-relative path `CLAUDE.md` names in backticks that exists, and the
+NAMES of any `.mcp.json` MCP servers. Exit 1 when `CLAUDE.md` exceeds its budget (default 8192 B,
+or `board.yml`'s `claudeMdBudgetBytes:`) — the same check `repoboard check`'s `cost-over-budget`
+finding makes error-grade. `--root` measures ANY directory, board or no board — the motivating
+measurement was freshpickedjobs' own `CLAUDE.md`, which reached 32,620 B before anyone measured
+it. MCP `cost`, HTTP `GET /api/cost`, and a tile on the Map view. See `docs/AGENTS.md` §11.
+
 The CLI is the cheapest per operation and has no standing cost. MCP pays off when the agent has
 no shell or its harness loads tool schemas on demand. Editing the file is the escape hatch: it
 always works, and the watcher synthesizes the event (`actor: file`). `docs/AGENTS.md` is the one

@@ -5,6 +5,7 @@
 import { avatarFor, type Card, findColumn } from '@repoboard/core';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Avatar } from '../components/Avatar.jsx';
+import { CostPanel, CostTile } from '../components/CostTile.jsx';
 import { useBoardState, useNow, useStore } from '../hooks.js';
 import {
   cardsNaming,
@@ -36,6 +37,7 @@ export function MapView() {
   const [panelPath, setPanelPath] = useState<string | null>(null);
   const [graphDir, setGraphDir] = useState<string | null>(null);
   const [timing, setTiming] = useState<Timing | null>(null);
+  const [costOpen, setCostOpen] = useState(false);
 
   const files = repo?.files ?? [];
   const edges = repo?.edges ?? [];
@@ -184,6 +186,7 @@ export function MapView() {
           </label>
         )}
         <Legend layer={layer} mode={mode} colors={graphColors} />
+        <CostTile onOpen={() => setCostOpen(true)} />
       </div>
       <div className="map__body">
         <div className="map__canvas">
@@ -296,6 +299,7 @@ export function MapView() {
         {' · scanned '}
         {relTime(repo.scannedAt, now)}
       </div>
+      {costOpen ? <CostPanel onClose={() => setCostOpen(false)} /> : null}
     </div>
   );
 }

@@ -70,13 +70,17 @@ const CARD_TOOLS = [
 const LEASE_TOOLS = ['take_lease', 'release_lease', 'list_leases', 'add_window', 'check_window'];
 /** P8.3: the four state/log/check tools — same terse-description budget as P8.2's lease tools. */
 const STATE_TOOLS = ['get_state', 'set_state_section', 'append_repo_log', 'check'];
+/** P8.4: one new tool, same terse-description budget. */
+const COST_TOOLS = ['cost'];
 
 describe('repoboard mcp: handshake and tool list', () => {
-  it('lists exactly the eighteen tools of the brief, card tools described for a newcomer', async () => {
+  it('lists exactly the nineteen tools of the brief, card tools described for a newcomer', async () => {
     const r = await rig();
     const { tools } = await r.client.listTools();
     expect(tools.map((t) => t.name).sort()).toEqual([...MCP_TOOL_NAMES].sort());
-    expect(tools).toHaveLength(CARD_TOOLS.length + LEASE_TOOLS.length + STATE_TOOLS.length);
+    expect(tools).toHaveLength(
+      CARD_TOOLS.length + LEASE_TOOLS.length + STATE_TOOLS.length + COST_TOOLS.length,
+    );
     for (const t of tools) {
       if (!CARD_TOOLS.includes(t.name)) continue;
       expect(t.description, t.name).toMatch(/A card is one task/);
@@ -700,5 +704,46 @@ describe('repoboard mcp: get_state / set_state_section / append_repo_log / check
     expect(plain.exitCode).toBe(0);
     const strict = await r.json<{ exitCode: number }>('check', { strict: true });
     expect(strict.exitCode).toBe(1);
+  });
+});
+
+describe('repoboard mcp: cost (P8.4)', () => {
+  it('the cost tool description is terse (<=700 B)', async () => {
+    const r = await rig();
+    const { tools } = await r.client.listTools();
+    const tool = tools.find((t) => t.name === 'cost');
+    expect(tool).toBeDefined();
+    expect(Buffer.byteLength(JSON.stringify(tool))).toBeLessThanOrEqual(700);
+  });
+
+  it('reports an absent CLAUDE.md, never OVER', async () => {
+    const r = await rig();
+    const report = await r.json<{ claudeMdBytes: null; over: boolean; entries: unknown[] }>('cost');
+    expect(report.claudeMdBytes).toBeNull();
+    expect(report.over).toBe(false);
+    expect(report.entries).toEqual([]);
+  });
+
+  it('a CLAUDE.md over budget reports over:true, gated by an explicit budget argument', async () => {
+    const r = await rig();
+    await writeFile(join(r.repo.root, 'CLAUDE.md'), 'x'.repeat(100));
+    const atBudget = await r.json<{ over: boolean; claudeMdBytes: number }>('cost', {
+      budget: 100,
+    });
+    expect(atBudget).toMatchObject({ over: false, claudeMdBytes: 100 });
+    const overBudget = await r.json<{ over: boolean }>('cost', { budget: 99 });
+    expect(overBudget.over).toBe(true);
+  });
+
+  it('check surfaces cost-over-budget as an error-grade finding (locked decision 4)', async () => {
+    const r = await rig();
+    await writeFile(join(r.repo.root, 'CLAUDE.md'), 'x'.repeat(9000));
+    const res = await r.json<{
+      findings: Array<{ kind: string; level: string }>;
+      exitCode: number;
+    }>('check');
+    const finding = res.findings.find((f) => f.kind === 'cost-over-budget');
+    expect(finding).toMatchObject({ level: 'error' });
+    expect(res.exitCode).toBe(1);
   });
 });

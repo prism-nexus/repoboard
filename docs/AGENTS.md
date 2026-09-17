@@ -34,6 +34,7 @@ published). It finds `.repoboard/` by walking up from the current directory.
 | `repoboard state [--set-section s (<text>\|--stdin)]` | `repoboard state` — prints the rendered STATE.md (section 10) |
 | `repoboard log --as <seat> [--title t] (<text>\|--stdin)` / `log show [--date d] [--seat s]` | `repoboard log --as claude/ops "armed the fires"` (section 10) |
 | `repoboard check [--json] [--strict]` | `repoboard check` — exit 0 `ok`, or 1 with findings (section 10) |
+| `repoboard cost [--root <dir>] [--budget <bytes>] [--json]` | `repoboard cost --root /path/to/other/repo` — "cold context" bytes/≈tokens, exit 1 if CLAUDE.md is OVER budget (section 11) |
 | `repoboard serve [--port 4242] [--open] [--no-fun]` | `repoboard serve --open` — the dashboard on 127.0.0.1 |
 | `repoboard mcp [--root <dir>]` | `repoboard mcp` — the MCP server on stdio (section 3) |
 
@@ -94,7 +95,8 @@ The server finds `.repoboard/` by walking up from its working directory; pass `-
 launched from somewhere else. Tools: `list_cards`, `get_card`, `create_card`, `move_card`,
 `update_card`, `append_log`, `board_summary`, `ask_owner`, `record_decision` (P8.1, section 8),
 `take_lease`, `release_lease`, `list_leases`, `add_window`, `check_window` (P8.2, section 9),
-`get_state`, `set_state_section`, `append_repo_log`, `check` (P8.3, section 10).
+`get_state`, `set_state_section`, `append_repo_log`, `check` (P8.3, section 10),
+`cost` (P8.4, section 11).
 Call `list_cards` or `board_summary` first: they
 are cheap and return the column ids. `list_cards` takes optional `status`, `assignee`, `label`
 filters (exact match, AND) and `full: true` to include bodies; without it, rows are the same
@@ -440,7 +442,7 @@ uses the same actor chain as everywhere else (`$REPOBOARD_ACTOR`, then `$USER`, 
 | `active-without-lease` | warning | a card in an `active: true` column whose `assignee` holds no live lease on any resource | only with `--strict` |
 | `stale-lease` | error | any lease past `until` (one finding per lease) | yes |
 | `needs-decision` | info | count of cards with an open decision; only emitted when > 0 | never |
-| `cost-over-budget` | — | stubbed (`costFinding()` returns `null`) — P8.4 fills this in | — |
+| `cost-over-budget` | error | the root `CLAUDE.md` exceeds its budget (default 8192 B, or `board.yml`'s `claudeMdBudgetBytes`) — P8.4, section 11 | yes |
 
 Findings are pure data (`{kind, level, message}`); `exitCodeForFindings(findings, strict)` is the
 one function every surface (CLI, HTTP, MCP) calls to turn them into the 0/1 contract, so the
@@ -497,3 +499,119 @@ Per-tool bytes of the four new tools: `get_state` 432 B, `set_state_section` 645
 `append_repo_log` 628 B, `check` 566 B — every one under the 700 B budget, for the same reason
 P8.2's five lease tools are: no `CARD_INTRO`/`ACTOR_DESC` reuse, because state/log/check are not
 cards.
+
+## 11. Cost — what a cold agent loads, against a budget (P8.4)
+
+`repoboard cost` answers one question in bytes: **what does a cold agent load before it does
+anything?** — `CLAUDE.md` at the repo root (and `.claude/CLAUDE.md`, `CLAUDE.local.md` if
+present, each listed separately), `AGENTS.md` at root and `docs/AGENTS.md` if present, every
+repo-relative path `CLAUDE.md` names in backticks that **exists as a file** (first-order only —
+no recursion into a linked file's own text, no globs, deduplicated; `..` and absolute paths are
+ignored), and the **names** (never bytes — that cost is per-harness) of any MCP servers in
+`.mcp.json`. Tokens are an ESTIMATE at 4 bytes/token, always printed with `≈` and labelled as an
+estimate. Motivating measurement (plan §5 P8.4): freshpickedjobs' own `CLAUDE.md` reached
+32,620 B — loaded into every turn of every subagent, including ones that never needed 151 lines
+of verification catalogue — before anyone measured it; it was cut to 4,996 B by hand on
+2026-09-17, the same day this task landed.
+
+Core (`packages/core/src/cost.ts`, pure — §0.5) does the extraction rule and the arithmetic;
+`packages/server/src/cost.ts` does the one `stat`/`readFile` per candidate, through the same
+`resolveRepoPath` guard K7's refs use (absolute, `..`, `.git/`, and a symlink escaping the repo
+are all refused there too, even though `extractLinkedPaths` already rejects the first two on
+syntax alone). **Read-only**, always: `cost` never writes, and the CLI's own `--root` measures
+ANY directory, with or without a `.repoboard/` board — that is the freshpickedjobs case, which
+has never adopted this tool.
+
+### CLI
+
+| Command | Example |
+|---|---|
+| `repoboard cost [--root <dir>] [--budget <bytes>] [--json]` | `repoboard cost --root /path/to/other/repo` |
+
+With no `--root`, it climbs to the nearest `.repoboard/` like every other command; with `--root`,
+it measures that directory exactly as given, board or no board. The budget: a `--budget` flag
+wins; otherwise `board.yml`'s `claudeMdBudgetBytes:` (a new optional key —
+`docs/BUILD-PLAN.md` §2); otherwise the built-in default, **8192 bytes**. Table columns: `FILE  BYTES  ≈TOK  WHY` (`WHY` is `root`,
+`agents`, or `linked from CLAUDE.md`), then `total <bytes> ≈<tok>`, then
+`CLAUDE.md <bytes> of budget <budget>  OK|OVER` (or `CLAUDE.md — absent` when there is none — an
+absent CLAUDE.md can never be OVER), then the MCP servers line (only when at least one is
+configured) and a footer labelling `≈tok` as an estimate. Exit 1 when CLAUDE.md is OVER, exit 0
+otherwise — the same 0/1 shape `repoboard check`'s new `cost-over-budget` finding uses (error-
+grade, blocks even without `--strict`, since a CLAUDE.md over budget is the failure nobody
+notices without this).
+
+### MCP / HTTP
+
+MCP `cost(budget?)` → the same JSON `CostReport` the CLI's `--json` prints. HTTP
+`GET /api/cost[?budget=]` — a pure read, always 200 (`over: true` is a well-formed answer, not a
+failed request, the same reasoning as `GET /api/leases/check/:resource`); `?budget=` non-positive
+is the one 400.
+
+### Web
+
+One tile on the Map view header: `cold context ≈Nk tok · CLAUDE.md X.X KB ✓` (✗ in the warning
+color when OVER, or `CLAUDE.md absent`). Click opens a drawer-styled panel with the full table.
+Fetched directly from `GET /api/cost` on mount (the same K7 `useRefs` pattern `Drawer.tsx` uses
+for card refs) rather than riding the WS snapshot: this is a filesystem fact about the repo, not
+board state, and nothing currently watches `CLAUDE.md`/`AGENTS.md`/`.mcp.json` for live updates.
+
+### Measured (locked decision 6) — two repos, 2026-09-17
+
+Both measured with the built CLI (`pnpm build` first). The freshpickedjobs run is **read-only**:
+`git -C .../freshpickedjobs status --short` was identical (empty) before and after.
+
+**repoboard itself** (`repoboard cost`, budget 8192 — the default; no `claudeMdBudgetBytes` set):
+
+| File | Bytes | ≈tok | Why |
+|---|---|---|---|
+| `CLAUDE.md` | 5,563 | ≈1,391 | root |
+| `docs/AGENTS.md` | 30,264 | ≈7,566 | agents |
+| `docs/BUILD-PLAN.md` | 30,288 | ≈7,572 | linked from CLAUDE.md |
+| `docs/HANDOFF.md` | 23,350 | ≈5,838 | linked from CLAUDE.md |
+| `docs/NEXT-AGENT-PROMPT.md` | 4,182 | ≈1,046 | linked from CLAUDE.md |
+| `README.md` | 18,228 | ≈4,557 | linked from CLAUDE.md |
+| **total** | **111,875** | **≈27,969** | |
+
+`CLAUDE.md 5,563 of budget 8,192` — **OK**.
+
+**freshpickedjobs** (`repoboard cost --root /Users/hometown/Projects/Repos/freshpickedjobs`, its
+own default budget — it has no `board.yml`):
+
+| File | Bytes | ≈tok | Why |
+|---|---|---|---|
+| `CLAUDE.md` | 4,996 | ≈1,249 | root |
+| `docs/STATE.md` | 5,253 | ≈1,313 | linked from CLAUDE.md |
+| `docs/OWNER-DECISIONS.md` | 4,661 | ≈1,165 | linked from CLAUDE.md |
+| `README.md` | 165,906 | ≈41,477 | linked from CLAUDE.md |
+| `docs/BUILD-PLAN.md` | 79,439 | ≈19,860 | linked from CLAUDE.md |
+| `docs/HANDOFF.md` | 2,152,432 | ≈538,108 | linked from CLAUDE.md |
+| `docs/ROUTER.md` | 16,133 | ≈4,033 | linked from CLAUDE.md |
+| `docs/VERIFICATION-SPECIES.md` | 13,707 | ≈3,427 | linked from CLAUDE.md |
+| `docs/SEARCH-SEAT-HANDOFF-2026-09-14.md` | 28,156 | ≈7,039 | linked from CLAUDE.md |
+| `docs/DRAFT-REVIEW-NOTES-2026-09-11.md` | 22,996 | ≈5,749 | linked from CLAUDE.md |
+| `docs/WORKDAY-UNPARK-RUNBOOK.md` | 10,429 | ≈2,607 | linked from CLAUDE.md |
+| `docs/archive/CLAUDE-2026-09-17.md` | 32,620 | ≈8,155 | linked from CLAUDE.md |
+| **total** | **2,536,728** | **≈634,182** | |
+
+`CLAUDE.md 4,996 of budget 8,192` — **OK** — the very file this task's own motivating measurement
+was about, now well under budget by design. **But the mechanical total is 2.5 MB, ≈634K tokens**,
+almost entirely `docs/HANDOFF.md` alone (2,152,432 B — 85% of the total): CLAUDE.md's own text
+names it as "the running record" to consult, not something eagerly loaded every turn, and this
+tool's literal backtick rule cannot tell the difference between "loaded always" and "referenced
+for later" — it counts every existing linked path the same way. **This is the measurement that
+contradicts the plausible assumption**: cutting `CLAUDE.md` to 4,996 B fixed the ONE number this
+tool gates on (locked decision 2 only budgets `CLAUDE.md` itself, on purpose), but did nothing to
+the much larger number a naive reading of "cold context total" would suggest. Read `total` as
+"every file this repo's CLAUDE.md points at, summed, whether or not an agent actually opens it
+this turn" — not as "what gets loaded automatically."
+
+### Bytes (O3) — the `cost` MCP tool
+
+| Surface | Bytes |
+|---|---|
+| MCP `cost` tool schema | 621 B |
+| MCP tool schema, 18 tools (P8.3 baseline) | 19,682 B |
+| MCP tool schema, **19 tools** (`client.listTools()`, sum of each tool's own `JSON.stringify`) | **20,303 B** (+621 B) |
+
+621 B is under the 700 B aim, for the same reason P8.2/P8.3's tools are: no `CARD_INTRO`/
+`ACTOR_DESC` reuse — a cost report is not a card.

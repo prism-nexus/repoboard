@@ -1354,4 +1354,111 @@ describe('repoboard check', () => {
     const strict = await repoboard(root, 'check', '--strict');
     expect(strict.code).toBe(1);
   });
+
+  it('picks up cost-over-budget as an error (blocks even without --strict)', async () => {
+    const root = await freshRepo({});
+    await writeFile(join(root, 'CLAUDE.md'), 'x'.repeat(9000));
+    const res = await repoboard(root, 'check');
+    expect(res.code).toBe(1);
+    expect(res.out).toContain('cost-over-budget: CLAUDE.md 9000 B > budget 8192 B');
+  });
+});
+
+describe('repoboard cost', () => {
+  it('reports an absent CLAUDE.md, exit 0, never OVER', async () => {
+    const root = await freshRepo({});
+    const res = await repoboard(root, 'cost');
+    expect(res.code).toBe(0);
+    expect(res.out).toContain('CLAUDE.md — absent');
+    expect(res.out).toContain('FILE');
+    expect(res.out).toContain('WHY');
+  });
+
+  it('table shows bytes, ≈tok, why, total, and the budget verdict; exit 1 when OVER', async () => {
+    const root = await freshRepo({});
+    await writeFile(join(root, 'CLAUDE.md'), 'x'.repeat(100));
+    const ok = await repoboard(root, 'cost', '--budget', '100');
+    expect(ok.code).toBe(0);
+    expect(ok.out).toContain('CLAUDE.md  100    ≈25   root');
+    expect(ok.out).toContain('total  100  ≈25');
+    expect(ok.out).toContain('CLAUDE.md 100 of budget 100  OK');
+
+    const over = await repoboard(root, 'cost', '--budget', '99');
+    expect(over.code).toBe(1);
+    expect(over.out).toContain('CLAUDE.md 100 of budget 99  OVER');
+  });
+
+  it('--json prints the whole report as one object', async () => {
+    const root = await freshRepo({});
+    await writeFile(join(root, 'CLAUDE.md'), 'x'.repeat(50));
+    const res = await repoboard(root, 'cost', '--budget', '8192', '--json');
+    expect(res.code).toBe(0);
+    const report = JSON.parse(res.out) as {
+      claudeMdBytes: number;
+      over: boolean;
+      entries: unknown[];
+    };
+    expect(report.claudeMdBytes).toBe(50);
+    expect(report.over).toBe(false);
+    expect(report.entries).toEqual([{ file: 'CLAUDE.md', bytes: 50, why: 'root' }]);
+  });
+
+  it("reads the budget from board.yml's claudeMdBudgetBytes when no --budget flag is given", async () => {
+    const root = await freshRepo({});
+    await writeFile(join(root, 'CLAUDE.md'), 'x'.repeat(100));
+    await writeFile(
+      join(root, '.repoboard', 'board.yml'),
+      'prefix: RB\nactiveWindowMinutes: 30\nclaudeMdBudgetBytes: 50\ncolumns:\n  - id: todo\n',
+    );
+    const res = await repoboard(root, 'cost');
+    expect(res.code).toBe(1);
+    expect(res.out).toContain('of budget 50  OVER');
+  });
+
+  it('a --budget flag wins over board.yml', async () => {
+    const root = await freshRepo({});
+    await writeFile(join(root, 'CLAUDE.md'), 'x'.repeat(100));
+    await writeFile(
+      join(root, '.repoboard', 'board.yml'),
+      'prefix: RB\nactiveWindowMinutes: 30\nclaudeMdBudgetBytes: 50\ncolumns:\n  - id: todo\n',
+    );
+    const res = await repoboard(root, 'cost', '--budget', '1000');
+    expect(res.code).toBe(0);
+    expect(res.out).toContain('of budget 1000  OK');
+  });
+
+  it('--root measures a directory with NO .repoboard/ at all (a plain board is not required)', async () => {
+    const dir = await makeTempDir('repoboard-cost-noboard-');
+    dirs.push(dir);
+    await writeFile(join(dir, 'CLAUDE.md'), 'x'.repeat(10));
+    // cwd is unrelated to `dir`, and there is no board anywhere above it or above cwd that
+    // could accidentally satisfy `costRoot` — the only path in is --root.
+    const res = await repoboard(await makeTempDir('repoboard-cost-cwd-'), 'cost', '--root', dir);
+    expect(res.code).toBe(0);
+    expect(res.out).toContain('CLAUDE.md  10');
+  });
+
+  it('--root on a fixture with no CLAUDE.md at all: absent, not a crash', async () => {
+    const repo = await makeTempRepoNoBoard({ 'README.md': 'hello' });
+    dirs.push(repo.root);
+    const res = await repoboard(await makeTempDir(), 'cost', '--root', repo.root);
+    expect(res.code).toBe(0);
+    expect(res.out).toContain('CLAUDE.md — absent');
+  });
+
+  it('--budget 0 or non-numeric is a user error', async () => {
+    const root = await freshRepo({});
+    expect((await repoboard(root, 'cost', '--budget', '0')).code).toBe(1);
+    expect((await repoboard(root, 'cost', '--budget', 'nope')).code).toBe(1);
+  });
+
+  it('the read-only proof: a real run against freshpickedjobs leaves its git status unchanged', async () => {
+    const fpjRoot = '/Users/hometown/Projects/Repos/freshpickedjobs';
+    const before = await execFileAsync('git', ['-C', fpjRoot, 'status', '--short']);
+    const res = await repoboard(await makeTempDir(), 'cost', '--root', fpjRoot);
+    expect(res.code).toBe(0);
+    const after = await execFileAsync('git', ['-C', fpjRoot, 'status', '--short']);
+    expect(after.stdout).toBe(before.stdout);
+    expect(after.stdout).toBe('');
+  });
 });

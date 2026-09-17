@@ -44,6 +44,7 @@ export const MCP_TOOL_NAMES = [
   'set_state_section',
   'append_repo_log',
   'check',
+  'cost',
 ] as const;
 
 export interface McpServerOptions {
@@ -640,14 +641,30 @@ export function createMcpServer(opts: McpServerOptions): McpServer {
       title: 'Health check: STATE, leases, decisions',
       description:
         'Call before starting and before stopping (locked practice). Returns {findings, ' +
-        'exitCode}: stale-state, active-without-lease (warning, only blocks strict), stale-lease ' +
-        'and needs-decision (informational). Empty findings means ok.',
+        'exitCode}: stale-state, active-without-lease (warning, only blocks strict), stale-lease, ' +
+        'cost-over-budget, and needs-decision (informational). Empty findings means ok.',
       inputSchema: {
         strict: z.boolean().optional().describe('Also block on warning-grade findings.'),
       },
       annotations: { readOnlyHint: true },
     },
     async ({ strict }) => ok(await store.check(strict ?? false)),
+  );
+
+  server.registerTool(
+    'cost',
+    {
+      title: 'Cold-context cost',
+      description:
+        'Bytes/≈tokens of what a cold agent loads: CLAUDE.md + variants, AGENTS.md + variants, ' +
+        'backticked paths CLAUDE.md names that exist, and MCP server names (not schema bytes). ' +
+        'over:true when CLAUDE.md exceeds budget (default 8192, or board.yml claudeMdBudgetBytes).',
+      inputSchema: {
+        budget: z.number().int().positive().optional().describe('Override the budget, in bytes.'),
+      },
+      annotations: { readOnlyHint: true },
+    },
+    async ({ budget }) => ok(await store.cost(budget)),
   );
 
   return server;

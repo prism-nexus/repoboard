@@ -1,5 +1,5 @@
 import { readFileSync } from 'node:fs';
-import { readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, rm, utimes, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { BoardConfig, Card } from '@repoboard/core';
@@ -393,6 +393,171 @@ describe('leases and windows (P8.2)', () => {
   });
 });
 
+describe('state and log (P8.3)', () => {
+  it('setStateSection scaffolds a fresh STATE.md when none exists, then restamps in place', async () => {
+    const repo = await repoWith({});
+    const store = await open(repo, false);
+    expect(store.state()).toBeNull();
+    const res = await store.setStateSection('live', 'Tree is dev.', 'claude/p8-3');
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    expect(res.doc.sections.live).toBe('Tree is dev.');
+    expect(res.doc.stamp).toBe('2026-09-02T22:41:10Z');
+    expect(res.doc.actor).toBe('claude/p8-3');
+    expect(store.state()).toEqual(res.doc);
+    const text = await readFile(join(repo.root, '.repoboard', 'STATE.md'), 'utf8');
+    expect(text).toContain('Tree is dev.');
+    expect(text).toContain('_(generated from open decisions)_');
+
+    const second = await store.setStateSection('seats', 'ops watching.', 'claude/ops');
+    expect(second.ok).toBe(true);
+    if (!second.ok) return;
+    expect(second.doc.sections.live).toBe('Tree is dev.'); // untouched
+    expect(second.doc.sections.seats).toBe('ops watching.');
+  });
+
+  it('an unknown/bad frontmatter-free STATE.md is refused with a named error', async () => {
+    const repo = await repoWith({});
+    await mkdir(join(repo.root, '.repoboard'), { recursive: true });
+    await writeFile(join(repo.root, '.repoboard', 'STATE.md'), 'not a state file at all');
+    const store = await open(repo, false);
+    const res = await store.setStateSection('live', 'x', 'claude/p8-3');
+    expect(res.ok).toBe(false);
+  });
+
+  it('appendRepoLog creates the header on the first call, appends after', async () => {
+    const repo = await repoWith({});
+    const store = await open(repo, false);
+    const first = await store.appendRepoLog('claude/p8-3', 'first entry', 'kickoff');
+    expect(first.ok).toBe(true);
+    if (!first.ok) return;
+    expect(first.date).toBe('2026-09-02');
+    expect(first.text).toBe(
+      '# Log — 2026-09-02\n\n##### CLAUDE/P8-3 2026-09-02T22:41:10Z: kickoff\n\nfirst entry\n',
+    );
+    const onDisk = await readFile(join(repo.root, '.repoboard', 'log', '2026-09-02.md'), 'utf8');
+    expect(onDisk).toBe(first.text);
+
+    const second = await store.appendRepoLog('ops', 'second entry', undefined);
+    expect(second.ok).toBe(true);
+    if (!second.ok) return;
+    expect(second.text).toContain('##### CLAUDE/P8-3');
+    expect(second.text).toContain('##### OPS 2026-09-02T22:41:10Z: second entry');
+    const log = await readFile(join(repo.root, '.repoboard', 'log', '2026-09-02.md'), 'utf8');
+    expect(log).toBe(second.text);
+  });
+
+  it('empty seat or text is refused', async () => {
+    const repo = await repoWith({});
+    const store = await open(repo, false);
+    expect(await store.appendRepoLog('  ', 'x', undefined)).toMatchObject({ ok: false });
+    expect(await store.appendRepoLog('ops', '  ', undefined)).toMatchObject({ ok: false });
+  });
+
+  it('store.log() reads a specific date, defaults to today, null when absent', async () => {
+    const repo = await repoWith({});
+    const store = await open(repo, false);
+    expect(await store.log()).toBeNull();
+    await store.appendRepoLog('ops', 'hello', undefined);
+    const today = await store.log();
+    expect(today?.date).toBe('2026-09-02');
+    expect(today?.blocks).toHaveLength(1);
+    expect(await store.log('2020-01-01')).toBeNull();
+  });
+
+  it('an external edit of STATE.md is re-read by the watcher', async () => {
+    const repo = await repoWith({});
+    const path = join(repo.root, '.repoboard', 'STATE.md');
+    // Pre-existing file, then a `change` event — the same pattern P8.2's own §7 settled on for
+    // leases.yml, because a brand-new file's chokidar `add` event is unreliable under concurrent
+    // watcher load in this sandbox (not a P8.3 defect).
+    await writeFile(
+      path,
+      '# STATE\n\n**Written 2026-09-02T00:00:00Z by hand.**\n\n## LIVE\n\nx\n\n## LAST LANDINGS\n\ny\n\n## OWNER QUEUE\n\n_(generated from open decisions)_\n\n## SEATS\n\nz\n',
+    );
+    const store = await open(repo, true);
+    const seen = waitForEvent(store, 'state', () => true);
+    await writeFile(
+      path,
+      '# STATE\n\n**Written 2026-09-02T12:00:00Z by hand.**\n\n## LIVE\n\nedited\n\n## LAST LANDINGS\n\ny\n\n## OWNER QUEUE\n\n_(generated from open decisions)_\n\n## SEATS\n\nz\n',
+    );
+    await seen;
+    await sleep(20);
+    expect(store.state()?.sections.live).toBe('edited');
+  });
+
+  it('an external edit of a log file is re-read by the watcher', async () => {
+    const repo = await repoWith({});
+    const logPath = join(repo.root, '.repoboard', 'log', '2026-09-02.md');
+    await mkdir(join(repo.root, '.repoboard', 'log'), { recursive: true });
+    await writeFile(logPath, '# Log — 2026-09-02\n\n');
+    const store = await open(repo, true);
+    const seen = waitForEvent<{ date: string; text: string }>(
+      store,
+      'log',
+      (p) => p.date === '2026-09-02',
+    );
+    await writeFile(
+      logPath,
+      '# Log — 2026-09-02\n\n##### CLI/HAND 2026-09-02T18:00:00Z: hand edit\n\nfrom outside\n',
+    );
+    const payload = await seen;
+    expect(payload.text).toContain('hand edit');
+  });
+
+  it('check aggregates findings from state, cards, leases; ok when clean', async () => {
+    const repo = await repoWith({});
+    // A mutable clock, not the fixed `NOW` the `open()` helper wires in: `stale-state` compares
+    // the STATE stamp against a log file's real filesystem mtime (controlled below via `utimes`,
+    // deterministic regardless of the actual wall-clock time this suite runs at), and the two
+    // `setStateSection` calls below need to land on either side of it.
+    let clock = NOW;
+    const store = await openStore(repo.root, { watch: false, now: () => clock });
+    opened.push(store);
+
+    const clean = await store.check(false);
+    expect(clean.findings).toEqual([]);
+    expect(clean.exitCode).toBe(0);
+
+    await store.setStateSection('live', 'first', 'claude/p8-3'); // stamp = NOW
+
+    const logDir = join(repo.root, '.repoboard', 'log');
+    await mkdir(logDir, { recursive: true });
+    const logPath = join(logDir, '2026-09-02.md');
+    await writeFile(logPath, '# Log — 2026-09-02\n\n##### OPS 2026-09-02T22:41:10Z: x\n\ny\n');
+    const later = new Date(NOW.getTime() + 60_000);
+    await utimes(logPath, later, later); // mtime strictly after the STATE stamp
+
+    const stale = await store.check(false);
+    expect(stale.findings.some((f) => f.kind === 'stale-state')).toBe(true);
+    expect(stale.exitCode).toBe(1);
+
+    clock = new Date(later.getTime() + 60_000); // now strictly after the log's mtime
+    await store.setStateSection('live', 'second', 'claude/p8-3'); // restamp
+    const fresh = await store.check(false);
+    expect(fresh.findings.some((f) => f.kind === 'stale-state')).toBe(false);
+  });
+
+  it('map-only: state()/log()/check() work as reads, writes refuse', async () => {
+    const repo = await makeTempRepoNoBoard({});
+    const store = await open(repo, false);
+    expect(store.state()).toBeNull();
+    expect(await store.log()).toBeNull();
+    const check = await store.check(false);
+    expect(check.exitCode).toBe(0);
+    expect(await store.setStateSection('live', 'x', 't')).toMatchObject({
+      ok: false,
+      readOnly: true,
+      error: MAP_ONLY_ERROR,
+    });
+    expect(await store.appendRepoLog('t', 'x', undefined)).toMatchObject({
+      ok: false,
+      readOnly: true,
+      error: MAP_ONLY_ERROR,
+    });
+  });
+});
+
 describe('watcher', () => {
   it('picks up an external sed-style edit and synthesises a file event', async () => {
     const repo = await repoWith({ 'RB-1.md': cardText('RB-1', 'todo') });
@@ -765,11 +930,13 @@ describe('K10 structure of store.ts', () => {
     expect(decls.map((d) => d[1]).sort()).toEqual([
       'addWindow',
       'appendLog',
+      'appendRepoLog',
       'ask',
       'create',
       'decide',
       'move',
       'releaseLease',
+      'setStateSection',
       'takeLease',
       'update',
     ]);
@@ -783,14 +950,18 @@ describe('K10 structure of store.ts', () => {
       'mutate',
       'mutate',
       'mutate',
+      'mutate',
+      'mutate',
     ]);
   });
 
-  it('all three disk writers open with the guard, on their first line', () => {
+  it('all five disk writers open with the guard, on their first line', () => {
     for (const decl of [
       'private async writeCard',
       'private async appendEvent',
       'private async writeLeases',
+      'private async writeState',
+      'private async writeLog',
     ]) {
       const [start, end] = methodRange(decl);
       const first = SRC.slice(start, end).split('\n')[1]?.trim();
@@ -803,6 +974,8 @@ describe('K10 structure of store.ts', () => {
       methodRange('private async writeCard'),
       methodRange('private async appendEvent'),
       methodRange('private async writeLeases'),
+      methodRange('private async writeState'),
+      methodRange('private async writeLog'),
     ];
     const writes = [...SRC.matchAll(/await (writeFile|appendFile|rename|mkdir)\(/g)];
     expect(writes.length).toBeGreaterThan(0);

@@ -16,6 +16,8 @@ import {
   isStale,
   type Lease,
   needsDecision,
+  renderState,
+  type StateSectionName,
   type Window,
 } from '@repoboard/core';
 import { z } from 'zod';
@@ -38,6 +40,10 @@ export const MCP_TOOL_NAMES = [
   'list_leases',
   'add_window',
   'check_window',
+  'get_state',
+  'set_state_section',
+  'append_repo_log',
+  'check',
 ] as const;
 
 export interface McpServerOptions {
@@ -557,6 +563,91 @@ export function createMcpServer(opts: McpServerOptions): McpServer {
     },
     ({ resource, at }) =>
       ok(store.checkResource(resource, at !== undefined ? new Date(at) : undefined)),
+  );
+
+  server.registerTool(
+    'get_state',
+    {
+      title: 'Get STATE.md, rendered',
+      description:
+        "The repo's one-page STATE.md: {stamp, actor, sections: {live, lastLandings, seats}, " +
+        'ownerQueue: [{id, question, options}], text}. OWNER QUEUE is generated fresh from cards ' +
+        'that need a decision — never trust stale text from a prior read.',
+      annotations: { readOnlyHint: true },
+    },
+    () => {
+      const doc = store.state();
+      if (!doc) return ok({ stamp: null, actor: null, sections: null, ownerQueue: [], text: null });
+      const openCards = store.list().filter((c) => needsDecision(c));
+      const ownerQueue = openCards.map((c) => ({
+        id: c.id,
+        question: c.decision?.question ?? '',
+        options: c.decision?.options ?? [],
+      }));
+      const text = renderState(doc.sections, openCards, {
+        now: new Date(Date.parse(doc.stamp)),
+        actor: doc.actor,
+      });
+      return ok({ stamp: doc.stamp, actor: doc.actor, sections: doc.sections, ownerQueue, text });
+    },
+  );
+
+  server.registerTool(
+    'set_state_section',
+    {
+      title: 'Replace one STATE.md section',
+      description:
+        'Replace LIVE, LAST-LANDINGS or SEATS and restamp; the other sections and OWNER QUEUE ' +
+        '(generated, never stored) are untouched. Scaffolds a fresh STATE.md if none exists.',
+      inputSchema: {
+        section: z.enum(['LIVE', 'LAST-LANDINGS', 'SEATS']),
+        body: z.string().min(1),
+        actor: z.string().optional().describe(ACTOR_SHORT),
+      },
+    },
+    async ({ section, body, actor }) => {
+      const key: StateSectionName =
+        section === 'LIVE' ? 'live' : section === 'LAST-LANDINGS' ? 'lastLandings' : 'seats';
+      const res = await store.setStateSection(key, body, actor ?? defaultActor);
+      if (!res.ok) return fail(res.error);
+      return ok(res.doc);
+    },
+  );
+
+  server.registerTool(
+    'append_repo_log',
+    {
+      title: "Append one block to today's log",
+      description:
+        'Append `text` under a `##### <SEAT> <ts>: <title>` heading to .repoboard/log/<today>.md ' +
+        '(creates the file if this is the first entry). Append-only — there is no rewrite.',
+      inputSchema: {
+        seat: z.string().min(1).describe('Who is writing, e.g. claude/p8-3.'),
+        text: z.string().min(1),
+        title: z.string().optional().describe('Defaults to the first line of text.'),
+      },
+    },
+    async ({ seat, text, title }) => {
+      const res = await store.appendRepoLog(seat, text, title);
+      if (!res.ok) return fail(res.error);
+      return ok({ date: res.date, block: res.block });
+    },
+  );
+
+  server.registerTool(
+    'check',
+    {
+      title: 'Health check: STATE, leases, decisions',
+      description:
+        'Call before starting and before stopping (locked practice). Returns {findings, ' +
+        'exitCode}: stale-state, active-without-lease (warning, only blocks strict), stale-lease ' +
+        'and needs-decision (informational). Empty findings means ok.',
+      inputSchema: {
+        strict: z.boolean().optional().describe('Also block on warning-grade findings.'),
+      },
+      annotations: { readOnlyHint: true },
+    },
+    async ({ strict }) => ok(await store.check(strict ?? false)),
   );
 
   return server;

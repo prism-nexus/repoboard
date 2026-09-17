@@ -15,6 +15,7 @@ import { useCallback, useMemo, useState } from 'react';
 import { CardItem } from '../components/CardItem.jsx';
 import { Column } from '../components/Column.jsx';
 import { Confetti } from '../components/Confetti.jsx';
+import { StatePanel } from '../components/StatePanel.jsx';
 import { useArrivals, useBoardState, useNow, useStore } from '../hooks.js';
 import { type ColumnCards, columnsWithCards, type Store } from '../store.js';
 
@@ -72,10 +73,22 @@ function NoBoard({ onShowMap }: { onShowMap: () => void }) {
   );
 }
 
+/** Scroll a column into view horizontally — StatePanel's owner-queue links use this. */
+function scrollColumnIntoView(columnId: string): void {
+  if (typeof document === 'undefined') return;
+  document
+    .querySelector(`[data-column="${columnId}"]`)
+    ?.scrollIntoView({ behavior: 'smooth', inline: 'center', block: 'nearest' });
+}
+
 export function Board() {
   const store = useStore();
-  const { config, cards, fun, selectedId, pinned, hasBoard } = useBoardState();
+  const { config, cards, fun, selectedId, pinned, hasBoard, state } = useBoardState();
   const now = useNow();
+  const decideColumnId = useMemo(
+    () => config?.columns.find((c) => c.decision === true)?.id ?? null,
+    [config],
+  );
   const columns = useMemo(() => columnsWithCards(config, cards), [config, cards]);
   const [dragging, setDragging] = useState<Card | null>(null);
 
@@ -120,44 +133,52 @@ export function Board() {
   }
   const nowDate = new Date(now);
   return (
-    <DndContext
-      sensors={sensors}
-      collisionDetection={closestCorners}
-      onDragStart={onDragStart}
-      onDragEnd={onDragEnd}
-      onDragCancel={() => setDragging(null)}
-    >
-      <div className={`board ${selectedId ? 'board--drawer' : ''}`} data-testid="board">
-        {columns.map((col) => (
-          <Column key={col.id} column={col}>
-            {col.cards.map((card) => (
-              <CardItem
-                key={card.id}
-                card={card}
-                active={isActive(card, config, nowDate)}
-                arrival={arrivals.byId.get(card.id)}
-                fun={fun}
-                onOpen={open}
-                pinned={pinned.includes(card.id)}
-                onPin={pin}
-                onHover={hover}
-              />
-            ))}
-          </Column>
-        ))}
-      </div>
-      <DragOverlay dropAnimation={fun ? undefined : null}>
-        {dragging ? (
-          <CardItem
-            card={dragging}
-            active={isActive(dragging, config, nowDate)}
-            fun={fun}
-            onOpen={open}
-            overlay
-          />
-        ) : null}
-      </DragOverlay>
-      {fun ? <Confetti burst={arrivals.doneBurst} origin={doneOrigin} /> : null}
-    </DndContext>
+    <div className="board-view">
+      <StatePanel
+        state={state}
+        cards={cards}
+        decideColumnId={decideColumnId}
+        onGoToDecide={scrollColumnIntoView}
+      />
+      <DndContext
+        sensors={sensors}
+        collisionDetection={closestCorners}
+        onDragStart={onDragStart}
+        onDragEnd={onDragEnd}
+        onDragCancel={() => setDragging(null)}
+      >
+        <div className={`board ${selectedId ? 'board--drawer' : ''}`} data-testid="board">
+          {columns.map((col) => (
+            <Column key={col.id} column={col}>
+              {col.cards.map((card) => (
+                <CardItem
+                  key={card.id}
+                  card={card}
+                  active={isActive(card, config, nowDate)}
+                  arrival={arrivals.byId.get(card.id)}
+                  fun={fun}
+                  onOpen={open}
+                  pinned={pinned.includes(card.id)}
+                  onPin={pin}
+                  onHover={hover}
+                />
+              ))}
+            </Column>
+          ))}
+        </div>
+        <DragOverlay dropAnimation={fun ? undefined : null}>
+          {dragging ? (
+            <CardItem
+              card={dragging}
+              active={isActive(dragging, config, nowDate)}
+              fun={fun}
+              onOpen={open}
+              overlay
+            />
+          ) : null}
+        </DragOverlay>
+        {fun ? <Confetti burst={arrivals.doneBurst} origin={doneOrigin} /> : null}
+      </DndContext>
+    </div>
   );
 }

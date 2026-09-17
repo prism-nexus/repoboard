@@ -3,9 +3,11 @@ import type {
   BoardConfig,
   Card,
   CardPatch,
+  DecisionOption,
   Event,
   Lease,
   RepoSnapshot,
+  StateSections,
   Window,
 } from '@repoboard/core';
 
@@ -22,6 +24,28 @@ export interface LeasesPayload {
 }
 
 /**
+ * P8.3: `GET /api/state`'s shape, and the `state` half of the WS snapshot. OWNER QUEUE is
+ * generated fresh server-side from cards that need a decision every time this is sent — but the
+ * web recomputes its OWN display list from the live `cards` it already has (P8.1's `needsDecision`
+ * + `ownerQueueLine`), so a `card` message updating a decision does not need a fresh `state`
+ * broadcast to stay accurate; `ownerQueue`/`text` here are for a plain HTTP/CLI/MCP caller.
+ * `stamp`/`sections`/etc. are all `null` before any STATE.md exists.
+ */
+export interface StatePayload {
+  stamp: string | null;
+  actor: string | null;
+  sections: StateSections | null;
+  ownerQueue: Array<{ id: string; question: string; options: DecisionOption[] }>;
+  text: string | null;
+}
+
+/** P8.3: one `.repoboard/log/<date>.md` file — the `log` half of the WS snapshot and messages. */
+export interface LogPayload {
+  date: string;
+  text: string;
+}
+
+/**
  * P7.2: `hasBoard` is false when the served root has no `.repoboard/` — map-only mode. It is
  * optional here because it is an additive field: a payload without it is one that predates P7.2,
  * and the safe reading of "absent" is "there is a board", which shows everything rather than
@@ -29,6 +53,8 @@ export interface LeasesPayload {
  *
  * P8.2: `leases` on the snapshot is optional the same way — absent means "no leases, no windows",
  * never a crash, so a mock or a pre-P8.2 payload still renders (the Now strip's quiet line).
+ *
+ * P8.3: `state`/`log` are optional the same way — absent means "nothing yet", never a crash.
  */
 export type ServerMessage =
   | {
@@ -36,12 +62,16 @@ export type ServerMessage =
       board: { config: BoardConfig; cards: Card[]; hasBoard?: boolean };
       repo: RepoSnapshot | null;
       leases?: LeasesPayload;
+      state?: StatePayload;
+      log?: LogPayload;
     }
   | { type: 'card'; card: Card }
   | { type: 'card:removed'; id: string }
   | { type: 'repo'; repo: RepoSnapshot }
   | { type: 'event'; event: Event }
-  | { type: 'leases'; leases: LeasesPayload };
+  | { type: 'leases'; leases: LeasesPayload }
+  | { type: 'state'; state: StatePayload }
+  | { type: 'log'; date: string; text: string };
 
 export type ClientMessage =
   | { type: 'card:move'; id: string; status: string }

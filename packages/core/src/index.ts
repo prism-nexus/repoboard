@@ -40,6 +40,7 @@ export type {
 export {
   addWindow,
   checkResource,
+  holdsLiveLease,
   isStale,
   LeaseSchema,
   LeasesSchema,
@@ -73,6 +74,32 @@ export {
   resolveRefText,
   splitLines,
 } from './refs.js';
+export type { LogBlock, LogBlockInput } from './repolog.js';
+export { appendLogBlock, dailyLogHeader, formatLogBlock, parseLogBlocks } from './repolog.js';
+export type {
+  CheckInput,
+  Finding,
+  FindingLevel,
+  LogFileInfo,
+  SetStateSectionResult,
+  StateDoc,
+  StateParseResult,
+  StateSectionName,
+  StateSections,
+} from './state.js';
+export {
+  checkFindings,
+  costFinding,
+  exitCodeForFindings,
+  initialStateText,
+  OWNER_QUEUE_PLACEHOLDER,
+  ownerQueueLine,
+  parseState,
+  renderOwnerQueue,
+  renderState,
+  SECTION_PLACEHOLDER,
+  setStateSection,
+} from './state.js';
 export { toIso } from './time.js';
 export type {
   CardPatch,

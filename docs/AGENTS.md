@@ -25,12 +25,15 @@ published). It finds `.repoboard/` by walking up from the current directory.
 
 | Command | Example |
 |---|---|
-| `repoboard init` | `repoboard init` — creates `.repoboard/` with the default board and card `RB-1 Welcome` |
+| `repoboard init [--practices]` | `repoboard init` — creates `.repoboard/` with the default board and card `RB-1 Welcome`; `--practices` also scaffolds `STATE.md`, today's log, `leases.yml` and a root `NEXT-AGENT-PROMPT.md` (section 10) |
 | `repoboard card add "<title>" [--status s] [--assignee a] [--priority p] [--label l]... [--file f]... [--ref r]... [--body md] [--as actor]` | `repoboard card add "Treemap view: files by size" --status todo --label web --ref docs/BUILD-PLAN.md@P4.1 --as claude/web-agent` |
 | `repoboard card move <id> <status> [--as actor]` | `repoboard card move RB-12 doing --as claude/web-agent` |
 | `repoboard card update <id> [--title t] [--assignee a] [--priority p] [--label l]... [--file f]... [--ref r]... [--clear field]... [--as actor]` | `repoboard card update RB-12 --assignee claude/web-agent --priority high --as claude/web-agent` |
 | `repoboard card list [--status s] [--json [--full]]` | `repoboard card list --status doing` |
 | `repoboard card show <id> [--resolve]` | `repoboard card show RB-12` — prints the card file; `--resolve` appends each `refs:` target's live lines (section 4) |
+| `repoboard state [--set-section s (<text>\|--stdin)]` | `repoboard state` — prints the rendered STATE.md (section 10) |
+| `repoboard log --as <seat> [--title t] (<text>\|--stdin)` / `log show [--date d] [--seat s]` | `repoboard log --as claude/ops "armed the fires"` (section 10) |
+| `repoboard check [--json] [--strict]` | `repoboard check` — exit 0 `ok`, or 1 with findings (section 10) |
 | `repoboard serve [--port 4242] [--open] [--no-fun]` | `repoboard serve --open` — the dashboard on 127.0.0.1 |
 | `repoboard mcp [--root <dir>]` | `repoboard mcp` — the MCP server on stdio (section 3) |
 
@@ -90,7 +93,8 @@ The same thing as a `.mcp.json` at the repo root:
 The server finds `.repoboard/` by walking up from its working directory; pass `--root <dir>` when it is
 launched from somewhere else. Tools: `list_cards`, `get_card`, `create_card`, `move_card`,
 `update_card`, `append_log`, `board_summary`, `ask_owner`, `record_decision` (P8.1, section 8),
-`take_lease`, `release_lease`, `list_leases`, `add_window`, `check_window` (P8.2, section 9).
+`take_lease`, `release_lease`, `list_leases`, `add_window`, `check_window` (P8.2, section 9),
+`get_state`, `set_state_section`, `append_repo_log`, `check` (P8.3, section 10).
 Call `list_cards` or `board_summary` first: they
 are cheap and return the column ids. `list_cards` takes optional `status`, `assignee`, `label`
 filters (exact match, AND) and `full: true` to include bodies; without it, rows are the same
@@ -373,3 +377,123 @@ Per-tool bytes of the five new tools: `take_lease` 691 B, `release_lease` 509 B,
 400 B, `add_window` 630 B, `check_window` 645 B — every one at or under the 700 B budget a terse
 tool aims for (contrast P8.1's `ask_owner`/`record_decision` at 2,191 B / 1,514 B, which reused the
 long `CARD_INTRO` prefix; these five do not, because a lease is not a card).
+
+## 10. State, log, check (P8.3)
+
+Three more plain files, sitting beside `board.yml` and `leases.yml`: `.repoboard/STATE.md` (one
+page, rewritten in place, never appended), `.repoboard/log/YYYY-MM-DD.md` (one file per day,
+append-only, every seat's own block), and `repoboard check`, which reads all of the above plus the
+board and leases and reports what needs attention. `repoboard init --practices` scaffolds all
+three (plus a root `NEXT-AGENT-PROMPT.md`) the first time a repo adopts this — see §1's table for
+the full command list.
+
+```markdown
+# STATE
+
+**Written 2026-09-17T21:00:00Z by claude/ops.**
+
+## LIVE
+
+Tree: dev = origin/main = e000c5d.
+
+## LAST LANDINGS
+
+0. K117 landed, hot, no migration.
+
+## OWNER QUEUE
+
+_(generated from open decisions)_
+
+## SEATS
+
+ops: watching the run.
+```
+
+**OWNER QUEUE is GENERATED, never typed or stored.** The file on disk always keeps the one-line
+placeholder shown above; every read (`repoboard state`, `GET /api/state`, MCP `get_state`)
+substitutes the current list of cards with an open decision (P8.1's `needsDecision`), one line per
+card: `RCB-40 · <question> · [A B]`. A card's decision changing therefore never requires rewriting
+STATE.md — only `LIVE`, `LAST LANDINGS` and `SEATS` are ever written, by
+`repoboard state --set-section <SECTION> (<text> | --stdin)`, which restamps line 3 and leaves
+every other section byte-identical.
+
+### CLI
+
+| Command | Example |
+|---|---|
+| `repoboard state` | prints the rendered page (OWNER QUEUE generated fresh) |
+| `repoboard state --set-section LIVE\|LAST-LANDINGS\|SEATS (<text> \| --stdin) [--as a]` | `repoboard state --set-section LIVE "Tree is dev." --as claude/ops` → `updated STATE.md LIVE` |
+| `repoboard log --as <seat> [--title "…"] (<text> \| --stdin)` | `repoboard log --as claude/ops --title "armed the fires" "Five waiters set."` → `logged 2026-09-17 claude/ops` — creates today's file if this is the first entry |
+| `repoboard log show [--date YYYY-MM-DD] [--seat s]` | prints a day's log (default today); `--seat` filters to that seat's own blocks |
+| `repoboard check [--json] [--strict]` | exit 0 `ok` with no findings, else exit 1 (or 0 if every finding is warning-grade and `--strict` is absent) with one line per finding |
+| `repoboard init --practices` | scaffolds `STATE.md`, today's log, `leases.yml`, and a root `NEXT-AGENT-PROMPT.md` — **never overwrites an existing file**, printing `kept <path>` for each; works whether or not `.repoboard/` already existed |
+
+A log block is `##### <SEAT-UPPERCASED> <ISO>: <title or first line>`, a blank line, then the text
+verbatim — append-only, so a hand `sed` can add to it but core exposes no rewrite. `--as` on `log`
+uses the same actor chain as everywhere else (`$REPOBOARD_ACTOR`, then `$USER`, then `cli`).
+
+### `repoboard check`'s findings
+
+| Kind | Level | Fires when | Blocks by default? |
+|---|---|---|---|
+| `stale-state` | error | STATE's stamp is older than the newest log file's mtime OR the newest `#####` header time inside it, whichever is later | yes |
+| `active-without-lease` | warning | a card in an `active: true` column whose `assignee` holds no live lease on any resource | only with `--strict` |
+| `stale-lease` | error | any lease past `until` (one finding per lease) | yes |
+| `needs-decision` | info | count of cards with an open decision; only emitted when > 0 | never |
+| `cost-over-budget` | — | stubbed (`costFinding()` returns `null`) — P8.4 fills this in | — |
+
+Findings are pure data (`{kind, level, message}`); `exitCodeForFindings(findings, strict)` is the
+one function every surface (CLI, HTTP, MCP) calls to turn them into the 0/1 contract, so the
+meaning of `--strict` cannot drift between surfaces.
+
+### MCP
+
+`get_state()` → `{stamp, actor, sections: {live, lastLandings, seats}, ownerQueue: [{id, question,
+options}], text}` (nulls before any STATE.md exists), `set_state_section(section, body, actor?)`,
+`append_repo_log(seat, text, title?)`, `check(strict?)` → `{findings, exitCode}`. All four are
+terse (no `CARD_INTRO`, matching P8.2's five lease tools) and each measures under 700 B.
+
+### HTTP
+
+`GET /api/state` (same shape as MCP `get_state`), `PUT /api/state/section`
+`{section, body, actor?}` — 200 with the refreshed state, 400 for a bad section/empty body, 409
+map-only. `GET /api/log?date=` → `{date, text, blocks}`, 404 when that date has no file;
+`POST /api/log` `{seat, text, title?}` — 200 with `{date, text, block}`, 400/409 as above.
+`GET /api/check?strict=1` is a pure read, always 200 (`{findings, exitCode}` — exitCode is data,
+not a status code, the same reasoning as `GET /api/leases/check/:resource`). The WS `snapshot`
+carries `state` and today's `log`; a `{type:"state", state}` message follows any rewrite (from any
+surface), and `{type:"log", date, text}` follows any append or external edit of that day's file.
+
+### Web
+
+STATE renders as a collapsible panel (`data-testid="state-panel"`) at the top of the Board view;
+the collapsed/expanded choice is remembered in `localStorage` as a per-viewer convenience (never
+in the shared store). **The web does NOT trust the wire payload's own `ownerQueue` field for
+display** — it recomputes the queue from the live `cards` it already has, via the same
+`needsDecision`/`ownerQueueLine` core functions the server uses, so a card's decision changing
+updates the panel the instant the `card` message arrives, with no dependency on a fresh `state`
+broadcast. **O11 retired the `needs decision` TopBar filter**, so a queue line does not toggle
+anything — it scrolls the board to the first `decision: true` column (orchestrator note 2). The
+daily log renders as a timeline beside the Ticker (`data-testid="log-timeline"`), newest block
+first, one `<details>` disclosure per block (seat avatar, title, expand for the full text).
+
+### Bytes (O3)
+
+`state`/`log` measured with the built CLI against a fixture whose `LIVE`/`LAST LANDINGS`/`SEATS`
+content is sized like freshpickedjobs' real `docs/STATE.md` (2026-09-17); `check`/`get_state`
+measured via the MCP client the same way as §8/§9's tables.
+
+| Surface | Bytes |
+|---|---|
+| `repoboard state` (rendered page, no open decisions) | 1,186 B |
+| `repoboard state` (same page, 4 cards / 2 with an open decision) | 1,212 B (+26 B: two `RB-n · <question> · [letters]` lines replacing the placeholder) |
+| `repoboard log show` (3 blocks, one per seat) | 242 B |
+| MCP `get_state` result | 515 B |
+| MCP `check` result (clean fixture, empty findings) | 83 B |
+| MCP tool schema, 14 tools (P8.2 baseline) | 17,411 B |
+| MCP tool schema, **18 tools** (`client.listTools()`, sum of each tool's own `JSON.stringify`) | **19,682 B** (+2,271 B for the four P8.3 tools) |
+
+Per-tool bytes of the four new tools: `get_state` 432 B, `set_state_section` 645 B,
+`append_repo_log` 628 B, `check` 566 B — every one under the 700 B budget, for the same reason
+P8.2's five lease tools are: no `CARD_INTRO`/`ACTOR_DESC` reuse, because state/log/check are not
+cards.

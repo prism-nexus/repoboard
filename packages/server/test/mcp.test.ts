@@ -68,13 +68,15 @@ const CARD_TOOLS = [
   'record_decision',
 ];
 const LEASE_TOOLS = ['take_lease', 'release_lease', 'list_leases', 'add_window', 'check_window'];
+/** P8.3: the four state/log/check tools — same terse-description budget as P8.2's lease tools. */
+const STATE_TOOLS = ['get_state', 'set_state_section', 'append_repo_log', 'check'];
 
 describe('repoboard mcp: handshake and tool list', () => {
-  it('lists exactly the fourteen tools of the brief, card tools described for a newcomer', async () => {
+  it('lists exactly the eighteen tools of the brief, card tools described for a newcomer', async () => {
     const r = await rig();
     const { tools } = await r.client.listTools();
     expect(tools.map((t) => t.name).sort()).toEqual([...MCP_TOOL_NAMES].sort());
-    expect(tools).toHaveLength(CARD_TOOLS.length + LEASE_TOOLS.length);
+    expect(tools).toHaveLength(CARD_TOOLS.length + LEASE_TOOLS.length + STATE_TOOLS.length);
     for (const t of tools) {
       if (!CARD_TOOLS.includes(t.name)) continue;
       expect(t.description, t.name).toMatch(/A card is one task/);
@@ -97,6 +99,31 @@ describe('repoboard mcp: handshake and tool list', () => {
     }
     // Not a magic number: just proves the test above actually measured something real.
     expect(Object.values(bytes).every((b) => b > 0)).toBe(true);
+  });
+
+  it('P8.3: the four state/log/check tool descriptions are terse (<=700 B each)', async () => {
+    const r = await rig();
+    const { tools } = await r.client.listTools();
+    const byName = new Map(tools.map((t) => [t.name, t]));
+    const bytes: Record<string, number> = {};
+    for (const name of STATE_TOOLS) {
+      const t = byName.get(name);
+      expect(t, name).toBeDefined();
+      bytes[name] = Buffer.byteLength(JSON.stringify(t));
+      expect(bytes[name], name).toBeLessThanOrEqual(700);
+    }
+    expect(Object.values(bytes).every((b) => b > 0)).toBe(true);
+  });
+
+  it('the full schema, all eighteen tools, is reported here (orchestrator note 1)', async () => {
+    const r = await rig();
+    const { tools } = await r.client.listTools();
+    const total = tools.reduce((sum, t) => sum + Buffer.byteLength(JSON.stringify(t)), 0);
+    // A measurement, not an assertion beyond "it grew and every tool reported a byte count" —
+    // the exact number belongs in the brief's §7 log, not frozen into a test that would need
+    // editing every time any tool's wording changes.
+    expect(total).toBeGreaterThan(0);
+    expect(tools.every((t) => Buffer.byteLength(JSON.stringify(t)) > 0)).toBe(true);
   });
 
   it('check_window carries the authority sentence locked decision 7 requires verbatim', async () => {
@@ -558,5 +585,120 @@ describe('repoboard mcp: take_lease / release_lease / list_leases / add_window /
     const res = (await client.callTool({ name: 'list_leases', arguments: {} })) as CallToolResult;
     const parsed = JSON.parse(textOf(res)) as { windows: unknown[] };
     expect(parsed.windows).toHaveLength(1); // still there: a read never prunes
+  });
+});
+
+describe('repoboard mcp: get_state / set_state_section / append_repo_log / check (P8.3)', () => {
+  it('get_state before any STATE.md exists: nulls, not a crash', async () => {
+    const r = await rig();
+    const state = await r.json<{ stamp: null; text: null; ownerQueue: unknown[] }>('get_state');
+    expect(state).toEqual({ stamp: null, actor: null, sections: null, ownerQueue: [], text: null });
+  });
+
+  it('set_state_section scaffolds then restamps; get_state renders it with generated OWNER QUEUE', async () => {
+    const r = await rig();
+    const set = await r.json<{ sections: { live: string } }>('set_state_section', {
+      section: 'LIVE',
+      body: 'Tree is dev.',
+      actor: 'claude/p8-3',
+    });
+    expect(set.sections.live).toBe('Tree is dev.');
+    const state = await r.json<{ text: string; ownerQueue: unknown[] }>('get_state');
+    expect(state.text).toContain('Tree is dev.');
+    expect(state.text).toContain('_(generated from open decisions)_');
+    expect(state.ownerQueue).toEqual([]);
+  });
+
+  it("get_state's ownerQueue reflects a card with an open decision", async () => {
+    const r = await rig({ 'RB-1.md': cardText('RB-1', 'todo') });
+    await r.json('set_state_section', { section: 'LIVE', body: 'x' });
+    await r.json('ask_owner', {
+      id: 'RB-1',
+      question: 'ship now?',
+      options: [{ letter: 'A', text: 'yes' }],
+    });
+    const state = await r.json<{
+      ownerQueue: Array<{ id: string; question: string }>;
+      text: string;
+    }>('get_state');
+    expect(state.ownerQueue).toEqual([
+      { id: 'RB-1', question: 'ship now?', options: [{ letter: 'A', text: 'yes' }] },
+    ]);
+    expect(state.text).toContain('RB-1 · ship now? · [A]');
+  });
+
+  it('an unknown section is an error result naming the valid ones', async () => {
+    const r = await rig();
+    const res = await r.call('set_state_section', { section: 'NOPE', body: 'x' });
+    expect(res.isError).toBe(true);
+  });
+
+  it('append_repo_log creates the day file, then appends a second block', async () => {
+    const r = await rig();
+    const first = await r.json<{ date: string; block: { seat: string; title: string } }>(
+      'append_repo_log',
+      { seat: 'claude/p8-3', text: 'first entry', title: 'kickoff' },
+    );
+    expect(first.date).toBe('2026-09-02');
+    expect(first.block.seat).toBe('CLAUDE/P8-3');
+    expect(first.block.title).toBe('kickoff');
+    const log = await readFile(join(r.repo.root, '.repoboard', 'log', '2026-09-02.md'), 'utf8');
+    expect(log).toContain('kickoff');
+
+    await r.json('append_repo_log', { seat: 'ops', text: 'second entry' });
+    const after = await readFile(join(r.repo.root, '.repoboard', 'log', '2026-09-02.md'), 'utf8');
+    expect(after).toContain('kickoff');
+    expect(after).toContain('second entry');
+  });
+
+  it('empty seat/text is an error result', async () => {
+    const r = await rig();
+    expect((await r.call('append_repo_log', { seat: '  ', text: 'x' })).isError).toBe(true);
+  });
+
+  it('check: ok (empty findings, exitCode 0) on a clean fixture', async () => {
+    const r = await rig();
+    const res = await r.json<{ findings: unknown[]; exitCode: number }>('check');
+    expect(res).toEqual({ findings: [], exitCode: 0 });
+  });
+
+  it('check: a stale lease is an error-grade finding, exitCode 1 even without strict', async () => {
+    const r = await rig();
+    await r.json('take_lease', {
+      resource: 'r',
+      actor: 'claude/ops',
+      until: '2020-01-01T00:00:00Z',
+    });
+    const res = await r.json<{ findings: Array<{ kind: string }>; exitCode: number }>('check');
+    expect(res.findings.some((f) => f.kind === 'stale-lease')).toBe(true);
+    expect(res.exitCode).toBe(1);
+  });
+
+  it('check: strict turns a warning-grade active-without-lease finding into exitCode 1', async () => {
+    // cardText's fixed `updated: 2026-09-02T22:00:00Z` is 41 minutes before NOW
+    // (2026-09-02T22:41:10Z) — outside the default 30-minute active window — so this card is
+    // written with `updated` at NOW itself, to land inside it.
+    const r = await rig({
+      'RB-1.md': [
+        '---',
+        'id: RB-1',
+        'title: "active card"',
+        'status: doing',
+        'assignee: claude/p8-3',
+        'created: 2026-09-02T22:00:00Z',
+        'updated: 2026-09-02T22:41:10Z',
+        '---',
+        '',
+        'Body.',
+        '',
+      ].join('\n'),
+    });
+    const plain = await r.json<{ findings: Array<{ kind: string }>; exitCode: number }>('check', {
+      strict: false,
+    });
+    expect(plain.findings.some((f) => f.kind === 'active-without-lease')).toBe(true);
+    expect(plain.exitCode).toBe(0);
+    const strict = await r.json<{ exitCode: number }>('check', { strict: true });
+    expect(strict.exitCode).toBe(1);
   });
 });

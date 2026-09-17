@@ -7,7 +7,9 @@ import type { BoardConfig, Card, CardPatch, Event, RepoSnapshot } from '@repoboa
 import type {
   ClientMessage,
   LeasesPayload,
+  LogPayload,
   ServerMessage,
+  StatePayload,
   Transport,
   TransportFactory,
 } from './wire.js';
@@ -32,6 +34,10 @@ export interface State {
   repo: RepoSnapshot | null;
   /** P8.2: `.repoboard/leases.yml`, or null before the first snapshot (the Now strip's quiet line). */
   leases: LeasesPayload | null;
+  /** P8.3: `.repoboard/STATE.md`, or null before the first snapshot / before it exists. */
+  state: StatePayload | null;
+  /** P8.3: today's `.repoboard/log/<date>.md`, or null before the first snapshot / before it exists. */
+  log: LogPayload | null;
   events: Event[];
   connected: boolean;
   /** False until the first snapshot; the disconnected banner only shows after that. */
@@ -106,6 +112,8 @@ export function createStore(factory: TransportFactory, opts: StoreOptions = {}):
     cards: [],
     repo: null,
     leases: null,
+    state: null,
+    log: null,
     events: [],
     connected: false,
     everConnected: false,
@@ -189,6 +197,8 @@ export function createStore(factory: TransportFactory, opts: StoreOptions = {}):
             cards: msg.board.cards,
             repo: msg.repo,
             leases: msg.leases ?? null,
+            state: msg.state ?? null,
+            log: msg.log ?? null,
             everConnected: true,
             fun: chosen === null || chosen === undefined ? funFromConfig : chosen === '1',
             // Map is the default tab in map-only mode, but only on the FIRST snapshot: a
@@ -218,6 +228,12 @@ export function createStore(factory: TransportFactory, opts: StoreOptions = {}):
           break;
         case 'leases':
           set({ leases: msg.leases });
+          break;
+        case 'state':
+          set({ state: msg.state });
+          break;
+        case 'log':
+          set({ log: { date: msg.date, text: msg.text } });
           break;
       }
     },

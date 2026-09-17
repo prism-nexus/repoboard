@@ -15,12 +15,19 @@ import {
   type CreateCardInput,
   createCard,
   type DecisionOption,
+  dailyLogHeader,
   defaultBoardConfig,
+  formatLogBlock,
+  initialStateText,
   needsDecision,
   type Priority,
+  renderState,
   resolveTimeSpec,
+  type StateSectionName,
   serializeBoard,
   serializeCard,
+  serializeLeases,
+  toIso,
 } from '@repoboard/core';
 import { type RunningServer, startServer } from './http.js';
 import {
@@ -51,6 +58,8 @@ export interface CliIO {
   openUrl?: (url: string) => void;
   /** Clock override. */
   now?: () => Date;
+  /** Reads all of stdin as a UTF-8 string. Defaults to reading `process.stdin`. Tests override it. */
+  readStdin?: () => Promise<string>;
 }
 
 /** A mistake by the caller: printed as one line, exit 1. */
@@ -59,7 +68,10 @@ export class UserError extends Error {}
 const HELP = `repoboard — Remember · Connect · Build
 
 Usage:
-  repoboard init                              create .repoboard/ with a default board and a first card
+  repoboard init [--practices]                 create .repoboard/ with a default board and a first card;
+                                        --practices also scaffolds STATE.md, today's log,
+                                        leases.yml and a root NEXT-AGENT-PROMPT.md if absent —
+                                        works on a repo that already has a board too
   repoboard card add "<title>" [options]      --status s --assignee a --priority high|medium|low
                                         --label l (repeatable) --file f (repeatable) --ref r (repeatable)
                                         --as actor
@@ -94,6 +106,17 @@ Usage:
                                         exit 0 "clear <resource>" when nothing blocks it; exit 1
                                         naming what does (a window, a live lease, or both) — this is
                                         what a lock shim calls
+  repoboard state                              print the rendered STATE.md (OWNER QUEUE generated
+                                        fresh from cards that need a decision)
+  repoboard state --set-section LIVE|LAST-LANDINGS|SEATS (<text> | --stdin) [--as a]
+                                        replace one section's body and restamp
+  repoboard log --as <seat> [--title "…"] (<text> | --stdin)
+                                        append one block to today's .repoboard/log/<date>.md
+  repoboard log show [--date YYYY-MM-DD] [--seat s]
+                                        print a day's log (default today), optionally one seat's blocks
+  repoboard check [--json] [--strict]  exit 0 "ok" / 1 with one line per finding: stale-state,
+                                        active-without-lease (warning; blocks only with --strict),
+                                        stale-lease, needs-decision (informational, never fails)
   repoboard serve [--root <dir>] [--port 4242] [--open] [--no-fun]
                                         start the dashboard (binds 127.0.0.1); --root serves that
                                         directory as given — a directory with no .repoboard/ opens
@@ -173,6 +196,38 @@ function actorFrom(flag: string | undefined, io: CliIO): string {
   return flag || env.REPOBOARD_ACTOR || env.USER || 'cli';
 }
 
+function defaultReadStdin(): Promise<string> {
+  return new Promise((resolve_, reject) => {
+    let data = '';
+    process.stdin.setEncoding('utf8');
+    process.stdin.on('data', (chunk: string) => {
+      data += chunk;
+    });
+    process.stdin.on('end', () => resolve_(data));
+    process.stdin.on('error', reject);
+  });
+}
+
+/** P8.3: `--stdin` on `state --set-section` / `log`. Tests inject `io.readStdin`. */
+async function readStdin(io: CliIO): Promise<string> {
+  return (io.readStdin ?? defaultReadStdin)();
+}
+
+/** P8.3: `state --set-section` accepts the CLI-friendly hyphenated form. */
+const SECTION_NAMES: Record<string, StateSectionName> = {
+  LIVE: 'live',
+  'LAST-LANDINGS': 'lastLandings',
+  SEATS: 'seats',
+};
+
+function sectionNameFrom(v: string): StateSectionName {
+  const key = SECTION_NAMES[v.toUpperCase()];
+  if (!key) {
+    throw new UserError(`--set-section must be one of LIVE, LAST-LANDINGS, SEATS (got "${v}")`);
+  }
+  return key;
+}
+
 function priorityFrom(v: string | undefined): Priority | undefined {
   if (v === undefined) return undefined;
   if (!PRIORITIES.has(v)) throw new UserError(`priority must be high, medium or low (got "${v}")`);
@@ -181,36 +236,115 @@ function priorityFrom(v: string | undefined): Priority | undefined {
 
 // ---- commands ---------------------------------------------------------------------------
 
+/**
+ * P8.3 `init --practices`'s eight-line `NEXT-AGENT-PROMPT.md`, adapted from the reference
+ * implementation (freshpickedjobs' own, read-only) to this repo's `.repoboard/` paths and
+ * command names. Never overwrites (locked decision 3).
+ */
+function nextAgentPromptText(): string {
+  return [
+    '# Next agent — eight lines',
+    '',
+    "1. Read `CLAUDE.md` (or this repo's equivalent) — it routes.",
+    '2. Read `.repoboard/STATE.md` — if its stamp is older than the newest `.repoboard/log/` file,',
+    '   the log wins.',
+    "3. Read today's and yesterday's `.repoboard/log/<date>.md`.",
+    '4. Read decided cards (`repoboard card list --json`, the `decision` block) before asking the',
+    '   owner anything — a decided card is authority.',
+    '5. The queue is the board (`repoboard card list --status todo`).',
+    '6. Write your block with `repoboard log --as <seat>` as you go.',
+    '7. Rewrite STATE when you stand down (`repoboard state --set-section <SECTION> --stdin`).',
+    '8. `repoboard check` before you start and before you stop.',
+    '',
+  ].join('\n');
+}
+
+/** `created <path>` / `kept <path>` — never overwrites an existing file (locked decision 3). */
+async function scaffoldIfAbsent(
+  path: string,
+  content: string,
+  io: CliIO,
+  label: string,
+): Promise<void> {
+  const present = await stat(path).then(
+    () => true,
+    () => false,
+  );
+  if (present) {
+    io.stdout.write(`kept ${label}\n`);
+    return;
+  }
+  await mkdir(dirname(path), { recursive: true });
+  await writeFile(path, content, 'utf8');
+  io.stdout.write(`created ${label}\n`);
+}
+
+/** P8.3: `repoboard init --practices` — STATE.md, today's log, leases.yml, root NEXT-AGENT-PROMPT.md. */
+async function scaffoldPractices(root: string, io: CliIO): Promise<void> {
+  const now = io.now?.() ?? new Date();
+  const repoboardDir = join(root, '.repoboard');
+  const date = toIso(now).slice(0, 10);
+  await scaffoldIfAbsent(
+    join(repoboardDir, 'STATE.md'),
+    initialStateText({ now, actor: 'repoboard init' }),
+    io,
+    '.repoboard/STATE.md',
+  );
+  await scaffoldIfAbsent(
+    join(repoboardDir, 'log', `${date}.md`),
+    `${dailyLogHeader(date)}\n\n`,
+    io,
+    `.repoboard/log/${date}.md`,
+  );
+  await scaffoldIfAbsent(
+    join(repoboardDir, 'leases.yml'),
+    serializeLeases({ leases: [], windows: [] }),
+    io,
+    '.repoboard/leases.yml',
+  );
+  await scaffoldIfAbsent(
+    join(root, 'NEXT-AGENT-PROMPT.md'),
+    nextAgentPromptText(),
+    io,
+    'NEXT-AGENT-PROMPT.md',
+  );
+}
+
 async function cmdInit(args: string[], io: CliIO): Promise<number> {
-  parse(args, {});
+  const { values } = parse(args, { practices: { type: 'boolean', default: false } });
   const root = resolve(io.cwd);
   const repoboardDir = join(root, '.repoboard');
   const present = await stat(repoboardDir).then(
     () => true,
     () => false,
   );
-  if (present) throw new UserError(`${repoboardDir} already exists; refusing to overwrite`);
-  const config = defaultBoardConfig();
-  const now = io.now?.() ?? new Date();
-  const welcome = createCard(
-    {
-      title: 'Welcome',
-      body: [
-        '',
-        'This board lives in `.repoboard/`. Every card is a markdown file in `.repoboard/cards/`;',
-        'columns are in `.repoboard/board.yml`. Move a card by editing `status:` in its file,',
-        'or with `repoboard card move <id> <status>`. Run `repoboard serve` to see the board.',
-        '',
-      ].join('\n'),
-    },
-    { existingIds: [], now, config },
-  );
-  if (!welcome.ok) throw new Error(`init: ${welcome.error}`); // default config: cannot happen
-  const card = welcome.card;
-  await mkdir(join(repoboardDir, 'cards'), { recursive: true });
-  await writeFile(join(repoboardDir, 'board.yml'), serializeBoard(config));
-  await writeFile(join(repoboardDir, 'cards', `${card.id}.md`), serializeCard(card));
-  io.stdout.write(`initialised ${repoboardDir} with ${card.id} "Welcome"\n`);
+  if (present && !values.practices) {
+    throw new UserError(`${repoboardDir} already exists; refusing to overwrite`);
+  }
+  if (!present) {
+    const config = defaultBoardConfig();
+    const now = io.now?.() ?? new Date();
+    const welcome = createCard(
+      {
+        title: 'Welcome',
+        body: [
+          '',
+          'This board lives in `.repoboard/`. Every card is a markdown file in `.repoboard/cards/`;',
+          'columns are in `.repoboard/board.yml`. Move a card by editing `status:` in its file,',
+          'or with `repoboard card move <id> <status>`. Run `repoboard serve` to see the board.',
+          '',
+        ].join('\n'),
+      },
+      { existingIds: [], now, config },
+    );
+    if (!welcome.ok) throw new Error(`init: ${welcome.error}`); // default config: cannot happen
+    const card = welcome.card;
+    await mkdir(join(repoboardDir, 'cards'), { recursive: true });
+    await writeFile(join(repoboardDir, 'board.yml'), serializeBoard(config));
+    await writeFile(join(repoboardDir, 'cards', `${card.id}.md`), serializeCard(card));
+    io.stdout.write(`initialised ${repoboardDir} with ${card.id} "Welcome"\n`);
+  }
+  if (values.practices) await scaffoldPractices(root, io);
   return 0;
 }
 
@@ -646,6 +780,111 @@ async function cmdWindowCheck(args: string[], io: CliIO): Promise<number> {
   return 1;
 }
 
+// ---- state / log / check (P8.3) ------------------------------------------------------------
+
+async function cmdState(args: string[], io: CliIO): Promise<number> {
+  const { values, positionals } = parse(args, {
+    'set-section': { type: 'string' },
+    stdin: { type: 'boolean', default: false },
+    as: { type: 'string' },
+  });
+  const root = await requireRoot(io);
+  const store = await openStore(root, { watch: false, now: io.now });
+  if (values['set-section'] !== undefined) {
+    const section = sectionNameFrom(values['set-section']);
+    let body: string;
+    if (values.stdin) {
+      body = await readStdin(io);
+    } else {
+      body = positionals.join(' ').trim();
+      if (!body) {
+        throw new UserError('state --set-section needs body text (or --stdin)');
+      }
+    }
+    const res = await store.setStateSection(section, body, actorFrom(values.as, io));
+    if (!res.ok) throw new UserError(res.error);
+    io.stdout.write(`updated STATE.md ${values['set-section']}\n`);
+    return 0;
+  }
+  const doc = store.state();
+  if (!doc) {
+    io.stdout.write('(no .repoboard/STATE.md — run `repoboard init --practices`)\n');
+    return 0;
+  }
+  const text = renderState(doc.sections, store.list(), {
+    now: new Date(Date.parse(doc.stamp)),
+    actor: doc.actor,
+  });
+  io.stdout.write(text);
+  return 0;
+}
+
+async function cmdLogAppend(args: string[], io: CliIO): Promise<number> {
+  const { values, positionals } = parse(args, {
+    as: { type: 'string' },
+    title: { type: 'string' },
+    stdin: { type: 'boolean', default: false },
+  });
+  let text: string;
+  if (values.stdin) {
+    text = await readStdin(io);
+  } else {
+    text = positionals.join(' ').trim();
+    if (!text)
+      throw new UserError('usage: repoboard log --as <seat> [--title "…"] (<text> | --stdin)');
+  }
+  const root = await requireRoot(io);
+  const store = await openStore(root, { watch: false, now: io.now });
+  const seat = actorFrom(values.as, io);
+  const res = await store.appendRepoLog(seat, text, values.title);
+  if (!res.ok) throw new UserError(res.error);
+  io.stdout.write(`logged ${res.date} ${seat}\n`);
+  return 0;
+}
+
+async function cmdLogShow(args: string[], io: CliIO): Promise<number> {
+  const { values } = parse(args, { date: { type: 'string' }, seat: { type: 'string' } });
+  const root = await requireRoot(io);
+  const store = await openStore(root, { watch: false, now: io.now });
+  const log = await store.log(values.date);
+  if (!log) {
+    io.stdout.write('(no log for that date)\n');
+    return 0;
+  }
+  if (values.seat !== undefined) {
+    const wanted = values.seat.toUpperCase();
+    const blocks = log.blocks.filter((b) => b.seat === wanted);
+    if (blocks.length === 0) {
+      io.stdout.write('(no entries for that seat on that date)\n');
+      return 0;
+    }
+    io.stdout.write(`${blocks.map((b) => formatLogBlock(b)).join('\n\n')}\n`);
+    return 0;
+  }
+  io.stdout.write(log.text);
+  return 0;
+}
+
+async function cmdCheck(args: string[], io: CliIO): Promise<number> {
+  const { values } = parse(args, {
+    json: { type: 'boolean', default: false },
+    strict: { type: 'boolean', default: false },
+  });
+  const root = await requireRoot(io);
+  const store = await openStore(root, { watch: false, now: io.now });
+  const { findings, exitCode } = await store.check(values.strict);
+  if (values.json) {
+    io.stdout.write(`${formatRows(findings)}\n`);
+    return exitCode;
+  }
+  if (findings.length === 0) {
+    io.stdout.write('ok\n');
+    return 0;
+  }
+  for (const f of findings) io.stdout.write(`${f.message}\n`);
+  return exitCode;
+}
+
 function openInBrowser(url: string): void {
   const [cmd, args] =
     process.platform === 'darwin'
@@ -770,6 +1009,12 @@ export async function run(argv: string[], io: CliIO): Promise<number> {
       if (sub === 'check') return await cmdWindowCheck(rest, io);
       throw new UserError(`unknown window command "${sub ?? ''}" (add, list, check)`);
     }
+    if (cmd === 'state') return await cmdState(argv.slice(1), io);
+    if (cmd === 'log') {
+      if (sub === 'show') return await cmdLogShow(rest, io);
+      return await cmdLogAppend(argv.slice(1), io);
+    }
+    if (cmd === 'check') return await cmdCheck(argv.slice(1), io);
     throw new UserError(`unknown command "${cmd}" (try repoboard --help)`);
   } catch (e) {
     if (e instanceof UserError) {

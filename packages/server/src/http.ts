@@ -15,7 +15,10 @@ import {
   type CardPatch,
   type CreateCardInput,
   type DecisionOption,
+  needsDecision,
   type Priority,
+  renderState,
+  type StateSectionName,
   staleLeases,
   toIso,
 } from '@repoboard/core';
@@ -96,6 +99,14 @@ const ADD_WINDOW_FIELDS: ReadonlySet<string> = new Set([
   'name',
   'actor',
 ]);
+const SET_STATE_FIELDS: ReadonlySet<string> = new Set(['section', 'body', 'actor']);
+const APPEND_LOG_FIELDS: ReadonlySet<string> = new Set(['seat', 'title', 'text']);
+const SECTION_NAMES: ReadonlySet<string> = new Set(['LIVE', 'LAST-LANDINGS', 'SEATS']);
+const SECTION_KEY_OF: Record<string, StateSectionName> = {
+  LIVE: 'live',
+  'LAST-LANDINGS': 'lastLandings',
+  SEATS: 'seats',
+};
 
 const CONTENT_TYPES: Record<string, string> = {
   '.html': 'text/html; charset=utf-8',
@@ -313,6 +324,48 @@ function toAddWindowInput(body: Json): AddWindowHttpInput {
   if (!end) throw new HttpError(400, 'end is required');
   if (!name) throw new HttpError(400, 'name is required');
   return { resource, start, end, name };
+}
+
+interface SetStateHttpInput {
+  section: StateSectionName;
+  body: string;
+}
+
+function toSetStateInput(body: Json): SetStateHttpInput {
+  rejectUnknown(body, SET_STATE_FIELDS);
+  const section = body.section;
+  if (typeof section !== 'string' || !SECTION_NAMES.has(section)) {
+    throw new HttpError(400, 'section must be one of LIVE, LAST-LANDINGS, SEATS');
+  }
+  const text = body.body;
+  if (typeof text !== 'string' || text.trim().length === 0) {
+    throw new HttpError(400, 'body is required');
+  }
+  const key = SECTION_KEY_OF[section];
+  if (!key) throw new HttpError(400, 'section must be one of LIVE, LAST-LANDINGS, SEATS');
+  return { section: key, body: text };
+}
+
+interface AppendLogHttpInput {
+  seat: string;
+  title?: string;
+  text: string;
+}
+
+function toAppendLogInput(body: Json): AppendLogHttpInput {
+  rejectUnknown(body, APPEND_LOG_FIELDS);
+  const seat = body.seat;
+  if (typeof seat !== 'string' || seat.trim().length === 0) {
+    throw new HttpError(400, 'seat is required');
+  }
+  const text = body.text;
+  if (typeof text !== 'string' || text.trim().length === 0) {
+    throw new HttpError(400, 'text is required');
+  }
+  const input: AppendLogHttpInput = { seat, text };
+  const title = optString(body, 'title');
+  if (title !== undefined) input.title = title;
+  return input;
 }
 
 function isOptionArray(v: unknown): v is DecisionOption[] {
@@ -572,6 +625,32 @@ export async function startServer(opts: ServerOptions): Promise<RunningServer> {
     };
   };
 
+  // P8.3: one payload for `GET /api/state` and the `state` half of the WS snapshot. OWNER QUEUE
+  // is generated fresh from cards that need a decision on every call (P8.1) — the doc's own
+  // recorded `stamp`/`actor` are reused as the render clock so a READ never looks like a rewrite
+  // (only `setStateSection` produces a stamp that reflects the real "now").
+  const statePayload = () => {
+    const doc = store.state();
+    if (!doc) return { stamp: null, actor: null, sections: null, ownerQueue: [], text: null };
+    const openCards = store.list().filter((c) => needsDecision(c));
+    const ownerQueue = openCards.map((c) => ({
+      id: c.id,
+      question: c.decision?.question ?? '',
+      options: c.decision?.options ?? [],
+    }));
+    const text = renderState(doc.sections, openCards, {
+      now: new Date(Date.parse(doc.stamp)),
+      actor: doc.actor,
+    });
+    return { stamp: doc.stamp, actor: doc.actor, sections: doc.sections, ownerQueue, text };
+  };
+
+  // P8.3: today's log, by the server's own clock — the WS snapshot's `log` half.
+  const todayLogPayload = async () => {
+    const log = await store.log();
+    return log ?? { date: toIso(store.clock).slice(0, 10), text: '', blocks: [] };
+  };
+
   function broadcast(msg: unknown): void {
     const text = JSON.stringify(msg);
     for (const client of wss.clients) {
@@ -647,12 +726,17 @@ export async function startServer(opts: ServerOptions): Promise<RunningServer> {
   const onConfig = () => broadcast({ type: 'config', config: { ...store.config, fun } });
   const onInvalid = (invalid: unknown) => broadcast({ type: 'invalid', invalid });
   const onLeases = () => broadcast({ type: 'leases', leases: leasesPayload() });
+  const onState = () => broadcast({ type: 'state', state: statePayload() });
+  const onLog = (payload: { date: string; text: string }) =>
+    broadcast({ type: 'log', date: payload.date, text: payload.text });
   store.on('card', onCard);
   store.on('card:removed', onRemoved);
   store.on('event', onEvent);
   store.on('config', onConfig);
   store.on('invalid', onInvalid);
   store.on('leases', onLeases);
+  store.on('state', onState);
+  store.on('log', onLog);
 
   // ---- clients → store ----------------------------------------------------------------
   async function onClientMessage(ws: WebSocket, raw: unknown): Promise<void> {
@@ -692,9 +776,19 @@ export async function startServer(opts: ServerOptions): Promise<RunningServer> {
   }
 
   wss.on('connection', (ws) => {
-    ws.send(
-      JSON.stringify({ type: 'snapshot', board: boardPayload(), repo, leases: leasesPayload() }),
-    );
+    void todayLogPayload().then((log) => {
+      if (ws.readyState !== ws.OPEN) return;
+      ws.send(
+        JSON.stringify({
+          type: 'snapshot',
+          board: boardPayload(),
+          repo,
+          leases: leasesPayload(),
+          state: statePayload(),
+          log,
+        }),
+      );
+    });
     ws.on('message', (data) => void onClientMessage(ws, data));
     ws.on('error', () => undefined);
   });
@@ -751,6 +845,35 @@ export async function startServer(opts: ServerOptions): Promise<RunningServer> {
       const outcome = await store.addWindow(input, actor);
       if (!outcome.ok) throw new HttpError(leaseFailureStatus(outcome), outcome.error);
       return sendJson(res, 200, leasesPayload());
+    }
+    // P8.3: state / log / check.
+    if (method === 'GET' && path === '/api/state') return sendJson(res, 200, statePayload());
+    if (method === 'PUT' && path === '/api/state/section') {
+      const body = await readBody(req);
+      const actor = optString(body, 'actor') ?? 'web';
+      const input = toSetStateInput(body);
+      const outcome = await store.setStateSection(input.section, input.body, actor);
+      if (!outcome.ok) throw new HttpError(outcome.readOnly ? 409 : 400, outcome.error);
+      return sendJson(res, 200, statePayload());
+    }
+    if (method === 'GET' && path === '/api/log') {
+      const date = url.searchParams.get('date') ?? undefined;
+      const log = await store.log(date);
+      if (!log) throw new HttpError(404, `no log for ${date ?? 'today'}`);
+      return sendJson(res, 200, log);
+    }
+    if (method === 'POST' && path === '/api/log') {
+      const body = await readBody(req);
+      const input = toAppendLogInput(body);
+      const outcome = await store.appendRepoLog(input.seat, input.text, input.title);
+      if (!outcome.ok) throw new HttpError(outcome.readOnly ? 409 : 400, outcome.error);
+      return sendJson(res, 200, { date: outcome.date, text: outcome.text, block: outcome.block });
+    }
+    if (method === 'GET' && path === '/api/check') {
+      const strict =
+        url.searchParams.get('strict') === '1' || url.searchParams.get('strict') === 'true';
+      const outcome = await store.check(strict);
+      return sendJson(res, 200, outcome);
     }
     if (method === 'GET' && path === '/api/repo') {
       if (!repo) throw new HttpError(404, 'repo scanning is disabled');
@@ -876,6 +999,8 @@ export async function startServer(opts: ServerOptions): Promise<RunningServer> {
       store.off('config', onConfig);
       store.off('invalid', onInvalid);
       store.off('leases', onLeases);
+      store.off('state', onState);
+      store.off('log', onLog);
       if (repoWatcher) await repoWatcher.close();
       for (const client of wss.clients) client.terminate();
       await new Promise<void>((res) => wss.close(() => res()));

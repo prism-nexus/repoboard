@@ -856,3 +856,198 @@ describe('leases/windows over HTTP (P8.2)', () => {
     expect(msg.leases.leases.map((l) => l.resource)).toEqual(['vitest-lock']);
   });
 });
+
+describe('state/log/check over HTTP (P8.3)', () => {
+  it('GET /api/state before any STATE.md exists: nulls, 200, not a crash', async () => {
+    const r = await rig({});
+    const res = await fetch(`${r.url}/api/state`);
+    expect(res.status).toBe(200);
+    expect(await json(res)).toEqual({
+      stamp: null,
+      actor: null,
+      sections: null,
+      ownerQueue: [],
+      text: null,
+    });
+  });
+
+  it('PUT /api/state/section scaffolds then restamps; GET reflects it with generated OWNER QUEUE', async () => {
+    const r = await rig({});
+    const put = await fetch(`${r.url}/api/state/section`, {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ section: 'LIVE', body: 'Tree is dev.', actor: 'claude/p8-3' }),
+    });
+    expect(put.status).toBe(200);
+    const putBody = (await json(put)) as { sections: { live: string }; text: string };
+    expect(putBody.sections.live).toBe('Tree is dev.');
+    expect(putBody.text).toContain('_(generated from open decisions)_');
+
+    const get = await fetch(`${r.url}/api/state`);
+    const body = (await json(get)) as { sections: { live: string } };
+    expect(body.sections.live).toBe('Tree is dev.');
+  });
+
+  it('PUT /api/state/section: 400 on a bad section name, an empty body, or an unknown field', async () => {
+    const r = await rig({});
+    const badSection = await fetch(`${r.url}/api/state/section`, {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ section: 'NOPE', body: 'x' }),
+    });
+    expect(badSection.status).toBe(400);
+
+    const emptyBody = await fetch(`${r.url}/api/state/section`, {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ section: 'LIVE', body: '' }),
+    });
+    expect(emptyBody.status).toBe(400);
+
+    const unknownField = await fetch(`${r.url}/api/state/section`, {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ section: 'LIVE', body: 'x', nope: 1 }),
+    });
+    expect(unknownField.status).toBe(400);
+  });
+
+  it('GET /api/log defaults to today, 404 for a date with no file, ?date= reads another day', async () => {
+    const r = await rig({});
+    const missing = await fetch(`${r.url}/api/log?date=2020-01-01`);
+    expect(missing.status).toBe(404);
+
+    const post = await fetch(`${r.url}/api/log`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ seat: 'claude/p8-3', title: 'kickoff', text: 'first entry' }),
+    });
+    expect(post.status).toBe(200);
+    const posted = (await json(post)) as { date: string; text: string };
+    expect(posted.date).toBe('2026-09-02');
+    expect(posted.text).toContain('kickoff');
+
+    const get = await fetch(`${r.url}/api/log`);
+    expect(get.status).toBe(200);
+    const body = (await json(get)) as { date: string; text: string; blocks: unknown[] };
+    expect(body.date).toBe('2026-09-02');
+    expect(body.blocks).toHaveLength(1);
+  });
+
+  it('POST /api/log: 400 on empty seat/text or an unknown field', async () => {
+    const r = await rig({});
+    const emptySeat = await fetch(`${r.url}/api/log`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ seat: '  ', text: 'x' }),
+    });
+    expect(emptySeat.status).toBe(400);
+    const unknownField = await fetch(`${r.url}/api/log`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ seat: 'ops', text: 'x', nope: 1 }),
+    });
+    expect(unknownField.status).toBe(400);
+  });
+
+  it('GET /api/check: 200 with empty findings on a clean fixture, and with a stale lease', async () => {
+    const r = await rig({});
+    const clean = await fetch(`${r.url}/api/check`);
+    expect(clean.status).toBe(200);
+    expect(await json(clean)).toEqual({ findings: [], exitCode: 0 });
+
+    await r.store.takeLease({ resource: 'r', until: '2020-01-01T00:00:00Z' }, 'claude/ops');
+    const stale = await fetch(`${r.url}/api/check`);
+    const body = (await json(stale)) as { findings: Array<{ kind: string }>; exitCode: number };
+    expect(body.findings.some((f) => f.kind === 'stale-lease')).toBe(true);
+    expect(body.exitCode).toBe(1);
+  });
+
+  it('GET /api/check?strict=1 turns a warning-grade finding into exitCode 1', async () => {
+    // cardText's fixed `updated: 2026-09-02T22:00:00Z` is 41 minutes before NOW — outside the
+    // default 30-minute active window — so this card is written with `updated` at NOW itself, to
+    // land inside it (avoids depending on the watcher re-reading a later on-disk edit in time).
+    const r = await rig({
+      'RB-1.md': [
+        '---',
+        'id: RB-1',
+        'title: "active card"',
+        'status: doing',
+        'assignee: claude/p8-3',
+        'created: 2026-09-02T22:00:00Z',
+        'updated: 2026-09-02T22:41:10Z',
+        '---',
+        '',
+        'Body.',
+        '',
+      ].join('\n'),
+    });
+    const findings = await r.store.check(false);
+    expect(findings.findings.some((f) => f.kind === 'active-without-lease')).toBe(true);
+
+    const plain = await fetch(`${r.url}/api/check`);
+    const plainBody = (await json(plain)) as { exitCode: number };
+    expect(plainBody.exitCode).toBe(0);
+    const strict = await fetch(`${r.url}/api/check?strict=1`);
+    const strictBody = (await json(strict)) as { exitCode: number };
+    expect(strictBody.exitCode).toBe(1);
+  });
+
+  it('map-only: GET /api/state, /api/log, /api/check work; PUT/POST writes are 409', async () => {
+    const repo = await makeTempRepoNoBoard({});
+    cleanups.push(repo.cleanup);
+    const store = await openStore(repo.root, { watch: true, now: () => NOW });
+    cleanups.push(() => store.close());
+    const server = await startServer({ store, port: 0, scan: false });
+    cleanups.push(() => server.close());
+    const url = server.url.replace(/\/$/, '');
+
+    expect((await fetch(`${url}/api/state`)).status).toBe(200);
+    expect((await fetch(`${url}/api/log`)).status).toBe(404); // no board, no log — same as "no file"
+    expect((await fetch(`${url}/api/check`)).status).toBe(200);
+
+    const put = await fetch(`${url}/api/state/section`, {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ section: 'LIVE', body: 'x' }),
+    });
+    expect(put.status).toBe(409);
+    expect(await repo.hasRepoboard()).toBe(false);
+
+    const post = await fetch(`${url}/api/log`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ seat: 'ops', text: 'x' }),
+    });
+    expect(post.status).toBe(409);
+    expect(await repo.hasRepoboard()).toBe(false);
+  });
+
+  it("WS snapshot carries state and today's log; a rewrite through the store broadcasts state", async () => {
+    const r = await rig({});
+    const ws = await connect(r.url);
+    cleanups.push(async () => ws.close());
+    const snap = await nextMessage<{
+      type: string;
+      state: { stamp: null; text: null };
+      log: { date: string; text: string };
+    }>(ws);
+    expect(snap.type).toBe('snapshot');
+    expect(snap.state).toEqual({
+      stamp: null,
+      actor: null,
+      sections: null,
+      ownerQueue: [],
+      text: null,
+    });
+    expect(snap.log.date).toBe('2026-09-02');
+
+    const stateMsg = nextMessage<{ type: string; state: { text: string } }>(
+      ws,
+      (m) => m.type === 'state',
+    );
+    await r.store.setStateSection('live', 'Tree is dev.', 'claude/p8-3');
+    const msg = await stateMsg;
+    expect(msg.state.text).toContain('Tree is dev.');
+  });
+});

@@ -104,6 +104,15 @@ function liveLeaseOn(doc: LeasesDoc, resource: string, at: Date): Lease | undefi
   return doc.leases.find((l) => l.resource === resource && !isStale(l, at));
 }
 
+/**
+ * P8.3 (`check`'s `active-without-lease` finding): does `holder` currently hold a live lease on
+ * ANY resource? Unlike `liveLeaseOn`, this is not scoped to one resource — a card's assignee may
+ * hold a lease on a lane, a lock, anything — `check` only cares whether they hold SOMETHING.
+ */
+export function holdsLiveLease(doc: LeasesDoc, holder: string, at: Date): boolean {
+  return doc.leases.some((l) => l.holder === holder && !isStale(l, at));
+}
+
 export interface TakeLeaseInput {
   resource: string;
   until?: string;

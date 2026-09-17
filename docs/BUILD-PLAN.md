@@ -272,13 +272,21 @@ dashboard, its bytes on the wire measured before it ships (O3).** Core stays I/O
   `## LIVE`, `## LAST LANDINGS`, `## OWNER QUEUE`, `## SEATS`; rewritten in place, never appended) and
   `.repoboard/log/YYYY-MM-DD.md` (every seat appends its own block; never rewritten).
   `repoboard log --as <seat> [--title "…"] <text | --stdin>` appends `##### <SEAT> <ts>` + the text to
-  today's file (creates it). `repoboard state` prints STATE; `repoboard init --practices` scaffolds
-  STATE.md, today's log, `decisions.jsonl`, `leases.yml`, and an eight-line NEXT-AGENT-PROMPT.md at the
-  repo root (only if absent). **`repoboard check`** warns (exit 1) when: STATE's stamp is older than the
-  newest log file; a card is in an `active` column with no lease held by its assignee; a lease is past
-  `until`; CLAUDE.md is over the cost budget (P8.4). MCP `append_repo_log`, `get_state`, `check`. Web:
-  STATE rendered as the landing panel of the Board view; the log as a timeline beside the ticker;
-  OWNER QUEUE on STATE is GENERATED from cards that need a decision (P8.1), never typed.
+  today's file (creates it). `repoboard state` prints STATE (OWNER QUEUE generated fresh);
+  `repoboard state --set-section LIVE|LAST-LANDINGS|SEATS` restamps one section. `repoboard init
+  --practices` scaffolds STATE.md, today's log, `leases.yml` (O10 dropped `decisions.jsonl` — a
+  card's own `decision:` block carries it, so there is nothing separate left to scaffold), and an
+  eight-line NEXT-AGENT-PROMPT.md at the repo root (only if absent). **`repoboard check`** exits 1
+  with one line per finding, `ok` when none: `stale-state` (STATE's stamp older than the newest log
+  file's mtime or its newest `#####` header, whichever is later) and `stale-lease` are error-grade;
+  `active-without-lease` (a card in an `active` column with no lease held by its assignee) is
+  warning-grade, blocking only with `--strict`; `needs-decision` (a count) is informational, never
+  fails; `cost-over-budget` (P8.4) is stubbed. MCP `get_state`, `set_state_section`,
+  `append_repo_log`, `check`. Web: STATE rendered as a collapsible panel at the top of the Board
+  view (localStorage remembers collapsed/expanded); the log as a timeline beside the ticker;
+  OWNER QUEUE on STATE is GENERATED from cards that need a decision (P8.1), never typed, and a
+  queue line scrolls to the `decide` column rather than toggling a filter (O11 retired it).
+  Brief: `docs/P8.3-STATE-LOG-BRIEF.md`.
 - **P8.4 Cost** — `repoboard cost [--budget <bytes>] [--json]`: bytes (and ≈tokens at 4 B/token) of
   CLAUDE.md, AGENTS.md if present, every repo-relative path CLAUDE.md names in backticks that exists,
   and the names of MCP servers in `.mcp.json`; total = "what a cold agent loads". Exit 1 when CLAUDE.md

@@ -1083,3 +1083,275 @@ describe('repoboard lease / window (P8.2)', () => {
     });
   });
 });
+
+// ---- init --practices / state / log / check (P8.3) -----------------------------------------
+
+async function repoboardStdin(cwd: string, stdinText: string, ...argv: string[]) {
+  const stdout = new Sink();
+  const stderr = new Sink();
+  const code = await run(argv, {
+    cwd,
+    stdout,
+    stderr,
+    env: { REPOBOARD_ACTOR: 'test-actor' },
+    now: () => NOW,
+    readStdin: () => Promise.resolve(stdinText),
+  });
+  return { code, out: stdout.text, err: stderr.text };
+}
+
+describe('repoboard init --practices', () => {
+  it("scaffolds STATE.md, today's log, leases.yml and NEXT-AGENT-PROMPT.md on a fresh dir", async () => {
+    const root = await makeTempDir('repoboard-cli-');
+    dirs.push(root);
+    const res = await repoboard(root, 'init', '--practices');
+    expect(res.code).toBe(0);
+    expect(res.out).toContain('created .repoboard/STATE.md');
+    expect(res.out).toContain('created .repoboard/log/2026-09-02.md');
+    expect(res.out).toContain('created .repoboard/leases.yml');
+    expect(res.out).toContain('created NEXT-AGENT-PROMPT.md');
+    const state = await readFile(join(root, '.repoboard', 'STATE.md'), 'utf8');
+    expect(state).toContain('## OWNER QUEUE');
+    const log = await readFile(join(root, '.repoboard', 'log', '2026-09-02.md'), 'utf8');
+    expect(log).toBe('# Log — 2026-09-02\n\n');
+    const leases = await readFile(join(root, '.repoboard', 'leases.yml'), 'utf8');
+    expect(leases).toContain('leases: []');
+    const prompt = await readFile(join(root, 'NEXT-AGENT-PROMPT.md'), 'utf8');
+    expect(prompt).toContain('# Next agent — eight lines');
+    expect(prompt).toContain('repoboard check');
+  });
+
+  it('works on a repo that already has a board, and never overwrites existing files (locked decision 3)', async () => {
+    const root = await freshRepo({});
+    await writeFile(join(root, '.repoboard', 'STATE.md'), 'hand-written, keep me\n');
+    await writeFile(join(root, 'NEXT-AGENT-PROMPT.md'), 'owner-written, keep me\n');
+    const res = await repoboard(root, 'init', '--practices');
+    expect(res.code).toBe(0);
+    expect(res.out).toContain('kept .repoboard/STATE.md');
+    expect(res.out).toContain('kept NEXT-AGENT-PROMPT.md');
+    expect(res.out).toContain('created .repoboard/leases.yml');
+    expect(await readFile(join(root, '.repoboard', 'STATE.md'), 'utf8')).toBe(
+      'hand-written, keep me\n',
+    );
+    expect(await readFile(join(root, 'NEXT-AGENT-PROMPT.md'), 'utf8')).toBe(
+      'owner-written, keep me\n',
+    );
+  });
+
+  it('running it twice is idempotent: the second run keeps everything, byte-identical', async () => {
+    const root = await makeTempDir('repoboard-cli-');
+    dirs.push(root);
+    await repoboard(root, 'init', '--practices');
+    const before = {
+      state: await readFile(join(root, '.repoboard', 'STATE.md'), 'utf8'),
+      log: await readFile(join(root, '.repoboard', 'log', '2026-09-02.md'), 'utf8'),
+      leases: await readFile(join(root, '.repoboard', 'leases.yml'), 'utf8'),
+      prompt: await readFile(join(root, 'NEXT-AGENT-PROMPT.md'), 'utf8'),
+    };
+    const res = await repoboard(root, 'init', '--practices');
+    expect(res.code).toBe(0);
+    expect(
+      res.out
+        .split('\n')
+        .filter(Boolean)
+        .every((l) => l.startsWith('kept ')),
+    ).toBe(true);
+    expect(await readFile(join(root, '.repoboard', 'STATE.md'), 'utf8')).toBe(before.state);
+    expect(await readFile(join(root, '.repoboard', 'log', '2026-09-02.md'), 'utf8')).toBe(
+      before.log,
+    );
+    expect(await readFile(join(root, '.repoboard', 'leases.yml'), 'utf8')).toBe(before.leases);
+    expect(await readFile(join(root, 'NEXT-AGENT-PROMPT.md'), 'utf8')).toBe(before.prompt);
+  });
+
+  it('plain `init` (no --practices) on an existing board still refuses, unchanged behaviour', async () => {
+    const root = await freshRepo({});
+    const res = await repoboard(root, 'init');
+    expect(res.code).toBe(1);
+    expect(res.err).toMatch(/already exists/);
+  });
+});
+
+describe('repoboard state', () => {
+  it('prints "(no STATE.md …)" before init --practices, then the rendered page after', async () => {
+    const root = await freshRepo({});
+    const before = await repoboard(root, 'state');
+    expect(before.code).toBe(0);
+    expect(before.out).toContain('repoboard init --practices');
+
+    await repoboard(root, 'init', '--practices');
+    const after = await repoboard(root, 'state');
+    expect(after.code).toBe(0);
+    expect(after.out).toContain('# STATE');
+    expect(after.out).toContain('## OWNER QUEUE');
+    expect(after.out).toContain('_(generated from open decisions)_');
+  });
+
+  it('--set-section replaces one section and restamps; a positional arg is the body', async () => {
+    const root = await freshRepo({});
+    await repoboard(root, 'init', '--practices');
+    const res = await repoboard(
+      root,
+      'state',
+      '--set-section',
+      'LIVE',
+      'Tree is dev.',
+      '--as',
+      'claude/p8-3',
+    );
+    expect(res.code).toBe(0);
+    expect(res.out).toBe('updated STATE.md LIVE\n');
+    const printed = await repoboard(root, 'state');
+    expect(printed.out).toContain('Tree is dev.');
+    expect(printed.out).toContain('by claude/p8-3');
+  });
+
+  it('--set-section --stdin reads the body from stdin', async () => {
+    const root = await freshRepo({});
+    await repoboard(root, 'init', '--practices');
+    const res = await repoboardStdin(
+      root,
+      'multi\nline\nbody',
+      'state',
+      '--set-section',
+      'LAST-LANDINGS',
+      '--stdin',
+    );
+    expect(res.code).toBe(0);
+    const printed = await repoboard(root, 'state');
+    expect(printed.out).toContain('multi\nline\nbody');
+  });
+
+  it('generates OWNER QUEUE from cards that need a decision — one line per card', async () => {
+    const root = await freshRepo({});
+    await repoboard(root, 'init', '--practices');
+    await repoboard(root, 'card', 'add', 'needs a call');
+    const list = await repoboard(root, 'card', 'list', '--json');
+    const id = (JSON.parse(list.out) as Array<{ id: string }>)[0]?.id;
+    if (!id) throw new Error('no card id');
+    await repoboard(root, 'card', 'ask', id, 'ship now?', '--option', 'A yes', '--option', 'B no');
+    const printed = await repoboard(root, 'state');
+    expect(printed.out).toContain(`${id} · ship now? · [A B]`);
+  });
+
+  it('an unknown --set-section name is a user error', async () => {
+    const root = await freshRepo({});
+    await repoboard(root, 'init', '--practices');
+    const res = await repoboard(root, 'state', '--set-section', 'NOPE', 'x');
+    expect(res.code).toBe(1);
+    expect(res.err).toMatch(/must be one of LIVE, LAST-LANDINGS, SEATS/);
+  });
+});
+
+describe('repoboard log', () => {
+  it('append creates the day file, then appends a second block', async () => {
+    const root = await freshRepo({});
+    const first = await repoboard(
+      root,
+      'log',
+      '--as',
+      'claude/p8-3',
+      '--title',
+      'kickoff',
+      'first entry',
+    );
+    expect(first.code).toBe(0);
+    expect(first.out).toBe('logged 2026-09-02 claude/p8-3\n');
+    const shown = await repoboard(root, 'log', 'show');
+    expect(shown.out).toContain('##### CLAUDE/P8-3 2026-09-02T22:41:10Z: kickoff');
+    expect(shown.out).toContain('first entry');
+
+    await repoboard(root, 'log', '--as', 'ops', 'second entry');
+    const shown2 = await repoboard(root, 'log', 'show');
+    expect(shown2.out).toContain('##### OPS');
+    expect(shown2.out).toContain('second entry');
+    // The FIRST block must still be there — an append that rewrote the file with only the new
+    // block would still pass every assertion above (C3's own perturbation shape).
+    expect(shown2.out).toContain('##### CLAUDE/P8-3');
+    expect(shown2.out).toContain('kickoff');
+    expect(shown2.out).toContain('first entry');
+  });
+
+  it('--stdin reads the text from stdin', async () => {
+    const root = await freshRepo({});
+    const res = await repoboardStdin(root, 'from stdin', 'log', '--as', 'ops', '--stdin');
+    expect(res.code).toBe(0);
+    const shown = await repoboard(root, 'log', 'show');
+    expect(shown.out).toContain('from stdin');
+  });
+
+  it("show --seat filters to one seat's blocks", async () => {
+    const root = await freshRepo({});
+    await repoboard(root, 'log', '--as', 'ops', 'ops entry');
+    await repoboard(root, 'log', '--as', 'builder', 'builder entry');
+    const opsOnly = await repoboard(root, 'log', 'show', '--seat', 'ops');
+    expect(opsOnly.out).toContain('ops entry');
+    expect(opsOnly.out).not.toContain('builder entry');
+  });
+
+  it('show with no log for the date says so', async () => {
+    const root = await freshRepo({});
+    const res = await repoboard(root, 'log', 'show', '--date', '2020-01-01');
+    expect(res.code).toBe(0);
+    expect(res.out).toContain('no log for that date');
+  });
+
+  it('empty text with no --stdin is a user error', async () => {
+    const root = await freshRepo({});
+    const res = await repoboard(root, 'log', '--as', 'ops');
+    expect(res.code).toBe(1);
+  });
+});
+
+describe('repoboard check', () => {
+  it('exit 0 "ok" on a clean fixture', async () => {
+    const root = await freshRepo({});
+    const res = await repoboard(root, 'check');
+    expect(res.code).toBe(0);
+    expect(res.out).toBe('ok\n');
+  });
+
+  it('exit 1 with one line per finding when something is wrong', async () => {
+    const root = await freshRepo({});
+    await repoboard(root, 'init', '--practices');
+    await repoboard(
+      root,
+      'lease',
+      'take',
+      'r',
+      '--as',
+      'claude/ops',
+      '--until',
+      '2020-01-01T00:00:00Z',
+    );
+    const res = await repoboard(root, 'check');
+    expect(res.code).toBe(1);
+    expect(res.out).toContain('stale-lease: r held by claude/ops');
+  });
+
+  it('--json prints a JSON array', async () => {
+    const root = await freshRepo({});
+    const res = await repoboard(root, 'check', '--json');
+    expect(res.code).toBe(0);
+    expect(JSON.parse(res.out)).toEqual([]);
+  });
+
+  it('active-without-lease is warning-grade: exit 0 by default, 1 with --strict', async () => {
+    const root = await freshRepo({});
+    await repoboard(
+      root,
+      'card',
+      'add',
+      'working card',
+      '--status',
+      'doing',
+      '--assignee',
+      'claude/p8-3',
+    );
+    const plain = await repoboard(root, 'check');
+    expect(plain.code).toBe(0);
+    expect(plain.out).toContain('active-without-lease');
+    const strict = await repoboard(root, 'check', '--strict');
+    expect(strict.code).toBe(1);
+  });
+});

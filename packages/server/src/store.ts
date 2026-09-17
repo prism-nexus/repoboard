@@ -11,6 +11,7 @@ import { basename, join, relative, resolve, sep } from 'node:path';
 import {
   type AddWindowInput,
   addWindow,
+  appendLogBlock,
   appendLogLine,
   askDecision,
   type BoardConfig,
@@ -18,23 +19,36 @@ import {
   type CardPatch,
   type CheckResourceResult,
   type CreateCardInput,
+  checkFindings,
   checkResource,
   createCard,
   type DecisionOption,
+  dailyLogHeader,
   decide as decideCard,
   defaultBoardConfig,
   type Event,
+  exitCodeForFindings,
+  type Finding,
+  formatLogBlock,
   formatLogLine,
+  initialStateText,
   type LeasesDoc,
+  type LogBlock,
+  type LogFileInfo,
   moveCard,
   parseBoard,
   parseCard,
   parseLeases,
+  parseLogBlocks,
+  parseState,
   pruneWindows,
   type ReleaseLeaseInput,
   releaseLease,
+  type StateDoc,
+  type StateSectionName,
   serializeCard,
   serializeLeases,
+  setStateSection as setStateSectionCore,
   type TakeLeaseInput,
   takeLease,
   toIso,
@@ -60,6 +74,10 @@ export interface StoreEvents {
   warning: [message: string];
   /** P8.2: `.repoboard/leases.yml` changed, by a mutation here or by an external edit. */
   leases: [doc: LeasesDoc];
+  /** P8.3: `.repoboard/STATE.md` changed, by a mutation here or by an external edit. */
+  state: [doc: StateDoc | null];
+  /** P8.3: a `.repoboard/log/<date>.md` file changed — an append here, or an external edit. */
+  log: [payload: { date: string; text: string }];
 }
 
 export interface OpenStoreOptions {
@@ -112,6 +130,29 @@ export type LeaseOutcome =
   | { ok: true; doc: LeasesDoc; event: Event; warnings: string[] }
   | { ok: false; error: string; readOnly?: boolean };
 
+/** P8.3: `setStateSection` outcome. */
+export type SetStateOutcome =
+  | { ok: true; doc: StateDoc; text: string }
+  | { ok: false; error: string; readOnly?: boolean };
+
+/** P8.3: `appendRepoLog` outcome. */
+export type AppendRepoLogOutcome =
+  | { ok: true; date: string; text: string; block: LogBlock }
+  | { ok: false; error: string; readOnly?: boolean };
+
+/** P8.3: one `.repoboard/log/<date>.md` file, read fresh from disk (never cached). */
+export interface LogFile {
+  date: string;
+  text: string;
+  blocks: LogBlock[];
+}
+
+/** P8.3: `repoboard check`'s result — the store gathers the facts, core's `checkFindings` decides. */
+export interface CheckOutcome {
+  findings: Finding[];
+  exitCode: 0 | 1;
+}
+
 /** The refusal text, in one place: the CLI, HTTP and MCP all surface this string. */
 export const MAP_ONLY_ERROR =
   'this repo has no .repoboard/ — repoboard is serving it map-only and will not create one. ' +
@@ -154,9 +195,12 @@ export class CardStore extends EventEmitter<StoreEvents> {
   readonly boardPath: string;
   readonly eventsPath: string;
   readonly leasesPath: string;
+  readonly statePath: string;
+  readonly logDir: string;
 
   private cfg: BoardConfig = defaultBoardConfig();
   private leasesDoc: LeasesDoc = { leases: [], windows: [] };
+  private stateDoc: StateDoc | null = null;
   private board = false;
   private readonly cards = new Map<string, Card>();
   /** Per file: the card id it currently holds (null when invalid) and the content hash. */
@@ -176,6 +220,8 @@ export class CardStore extends EventEmitter<StoreEvents> {
     this.boardPath = join(this.repoboardDir, 'board.yml');
     this.eventsPath = join(this.repoboardDir, 'events.jsonl');
     this.leasesPath = join(this.repoboardDir, 'leases.yml');
+    this.statePath = join(this.repoboardDir, 'STATE.md');
+    this.logDir = join(this.repoboardDir, 'log');
     this.now = opts.now ?? (() => new Date());
   }
 
@@ -196,6 +242,11 @@ export class CardStore extends EventEmitter<StoreEvents> {
     return this.board;
   }
 
+  /** P8.3: the store's own clock — the real one, or a test's override. HTTP's "today" fallback. */
+  get clock(): Date {
+    return this.now();
+  }
+
   get invalid(): InvalidCard[] {
     return [...this.invalidByPath.values()];
   }
@@ -207,6 +258,11 @@ export class CardStore extends EventEmitter<StoreEvents> {
    */
   leases(): LeasesDoc {
     return this.leasesDoc;
+  }
+
+  /** P8.3: the current parsed `.repoboard/STATE.md`, or `null` when it does not exist. */
+  state(): StateDoc | null {
+    return this.stateDoc;
   }
 
   list(): Card[] {
@@ -236,6 +292,7 @@ export class CardStore extends EventEmitter<StoreEvents> {
     this.board = await isDirectory(this.repoboardDir);
     await this.loadConfig();
     await this.loadLeases();
+    await this.loadState();
     let names: string[] = [];
     try {
       names = await readdir(this.cardsDir);
@@ -431,6 +488,108 @@ export class CardStore extends EventEmitter<StoreEvents> {
   }
 
   /**
+   * P8.3: replace one STATE.md section and restamp. A missing STATE.md is scaffolded fresh first
+   * (`initialStateText`) rather than refused — a hand-deleted STATE.md should not brick the one
+   * command that rewrites it.
+   */
+  setStateSection(
+    section: StateSectionName,
+    body: string,
+    actor: string,
+  ): Promise<SetStateOutcome> {
+    return this.mutate(async () => {
+      this.refuseWriteWithoutBoard();
+      let text: string;
+      try {
+        text = await readFile(this.statePath, 'utf8');
+      } catch (e) {
+        if ((e as NodeJS.ErrnoException).code !== 'ENOENT') throw e;
+        text = initialStateText({ now: this.now(), actor });
+      }
+      const res = setStateSectionCore(text, section, body, { now: this.now(), actor });
+      if (!res.ok) return { ok: false as const, error: res.error };
+      await this.writeState(res.text);
+      const parsed = parseState(res.text);
+      if (!parsed.ok) throw new Error(`setStateSection produced unparseable text: ${parsed.error}`);
+      return { ok: true as const, doc: parsed.doc, text: res.text };
+    });
+  }
+
+  /**
+   * P8.3: append one block to today's `.repoboard/log/<date>.md`, creating the file (with its
+   * `# Log — <date>` header) if this is the first entry of the day. Append-only: there is no
+   * store method that rewrites a log file.
+   */
+  appendRepoLog(
+    seat: string,
+    text: string,
+    title: string | undefined,
+  ): Promise<AppendRepoLogOutcome> {
+    return this.mutate(async () => {
+      if (seat.trim().length === 0) return { ok: false as const, error: 'seat must not be empty' };
+      const line = text.trim();
+      if (line.length === 0) return { ok: false as const, error: 'text must not be empty' };
+      this.refuseWriteWithoutBoard();
+      const now = this.now();
+      const date = toIso(now).slice(0, 10);
+      const path = join(this.logDir, `${date}.md`);
+      let existing = '';
+      try {
+        existing = await readFile(path, 'utf8');
+      } catch (e) {
+        if ((e as NodeJS.ErrnoException).code !== 'ENOENT') throw e;
+      }
+      const base = existing.length > 0 ? existing : `${dailyLogHeader(date)}\n\n`;
+      const ts = toIso(now);
+      const block = formatLogBlock({ seat, ts, title, text: line });
+      const next = appendLogBlock(base, block);
+      await this.writeLog(date, next);
+      const parsedBlocks = parseLogBlocks(next);
+      const parsedBlock = parsedBlocks[parsedBlocks.length - 1];
+      return {
+        ok: true as const,
+        date,
+        text: next,
+        block: parsedBlock ?? { seat: seat.toUpperCase(), ts, title: title ?? line, text: line },
+      };
+    });
+  }
+
+  /** P8.3: read one day's log fresh from disk (never cached). Defaults to today. */
+  async log(date?: string): Promise<LogFile | null> {
+    const day = date ?? toIso(this.now()).slice(0, 10);
+    const path = join(this.logDir, `${day}.md`);
+    let text: string;
+    try {
+      text = await readFile(path, 'utf8');
+    } catch (e) {
+      if ((e as NodeJS.ErrnoException).code !== 'ENOENT') throw e;
+      return null;
+    }
+    return { date: day, text, blocks: parseLogBlocks(text) };
+  }
+
+  /**
+   * P8.3: `repoboard check` — gather the facts (state, every log file's mtime and blocks, cards,
+   * config, leases) and hand them to core's pure `checkFindings`. A read, so it works even in
+   * map-only mode (with no cards, no leases, and `state: null`, which is itself a stale-state
+   * finding only when a log exists to compare against).
+   */
+  async check(strict: boolean): Promise<CheckOutcome> {
+    const now = this.now();
+    const logs = await this.loadAllLogInfo();
+    const findings = checkFindings({
+      state: this.stateDoc,
+      logs,
+      cards: this.list(),
+      config: this.cfg,
+      leases: this.leasesDoc,
+      now,
+    });
+    return { findings, exitCode: exitCodeForFindings(findings, strict) };
+  }
+
+  /**
    * Append one `- <ts> <actor> — <text>` bullet under `## Log` and bump `updated`. Unlike
    * `update({body})` this writes exactly one log line. Newlines in `text` collapse to spaces
    * so the bullet stays one line.
@@ -557,6 +716,66 @@ export class CardStore extends EventEmitter<StoreEvents> {
     await rename(tmp, this.leasesPath);
     this.leasesDoc = doc;
     this.emit('leases', doc);
+  }
+
+  /** Atomic: write `<file>.tmp`, rename over the target, then update the cache (mirrors `writeLeases`). */
+  private async writeState(text: string): Promise<void> {
+    this.refuseWriteWithoutBoard();
+    await mkdir(this.repoboardDir, { recursive: true });
+    const tmp = `${this.statePath}.tmp`;
+    await writeFile(tmp, text, 'utf8');
+    await rename(tmp, this.statePath);
+    const parsed = parseState(text);
+    this.stateDoc = parsed.ok ? parsed.doc : null;
+    this.emit('state', this.stateDoc);
+  }
+
+  /** Atomic: write `<file>.tmp`, rename over the target (mirrors `writeCard`/`writeLeases`/`writeState`). */
+  private async writeLog(date: string, text: string): Promise<void> {
+    this.refuseWriteWithoutBoard();
+    const path = join(this.logDir, `${date}.md`);
+    await mkdir(this.logDir, { recursive: true });
+    const tmp = `${path}.tmp`;
+    await writeFile(tmp, text, 'utf8');
+    await rename(tmp, path);
+    this.emit('log', { date, text });
+  }
+
+  private async loadState(): Promise<void> {
+    let text: string;
+    try {
+      text = await readFile(this.statePath, 'utf8');
+    } catch (e) {
+      if ((e as NodeJS.ErrnoException).code !== 'ENOENT') throw e;
+      this.stateDoc = null;
+      return;
+    }
+    const res = parseState(text);
+    if (res.ok) {
+      this.stateDoc = res.doc;
+    } else {
+      // Keep the last good doc rather than losing the page to a bad hand edit.
+      this.emit('warning', `${relative(this.root, this.statePath)}: ${res.error}`);
+    }
+  }
+
+  /** Every `.repoboard/log/*.md` file's date, mtime and parsed blocks — `check`'s pure input. */
+  private async loadAllLogInfo(): Promise<LogFileInfo[]> {
+    let names: string[] = [];
+    try {
+      names = await readdir(this.logDir);
+    } catch (e) {
+      if ((e as NodeJS.ErrnoException).code !== 'ENOENT') throw e;
+      return [];
+    }
+    const out: LogFileInfo[] = [];
+    for (const name of names) {
+      if (!name.endsWith('.md')) continue;
+      const path = join(this.logDir, name);
+      const [text, st] = await Promise.all([readFile(path, 'utf8'), stat(path)]);
+      out.push({ date: name.slice(0, -3), mtimeMs: st.mtimeMs, blocks: parseLogBlocks(text) });
+    }
+    return out;
   }
 
   private async loadLeases(): Promise<void> {
@@ -726,6 +945,23 @@ export class CardStore extends EventEmitter<StoreEvents> {
         if (rel === 'leases.yml') {
           return this.loadLeases().then(() => {
             this.emit('leases', this.leasesDoc);
+          });
+        }
+        if (rel === 'STATE.md') {
+          if (event === 'unlink') {
+            this.stateDoc = null;
+            this.emit('state', null);
+            return Promise.resolve();
+          }
+          return this.loadState().then(() => {
+            this.emit('state', this.stateDoc);
+          });
+        }
+        const logMatch = /^log\/([^/]+)\.md$/.exec(rel);
+        if (logMatch?.[1] !== undefined) {
+          if (event === 'unlink') return Promise.resolve();
+          return readFile(path, 'utf8').then((text) => {
+            this.emit('log', { date: logMatch[1] as string, text });
           });
         }
         if (/^cards\/[^/]+\.md$/.test(rel)) {

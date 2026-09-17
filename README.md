@@ -55,6 +55,18 @@ starting a test run), mirrored as MCP `take_lease`/`release_lease`/`list_leases`
 `check_window` and HTTP `GET /api/leases`, `POST /api/leases/take|release|windows`. A lease past
 `until` reads STALE, never silently held. See `docs/AGENTS.md` §9.
 
+Two more plain files round out the practices program (P8.3): `.repoboard/STATE.md` — one page,
+rewritten in place, never appended, with an OWNER QUEUE generated fresh from cards that need a
+decision every time it's read (never stored) — and `.repoboard/log/YYYY-MM-DD.md`, one file per
+day that every seat appends its own `##### <SEAT> <ts>: <title>` block to. `repoboard state
+--set-section LIVE "Tree is dev."`, `repoboard log --as claude/ops "armed the fires"`, and
+`repoboard check` (exit 0 `ok`, or 1 naming what's wrong: a stale STATE stamp, a stale lease, a
+card working with no lease held) round-trip through MCP `get_state`/`set_state_section`/
+`append_repo_log`/`check` and HTTP `GET /api/state`, `PUT /api/state/section`, `GET/POST
+/api/log`, `GET /api/check` the same way. `repoboard init --practices` scaffolds all of it (plus a
+root `NEXT-AGENT-PROMPT.md`), never overwriting a file that already exists. See `docs/AGENTS.md`
+§10.
+
 The CLI is the cheapest per operation and has no standing cost. MCP pays off when the agent has
 no shell or its harness loads tool schemas on demand. Editing the file is the escape hatch: it
 always works, and the watcher synthesizes the event (`actor: file`). `docs/AGENTS.md` is the one

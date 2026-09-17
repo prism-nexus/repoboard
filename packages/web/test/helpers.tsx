@@ -3,7 +3,7 @@ import { render } from '@testing-library/react';
 import { App } from '../src/App.jsx';
 import { createMockTransport } from '../src/mock/index.js';
 import { createStore, type Store } from '../src/store.js';
-import type { ClientMessage, LeasesPayload } from '../src/wire.js';
+import type { ClientMessage, LeasesPayload, LogPayload, StatePayload } from '../src/wire.js';
 
 export function card(id: string, status: string, extra: Partial<Card> = {}): Card {
   return {
@@ -37,13 +37,43 @@ export function snapshot(
   hasBoard?: boolean,
   /** P8.2. Omit to send a payload with no `leases` at all (a pre-P8.2 server; reads as empty). */
   leases?: LeasesPayload,
+  /** P8.3. Omit to send a payload with no `state` at all (before any STATE.md exists). */
+  state?: StatePayload,
+  /** P8.3. Omit to send a payload with no `log` at all. */
+  log?: LogPayload,
 ) {
   const board = hasBoard === undefined ? { config, cards } : { config, cards, hasBoard };
-  store.dispatch({ type: 'snapshot', board, repo: null, ...(leases ? { leases } : {}) });
+  store.dispatch({
+    type: 'snapshot',
+    board,
+    repo: null,
+    ...(leases ? { leases } : {}),
+    ...(state ? { state } : {}),
+    ...(log ? { log } : {}),
+  });
 }
 
 export function emptyLeases(): LeasesPayload {
   return { leases: [], windows: [], stale: [], now: '2026-09-02T22:41:10Z' };
+}
+
+export function emptyState(): StatePayload {
+  return { stamp: null, actor: null, sections: null, ownerQueue: [], text: null };
+}
+
+export function mockState(overrides: Partial<StatePayload> = {}): StatePayload {
+  return {
+    stamp: '2026-09-02T22:41:10Z',
+    actor: 'claude/p8-3',
+    sections: {
+      live: 'Tree is dev.',
+      lastLandings: 'K117 landed.',
+      seats: 'ops watching.',
+    },
+    ownerQueue: [],
+    text: '# STATE',
+    ...overrides,
+  };
 }
 
 export function renderApp(store: Store) {

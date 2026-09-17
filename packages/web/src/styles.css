@@ -276,6 +276,151 @@ button {
   font-weight: 600;
 }
 
+/* ---- status row: ticker + log timeline, side by side (P8.3) ---- */
+.status-row {
+  display: flex;
+  align-items: stretch;
+  border-bottom: 1px solid var(--line);
+}
+.status-row .ticker {
+  flex: 1;
+  min-width: 0;
+  border-bottom: none;
+}
+.log-timeline {
+  width: 280px;
+  flex: 0 0 auto;
+  border-left: 1px solid var(--line);
+  background: var(--surface-2);
+  font-size: 11px;
+  overflow-y: auto;
+  max-height: 120px;
+}
+.log-timeline--empty {
+  display: flex;
+  align-items: center;
+  height: 26px;
+  padding: 0 10px;
+}
+.log-timeline__item {
+  border-bottom: 1px solid var(--line);
+}
+.log-timeline__item:last-child {
+  border-bottom: none;
+}
+.log-timeline__summary {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 10px;
+  cursor: pointer;
+  list-style: none;
+}
+.log-timeline__summary::-webkit-details-marker {
+  display: none;
+}
+.log-timeline__seat {
+  font-weight: 600;
+  white-space: nowrap;
+}
+.log-timeline__title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.log-timeline__when {
+  color: var(--muted);
+  white-space: nowrap;
+}
+.log-timeline__text {
+  margin: 0 10px 8px;
+  padding: 6px 8px;
+  background: var(--surface);
+  border-radius: var(--radius);
+  white-space: pre-wrap;
+  font-family: var(--font-ui);
+  font-size: 11px;
+}
+
+/* ---- state panel (P8.3) ---- */
+.board-view {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  height: 100%;
+}
+.state-panel {
+  flex: 0 0 auto;
+  border-bottom: 1px solid var(--line);
+  background: var(--surface);
+}
+.state-panel__head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 6px 12px;
+  font-size: 12px;
+  text-align: left;
+}
+.state-panel__title {
+  font-family: var(--font-mono);
+  font-weight: 700;
+  letter-spacing: 0.04em;
+}
+.state-panel__badge {
+  color: var(--amber);
+  font-weight: 600;
+}
+.state-panel__chevron {
+  margin-left: auto;
+  color: var(--muted);
+}
+.state-panel__body {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+  padding: 0 12px 10px;
+  font-size: 12px;
+  max-height: 240px;
+  overflow-y: auto;
+}
+.state-panel__heading {
+  margin: 0 0 4px;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+}
+.state-panel__prose {
+  overflow-wrap: anywhere;
+}
+.state-panel__prose :is(p, ul, ol) {
+  margin: 0 0 6px;
+}
+.state-panel__queue {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.state-panel__queue-item {
+  text-align: left;
+  color: var(--accent);
+  overflow-wrap: anywhere;
+}
+.state-panel__queue-item:disabled {
+  color: var(--muted);
+  cursor: default;
+}
+@media (max-width: 900px) {
+  .state-panel__body {
+    grid-template-columns: 1fr;
+  }
+}
+
 /* ---- board ---- */
 .main {
   /* Always the 1fr row (row 4 is the optional banner); an `auto` row would size it to content. */
@@ -288,6 +433,7 @@ button {
   grid-template-rows: minmax(0, 1fr);
 }
 .board {
+  flex: 1;
   min-height: 0;
   display: flex;
   gap: 8px;

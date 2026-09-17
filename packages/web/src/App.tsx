@@ -1,6 +1,7 @@
 import { isActive } from '@repoboard/core';
 import { useCallback, useEffect, useMemo } from 'react';
 import { Drawer } from './components/Drawer.jsx';
+import { LogTimeline } from './components/LogTimeline.jsx';
 import { NowStrip } from './components/NowStrip.jsx';
 import { Ticker } from './components/Ticker.jsx';
 import { Toasts } from './components/Toasts.jsx';
@@ -60,7 +61,10 @@ function Shell() {
         onTheme={store.setTheme}
       />
       <NowStrip leases={state.leases} now={now} />
-      <Ticker events={state.events} fun={state.fun} now={now} />
+      <div className="status-row">
+        <Ticker events={state.events} fun={state.fun} now={now} />
+        <LogTimeline log={state.log} now={now} />
+      </div>
       {state.everConnected && !state.connected ? (
         <div className="banner" role="alert">
           Disconnected from the server. Reconnecting… the board shows the last state it saw.

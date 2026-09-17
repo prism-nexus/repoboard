@@ -72,14 +72,20 @@ const LEASE_TOOLS = ['take_lease', 'release_lease', 'list_leases', 'add_window',
 const STATE_TOOLS = ['get_state', 'set_state_section', 'append_repo_log', 'check'];
 /** P8.4: one new tool, same terse-description budget. */
 const COST_TOOLS = ['cost'];
+/** P8.5: archive + sync-issues, described for a newcomer like the card tools. */
+const ISSUE_TOOLS = ['archive_cards', 'sync_issues'];
 
 describe('repoboard mcp: handshake and tool list', () => {
-  it('lists exactly the nineteen tools of the brief, card tools described for a newcomer', async () => {
+  it('lists exactly the twenty-one tools of the brief, card tools described for a newcomer', async () => {
     const r = await rig();
     const { tools } = await r.client.listTools();
     expect(tools.map((t) => t.name).sort()).toEqual([...MCP_TOOL_NAMES].sort());
     expect(tools).toHaveLength(
-      CARD_TOOLS.length + LEASE_TOOLS.length + STATE_TOOLS.length + COST_TOOLS.length,
+      CARD_TOOLS.length +
+        LEASE_TOOLS.length +
+        STATE_TOOLS.length +
+        COST_TOOLS.length +
+        ISSUE_TOOLS.length,
     );
     for (const t of tools) {
       if (!CARD_TOOLS.includes(t.name)) continue;
@@ -119,7 +125,7 @@ describe('repoboard mcp: handshake and tool list', () => {
     expect(Object.values(bytes).every((b) => b > 0)).toBe(true);
   });
 
-  it('the full schema, all eighteen tools, is reported here (orchestrator note 1)', async () => {
+  it('the full schema, all twenty-one tools, is reported here (orchestrator note 1)', async () => {
     const r = await rig();
     const { tools } = await r.client.listTools();
     const total = tools.reduce((sum, t) => sum + Buffer.byteLength(JSON.stringify(t)), 0);

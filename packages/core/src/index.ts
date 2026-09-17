@@ -1,3 +1,5 @@
+export type { ArchivableCard, OlderThanResult } from './archive.js';
+export { resolveOlderThan, selectArchivable } from './archive.js';
 export type { BoardParseResult } from './board.js';
 export {
   BoardConfigSchema,
@@ -35,6 +37,18 @@ export type {
   DecideResult,
 } from './decisions.js';
 export { askDecision, decide, isDecided, needsDecision } from './decisions.js';
+export type {
+  CloseSyncedCardOptions,
+  CloseSyncedCardResult,
+  IssueItem,
+  ParseIssuesResult,
+  PlanCard,
+  PlanClose,
+  PlanCreate,
+  PlanSyncOptions,
+  PlanSyncResult,
+} from './issues.js';
+export { closeSyncedCard, parseIssueItems, planSync } from './issues.js';
 export type {
   AddWindowInput,
   AddWindowResult,
@@ -74,6 +88,7 @@ export {
 } from './presence.js';
 export type { ParseRefResult, Ref, RefSpan, ResolvedRef, ResolveRefResult } from './refs.js';
 export {
+  findHeadingSection,
   normalizeHeading,
   parseRef,
   REF_MAX_BYTES,

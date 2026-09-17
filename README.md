@@ -76,6 +76,17 @@ finding makes error-grade. `--root` measures ANY directory, board or no board �
 measurement was freshpickedjobs' own `CLAUDE.md`, which reached 32,620 B before anyone measured
 it. MCP `cost`, HTTP `GET /api/cost`, and a tile on the Map view. See `docs/AGENTS.md` §11.
 
+`repoboard archive [--older-than 14d] [--dry-run]` (P8.5) moves `done` cards older than the
+cutoff to `.repoboard/archive/` — `git mv` when tracked, else a rename, always byte-identical; the
+board's own `done` column header has an "archive older than 14d" button that does the same thing.
+`repoboard sync-issues <path>#<heading> [--dry-run] [--root <dir>]` turns a README's `## Known
+issues` list into cards without copying a word of it: a card for every open `- **K<n>` entry, a
+move to done for every one that's struck or gone, idempotent by `refs: [<path>@K<n>]`, and it
+**never writes the source file** — measured read-only against freshpickedjobs's own 3,300+ line
+README three times as the file moved under this task (64 create / 0 close / 0 malformed each
+time; `git status --short` unchanged before and after every run). MCP `archive_cards`/
+`sync_issues`, HTTP `POST /api/archive`/`POST /api/sync-issues`. See `docs/AGENTS.md` §12.
+
 The CLI is the cheapest per operation and has no standing cost. MCP pays off when the agent has
 no shell or its harness loads tool schemas on demand. Editing the file is the escape hatch: it
 always works, and the watcher synthesizes the event (`actor: file`). `docs/AGENTS.md` is the one

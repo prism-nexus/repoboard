@@ -22,6 +22,7 @@ import {
   type CreateCardInput,
   checkFindings,
   checkResource,
+  closeSyncedCard,
   createCard,
   DEFAULT_CLAUDE_MD_BUDGET_BYTES,
   type DecisionOption,
@@ -48,6 +49,7 @@ import {
   releaseLease,
   type StateDoc,
   type StateSectionName,
+  selectArchivable as selectArchivableCore,
   serializeCard,
   serializeLeases,
   setStateSection as setStateSectionCore,
@@ -57,6 +59,7 @@ import {
   updateCard,
 } from '@repoboard/core';
 import { watch as chokidarWatch, type FSWatcher } from 'chokidar';
+import { type ArchiveMoveMethod, archiveMoveFile } from './archive.js';
 import { gatherCost } from './cost.js';
 
 /** One line of `.repoboard/events.jsonl`: core's `Event` (K2). Kept as a name for the package index. */
@@ -127,6 +130,16 @@ export type AskOutcome =
 export type DecideOutcome =
   | { ok: true; card: Card; event: Event; warnings: string[] }
   | { ok: false; error: string; notFound?: boolean; readOnly?: boolean };
+
+/** P8.5: `store.closeSynced` outcome (`sync-issues`'s own close, custom log line). */
+export type CloseSyncedOutcome =
+  | { ok: true; card: Card; event: Event; warnings: string[] }
+  | { ok: false; error: string; notFound?: boolean; readOnly?: boolean };
+
+/** P8.5: `store.archiveCards` outcome. `method` is which OS-level move each archived id used. */
+export type ArchiveOutcome =
+  | { ok: true; archived: string[]; method: Record<string, ArchiveMoveMethod> }
+  | { ok: false; error: string; readOnly?: boolean };
 
 /** P8.2: `takeLease`/`releaseLease`/`addWindow` outcomes. `readOnly` is the map-only refusal (K10). */
 export type LeaseOutcome =
@@ -640,6 +653,82 @@ export class CardStore extends EventEmitter<StoreEvents> {
     });
   }
 
+  /**
+   * P8.5: `sync-issues`'s own close — moves a card to the first `done: true` column with a log
+   * line naming the cause (`synced: entry closed in <path>`) instead of `moveCard`'s generic
+   * line. Same funnel shape as `move`/`ask`/`decide`: one write, one event.
+   */
+  closeSynced(id: string, path: string, actor: string): Promise<CloseSyncedOutcome> {
+    return this.mutate(async () => {
+      const card = this.cards.get(id);
+      if (!card) return { ok: false, error: `unknown card "${id}"`, notFound: true };
+      const columnCounts: Record<string, number> = {};
+      for (const c of this.cards.values()) {
+        if (c.id !== id) columnCounts[c.status] = (columnCounts[c.status] ?? 0) + 1;
+      }
+      const res = closeSyncedCard(card, {
+        actor,
+        now: this.now(),
+        config: this.cfg,
+        path,
+        columnCounts,
+      });
+      if (!res.ok) return { ok: false, error: res.error };
+      await this.writeCard(res.card);
+      await this.appendEvent(res.event);
+      return { ok: true, card: res.card, event: res.event, warnings: res.warnings };
+    });
+  }
+
+  /**
+   * P8.5: pure read (no I/O beyond what `list()`/`config` already hold in memory) — which cards
+   * WOULD be archived at `cutoff`. Safe to call in map-only mode and for `--dry-run` (it never
+   * writes); `archiveCards` is the writer.
+   */
+  selectArchivable(cutoff: Date): string[] {
+    return selectArchivableCore(this.list(), this.cfg, cutoff);
+  }
+
+  /**
+   * P8.5: move each id's card file to `.repoboard/archive/` — `git mv` when tracked, else
+   * `fs.rename` (`archive.ts`). BYTE-IDENTICAL: this never routes a card through `serializeCard`,
+   * unlike every other mutation here (C3's own control: doing so is exactly what must make the
+   * hash test fail). One `type: 'archive'` event per card actually moved; an id already gone from
+   * the in-memory map (unknown, or archived by a concurrent call) is skipped, not an error.
+   */
+  archiveCards(ids: readonly string[], actor: string): Promise<ArchiveOutcome> {
+    return this.mutate(async () => {
+      this.refuseWriteWithoutBoard();
+      const archiveDir = join(this.repoboardDir, 'archive');
+      const archived: string[] = [];
+      const method: Record<string, ArchiveMoveMethod> = {};
+      for (const id of ids) {
+        const card = this.cards.get(id);
+        if (!card) continue;
+        const src = this.filePath(id);
+        const dst = join(archiveDir, `${id}.md`);
+        const relSrc = relative(this.root, src);
+        const relDst = relative(this.root, dst);
+        method[id] = await archiveMoveFile(this.root, relSrc, relDst);
+        this.byPath.delete(src);
+        this.cards.delete(id);
+        this.emit('card:removed', id);
+        const ts = toIso(this.now());
+        const event: Event = {
+          ts,
+          actor,
+          type: 'archive',
+          cardId: id,
+          from: card.status,
+          to: 'archive',
+        };
+        await this.appendEvent(event);
+        archived.push(id);
+      }
+      return { ok: true as const, archived, method };
+    });
+  }
+
   // ---- internals ----------------------------------------------------------------------
 
   private enqueue<T>(fn: () => Promise<T>): Promise<T> {
@@ -1019,6 +1108,7 @@ const EVENT_TYPES: ReadonlySet<string> = new Set([
   'decide',
   'lease',
   'window',
+  'archive',
 ]);
 
 function parseEventLines(text: string): Event[] {

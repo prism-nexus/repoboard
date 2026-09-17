@@ -6,7 +6,7 @@
 import { spawn } from 'node:child_process';
 import { realpathSync } from 'node:fs';
 import { mkdir, readFile, stat, writeFile } from 'node:fs/promises';
-import { dirname, join, resolve } from 'node:path';
+import { dirname, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { type ParseArgsConfig, parseArgs } from 'node:util';
 import {
@@ -25,6 +25,7 @@ import {
   type Priority,
   parseBoard,
   renderState,
+  resolveOlderThan,
   resolveTimeSpec,
   type StateSectionName,
   serializeBoard,
@@ -34,6 +35,7 @@ import {
 } from '@repoboard/core';
 import { gatherCost } from './cost.js';
 import { type RunningServer, startServer } from './http.js';
+import { applySyncPlan, computeSyncPlan } from './issues.js';
 import {
   formatRows,
   type LeaseRow,
@@ -90,7 +92,8 @@ Usage:
                                         assignee, priority, labels, files, updated); add --full for bodies;
                                         --needs-decision filters to cards with an open decision
   repoboard card show <id> [--resolve]        print the card file; --resolve appends the lines each
-                                        refs: entry points at, read live from the file
+                                        refs: entry points at, read live from the file; an
+                                        archived id prints \`archived: .repoboard/archive/<id>.md\`
   repoboard card ask <id> "<question>" [--option "A1 <text>"]... [--as a] [--replace]
                                         open a decision on a card (P8.1); --replace withdraws one
                                         already open. With no options, the owner answers with --words.
@@ -133,6 +136,21 @@ Usage:
                                         8192, or board.yml's claudeMdBudgetBytes); exit 0 otherwise.
                                         An absent CLAUDE.md is reported, never OVER. --root measures
                                         ANY directory, with or without a .repoboard/ board.
+  repoboard archive [--older-than 14d] [--dry-run] [--as actor]
+                                        move every \`done\` card whose \`updated\` is older than the
+                                        cutoff (duration 14d/2h/90m, or an ISO-8601 datetime) to
+                                        .repoboard/archive/ — git mv when tracked, else a rename;
+                                        never rewrites the file. --dry-run lists the ids and moves
+                                        nothing.
+  repoboard sync-issues <path>#<heading> [--status todo] [--label issue] [--dry-run] [--as a]
+                                        [--root <dir>]
+                                        read a markdown file's section under the first heading
+                                        starting with <heading>; create a card (labelled issue,
+                                        refs: [<path>@K<n>]) for every open \`- **K<n>\` item with
+                                        no card yet, and move a struck or vanished item's card to
+                                        the done column. Idempotent by ref; NEVER writes <path>.
+                                        --dry-run prints what it would do and writes nothing —
+                                        the only mode to run against a repo you do not own.
   repoboard serve [--root <dir>] [--port 4242] [--open] [--no-fun]
                                         start the dashboard (binds 127.0.0.1); --root serves that
                                         directory as given — a directory with no .repoboard/ opens
@@ -632,7 +650,18 @@ async function cmdCardShow(args: string[], io: CliIO): Promise<number> {
   const root = await requireRoot(io);
   const store = await openStore(root, { watch: false, now: io.now });
   const card = store.get(id);
-  if (!card) throw new UserError(`unknown card "${id}"`);
+  if (!card) {
+    const archivedPath = join(store.repoboardDir, 'archive', `${id}.md`);
+    const isArchived = await stat(archivedPath).then(
+      () => true,
+      () => false,
+    );
+    if (isArchived) {
+      io.stdout.write(`archived: ${relative(root, archivedPath)}\n`);
+      return 0;
+    }
+    throw new UserError(`unknown card "${id}"`);
+  }
   io.stdout.write(await readFile(store.filePath(id), 'utf8'));
   if (values.resolve) {
     // K7: each ref as a fenced block headed path:start-end, resolved now from the file.
@@ -958,6 +987,93 @@ async function cmdCost(args: string[], io: CliIO): Promise<number> {
   return report.over ? 1 : 0;
 }
 
+// ---- archive / sync-issues (P8.5) -----------------------------------------------------------
+
+async function cmdArchive(args: string[], io: CliIO): Promise<number> {
+  const { values } = parse(args, {
+    'older-than': { type: 'string', default: '14d' },
+    'dry-run': { type: 'boolean', default: false },
+    as: { type: 'string' },
+  });
+  const root = await requireRoot(io);
+  const store = await openStore(root, { watch: false, now: io.now });
+  const now = io.now?.() ?? new Date();
+  const older = resolveOlderThan(values['older-than'] ?? '14d', now);
+  if (!older.ok) throw new UserError(older.error);
+  const ids = store.selectArchivable(older.cutoff);
+  if (values['dry-run']) {
+    io.stdout.write(
+      ids.length === 0 ? 'would archive 0\n' : `would archive ${ids.length}: ${ids.join(', ')}\n`,
+    );
+    return 0;
+  }
+  if (ids.length === 0) {
+    io.stdout.write('archived 0\n');
+    return 0;
+  }
+  const res = await store.archiveCards(ids, actorFrom(values.as, io));
+  if (!res.ok) throw new UserError(res.error);
+  io.stdout.write(`archived ${res.archived.length}: ${res.archived.join(', ')}\n`);
+  return 0;
+}
+
+/** `<path>#<heading>` — the first `#` splits the two; both halves are required. */
+function splitPathHeading(arg: string): { path: string; heading: string } {
+  const i = arg.indexOf('#');
+  const path = i === -1 ? arg : arg.slice(0, i);
+  const heading = i === -1 ? '' : arg.slice(i + 1);
+  if (!path || !heading) {
+    throw new UserError('usage: repoboard sync-issues <path>#<heading> [options]');
+  }
+  return { path, heading };
+}
+
+async function cmdSyncIssues(args: string[], io: CliIO): Promise<number> {
+  const { values, positionals } = parse(args, {
+    status: { type: 'string', default: 'todo' },
+    label: { type: 'string', default: 'issue' },
+    'dry-run': { type: 'boolean', default: false },
+    as: { type: 'string' },
+    root: { type: 'string' },
+  });
+  const [arg] = positionals;
+  if (!arg) throw new UserError('usage: repoboard sync-issues <path>#<heading> [options]');
+  const { path, heading } = splitPathHeading(arg);
+  // K7's own read-only root resolution (`costRoot`): --root measures ANY directory, board or
+  // not — the freshpickedjobs measurement (locked decision 6) is exactly this case.
+  const root = await costRoot(values.root, io);
+  const store = await openStore(root, { watch: false, now: io.now });
+  const input = {
+    path,
+    heading,
+    status: values.status ?? 'todo',
+    label: values.label ?? 'issue',
+  };
+  const outcome = await computeSyncPlan(store, input);
+  if (!outcome.ok) throw new UserError(outcome.error);
+  const { plan, malformed } = outcome;
+  for (const line of malformed) io.stdout.write(`skipped: malformed strike: ${line}\n`);
+  const createKs = plan.create.map((c) => `K${c.n}`);
+  const closeKs = plan.close.map((c) => `K${c.n}`);
+  if (values['dry-run']) {
+    io.stdout.write(
+      `would create ${plan.create.length}, close ${plan.close.length}, ` +
+        `malformed ${malformed.length}, unchanged ${plan.unchanged}\n`,
+    );
+    if (createKs.length > 0) io.stdout.write(`create: ${createKs.join(' ')}\n`);
+    if (closeKs.length > 0) io.stdout.write(`close: ${closeKs.join(' ')}\n`);
+    return 0;
+  }
+  const actor = actorFrom(values.as, io);
+  const applied = await applySyncPlan(store, input, plan, actor);
+  io.stdout.write(
+    `created ${applied.created.length}, closed ${applied.closed.length}, ` +
+      `malformed ${malformed.length}\n`,
+  );
+  for (const e of applied.errors) (io.stderr ?? io.stdout).write(`error: ${e}\n`);
+  return applied.errors.length > 0 ? 1 : 0;
+}
+
 function openInBrowser(url: string): void {
   const [cmd, args] =
     process.platform === 'darwin'
@@ -1089,6 +1205,8 @@ export async function run(argv: string[], io: CliIO): Promise<number> {
     }
     if (cmd === 'check') return await cmdCheck(argv.slice(1), io);
     if (cmd === 'cost') return await cmdCost(argv.slice(1), io);
+    if (cmd === 'archive') return await cmdArchive(argv.slice(1), io);
+    if (cmd === 'sync-issues') return await cmdSyncIssues(argv.slice(1), io);
     throw new UserError(`unknown command "${cmd}" (try repoboard --help)`);
   } catch (e) {
     if (e instanceof UserError) {

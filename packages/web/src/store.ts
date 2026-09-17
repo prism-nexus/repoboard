@@ -82,6 +82,13 @@ export interface Store {
    * returns, and a failure toasts rather than guessing at the new state.
    */
   decideCard(id: string, input: { letter?: string; words?: string }): Promise<void>;
+  /**
+   * P8.5: the done column's "archive older than 14d" action — `POST /api/archive`. Archived
+   * cards disappear from the board via the ordinary `card:removed` broadcast (the server emits
+   * it from `archiveCards` exactly like any other removal); this only fires the request and
+   * toasts the count.
+   */
+  archiveDone(): Promise<void>;
   select(id: string | null): void;
   setView(view: View): void;
   togglePin(id: string): void;
@@ -279,6 +286,30 @@ export function createStore(factory: TransportFactory, opts: StoreOptions = {}):
       }
       const card = (await res.json()) as Card;
       set({ cards: replaceCard(card) });
+    },
+    async archiveDone() {
+      if (typeof fetch !== 'function') return;
+      let res: Response;
+      try {
+        res = await fetch('/api/archive', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ olderThan: '14d', actor: 'web' }),
+        });
+      } catch (e) {
+        toast(`Archive failed: ${e instanceof Error ? e.message : String(e)}`);
+        return;
+      }
+      if (!res.ok) {
+        const body: unknown = await res.json().catch(() => ({}));
+        const message =
+          body && typeof body === 'object' && 'error' in body ? String(body.error) : res.status;
+        toast(`Archive failed: ${message}`);
+        return;
+      }
+      const data = (await res.json()) as { archived: string[] };
+      const n = data.archived.length;
+      toast(n === 0 ? 'Nothing to archive' : `Archived ${n} card${n === 1 ? '' : 's'}`);
     },
     select: (selectedId) => set({ selectedId }),
     setView: (view) => set({ view }),

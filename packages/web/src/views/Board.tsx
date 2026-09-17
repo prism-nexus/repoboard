@@ -114,6 +114,7 @@ export function Board() {
     setDragging(null);
     handleDragEnd(store, ev);
   };
+  const archiveDone = useCallback(() => void store.archiveDone(), [store]);
   const open = useCallback((id: string) => store.select(id), [store]);
   const pin = useCallback((id: string) => store.togglePin(id), [store]);
   const hover = useCallback((id: string | null) => store.setHover(id), [store]);
@@ -149,7 +150,7 @@ export function Board() {
       >
         <div className={`board ${selectedId ? 'board--drawer' : ''}`} data-testid="board">
           {columns.map((col) => (
-            <Column key={col.id} column={col}>
+            <Column key={col.id} column={col} onArchive={col.done ? archiveDone : undefined}>
               {col.cards.map((card) => (
                 <CardItem
                   key={card.id}

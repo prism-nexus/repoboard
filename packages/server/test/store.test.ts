@@ -931,7 +931,9 @@ describe('K10 structure of store.ts', () => {
       'addWindow',
       'appendLog',
       'appendRepoLog',
+      'archiveCards',
       'ask',
+      'closeSynced',
       'create',
       'decide',
       'move',
@@ -941,6 +943,8 @@ describe('K10 structure of store.ts', () => {
       'update',
     ]);
     expect(decls.map((d) => d[3])).toEqual([
+      'mutate',
+      'mutate',
       'mutate',
       'mutate',
       'mutate',

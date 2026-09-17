@@ -17,10 +17,12 @@ import {
   type Lease,
   needsDecision,
   renderState,
+  resolveOlderThan,
   type StateSectionName,
   type Window,
 } from '@repoboard/core';
 import { z } from 'zod';
+import { applySyncPlan, computeSyncPlan } from './issues.js';
 import { resolveCardRefs } from './refs.js';
 import { type CardStore, openStore } from './store.js';
 import { VERSION } from './version.js';
@@ -45,6 +47,8 @@ export const MCP_TOOL_NAMES = [
   'append_repo_log',
   'check',
   'cost',
+  'archive_cards',
+  'sync_issues',
 ] as const;
 
 export interface McpServerOptions {
@@ -665,6 +669,85 @@ export function createMcpServer(opts: McpServerOptions): McpServer {
       annotations: { readOnlyHint: true },
     },
     async ({ budget }) => ok(await store.cost(budget)),
+  );
+
+  server.registerTool(
+    'archive_cards',
+    {
+      title: 'Archive old done cards',
+      description:
+        'Move every card in a done column whose `updated` is older than olderThan (default ' +
+        '14d; also accepts 2h/90m or an ISO-8601 datetime) to .repoboard/archive/ — git mv when ' +
+        'tracked, else a rename; the file is never rewritten. dryRun:true (default false) lists ' +
+        'the ids and writes nothing. Archived cards no longer appear in list_cards; get_card on ' +
+        'an archived id fails, naming the archive path.',
+      inputSchema: {
+        olderThan: z
+          .string()
+          .optional()
+          .describe('Duration (14d, 2h, 90m) or ISO-8601 cutoff. Default 14d.'),
+        dryRun: z.boolean().optional().describe('List ids only; write nothing. Default false.'),
+        actor: z.string().optional().describe(ACTOR_SHORT),
+      },
+    },
+    async ({ olderThan, dryRun, actor }) => {
+      const older = resolveOlderThan(olderThan ?? '14d', now());
+      if (!older.ok) return fail(older.error);
+      const ids = store.selectArchivable(older.cutoff);
+      if (dryRun) return ok({ dryRun: true, ids });
+      if (ids.length === 0) return ok({ dryRun: false, archived: [] });
+      const res = await store.archiveCards(ids, actor ?? defaultActor);
+      if (!res.ok) return fail(res.error);
+      return ok({ dryRun: false, archived: res.archived });
+    },
+  );
+
+  server.registerTool(
+    'sync_issues',
+    {
+      title: 'Sync cards from a README-style K-list',
+      description:
+        `${CARD_INTRO}Reads \`path\` (repo-relative; ".." and absolute paths refused) and the ` +
+        'section under the first heading whose text starts with `heading` — the same heading ' +
+        'rule the board uses for `refs:`. An item is a list item whose FIRST LINE begins at ' +
+        'column 0 with `- **K<n>` (open) or `- ~~**K<n>` (struck = closed); nothing else is an ' +
+        'item. Creates a card (labels: [label], refs: [`path@K<n>`]) for every open item with no ' +
+        'card yet; moves a struck or vanished item’s card to the done column. Idempotent by ref ' +
+        '— a second call creates and moves nothing. NEVER writes `path`. dryRun:true (default ' +
+        'false) reports the plan and writes nothing — the only mode to call against a repo you ' +
+        'do not own.',
+      inputSchema: {
+        path: z.string().min(1).describe('Repo-relative markdown file, e.g. README.md.'),
+        heading: z.string().min(1).describe('Heading text, e.g. "Known issues".'),
+        status: z.string().optional().describe('Column new cards are created in. Default todo.'),
+        label: z.string().optional().describe('Label on created cards. Default issue.'),
+        dryRun: z.boolean().optional().describe('Report the plan only; write nothing.'),
+        actor: z.string().optional().describe(ACTOR_DESC),
+      },
+    },
+    async ({ path, heading, status, label, dryRun, actor }) => {
+      const input = { path, heading, status: status ?? 'todo', label: label ?? 'issue' };
+      const outcome = await computeSyncPlan(store, input);
+      if (!outcome.ok) return fail(outcome.error);
+      const { plan, malformed } = outcome;
+      if (dryRun) {
+        return ok({
+          dryRun: true,
+          create: plan.create,
+          close: plan.close,
+          malformed,
+          unchanged: plan.unchanged,
+        });
+      }
+      const applied = await applySyncPlan(store, input, plan, actor ?? defaultActor);
+      return ok({
+        dryRun: false,
+        created: applied.created,
+        closed: applied.closed,
+        malformed,
+        errors: applied.errors,
+      });
+    },
   );
 
   return server;

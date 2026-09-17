@@ -125,11 +125,13 @@ export interface BoardConfig {
  * resource, not a card — `cardId` is `null` and `resource` names it instead; `from`/`to` carry
  * the holder change (`from` the previous holder or `null`, `to` the new holder or `"released"`)
  * for `lease`, and `to` the window's name for `window` (`leases.ts`).
+ * P8.5: `archive` is one event per card moved to `.repoboard/archive/` -- `from` the
+ * column it left, `to` the literal string `"archive"` (there is no column by that name).
  */
 export interface Event {
   ts: string;
   actor: string;
-  type: 'move' | 'update' | 'create' | 'ask' | 'decide' | 'lease' | 'window';
+  type: 'move' | 'update' | 'create' | 'ask' | 'decide' | 'lease' | 'window' | 'archive';
   cardId: string | null;
   /** P8.2: present on `lease`/`window` events, absent on card events. */
   resource?: string;

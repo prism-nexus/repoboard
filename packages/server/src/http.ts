@@ -18,12 +18,14 @@ import {
   needsDecision,
   type Priority,
   renderState,
+  resolveOlderThan,
   type StateSectionName,
   staleLeases,
   toIso,
 } from '@repoboard/core';
 import { watch as chokidarWatch, type FSWatcher } from 'chokidar';
 import { type WebSocket, WebSocketServer } from 'ws';
+import { applySyncPlan, computeSyncPlan } from './issues.js';
 import { resolveCardRefs } from './refs.js';
 import { type ScanResult, scanRepo } from './scanner.js';
 import type { CardStore } from './store.js';
@@ -101,6 +103,15 @@ const ADD_WINDOW_FIELDS: ReadonlySet<string> = new Set([
 ]);
 const SET_STATE_FIELDS: ReadonlySet<string> = new Set(['section', 'body', 'actor']);
 const APPEND_LOG_FIELDS: ReadonlySet<string> = new Set(['seat', 'title', 'text']);
+const ARCHIVE_FIELDS: ReadonlySet<string> = new Set(['olderThan', 'dryRun', 'actor']);
+const SYNC_ISSUES_FIELDS: ReadonlySet<string> = new Set([
+  'path',
+  'heading',
+  'status',
+  'label',
+  'dryRun',
+  'actor',
+]);
 const SECTION_NAMES: ReadonlySet<string> = new Set(['LIVE', 'LAST-LANDINGS', 'SEATS']);
 const SECTION_KEY_OF: Record<string, StateSectionName> = {
   LIVE: 'live',
@@ -887,6 +898,64 @@ export async function startServer(opts: ServerOptions): Promise<RunningServer> {
         }
       }
       return sendJson(res, 200, await store.cost(budget));
+    }
+    // P8.5: archive/sync-issues. Both are POST-only (they can write) and both accept a `dryRun`
+    // that never calls a store writer at all — the same "pure read, always 200" reasoning as
+    // `/api/leases/check/:resource` and `/api/cost` does not apply here (a real run DOES write),
+    // so only the dry-run half stays unconditionally 200.
+    if (method === 'POST' && path === '/api/archive') {
+      const body = await readBody(req);
+      rejectUnknown(body, ARCHIVE_FIELDS);
+      const olderThanRaw = optString(body, 'olderThan') ?? '14d';
+      if (body.dryRun !== undefined && typeof body.dryRun !== 'boolean') {
+        throw new HttpError(400, 'dryRun must be a boolean');
+      }
+      const dryRun = body.dryRun === true;
+      const actor = optString(body, 'actor') ?? 'web';
+      const older = resolveOlderThan(olderThanRaw, store.clock);
+      if (!older.ok) throw new HttpError(400, older.error);
+      const ids = store.selectArchivable(older.cutoff);
+      if (dryRun) return sendJson(res, 200, { dryRun: true, ids });
+      if (ids.length === 0) return sendJson(res, 200, { dryRun: false, archived: [] });
+      const outcome = await store.archiveCards(ids, actor);
+      if (!outcome.ok) throw new HttpError(outcome.readOnly === true ? 409 : 400, outcome.error);
+      return sendJson(res, 200, { dryRun: false, archived: outcome.archived });
+    }
+    if (method === 'POST' && path === '/api/sync-issues') {
+      const body = await readBody(req);
+      rejectUnknown(body, SYNC_ISSUES_FIELDS);
+      const p = optString(body, 'path');
+      const heading = optString(body, 'heading');
+      if (!p) throw new HttpError(400, 'path is required');
+      if (!heading) throw new HttpError(400, 'heading is required');
+      const status = optString(body, 'status') ?? 'todo';
+      const label = optString(body, 'label') ?? 'issue';
+      if (body.dryRun !== undefined && typeof body.dryRun !== 'boolean') {
+        throw new HttpError(400, 'dryRun must be a boolean');
+      }
+      const dryRun = body.dryRun === true;
+      const actor = optString(body, 'actor') ?? 'web';
+      const input = { path: p, heading, status, label };
+      const outcome = await computeSyncPlan(store, input);
+      if (!outcome.ok) throw new HttpError(400, outcome.error);
+      const { plan, malformed } = outcome;
+      if (dryRun) {
+        return sendJson(res, 200, {
+          dryRun: true,
+          create: plan.create,
+          close: plan.close,
+          malformed,
+          unchanged: plan.unchanged,
+        });
+      }
+      const applied = await applySyncPlan(store, input, plan, actor);
+      return sendJson(res, 200, {
+        dryRun: false,
+        created: applied.created,
+        closed: applied.closed,
+        malformed,
+        errors: applied.errors,
+      });
     }
     if (method === 'GET' && path === '/api/repo') {
       if (!repo) throw new HttpError(404, 'repo scanning is disabled');

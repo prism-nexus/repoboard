@@ -302,6 +302,11 @@ dashboard, its bytes on the wire measured before it ships (O3).** Core stays I/O
   (status `todo`, label `issue`, `refs: [<path>@K<n>]`) for every `- **K<n>` list item under the
   heading, and moves the card to `done` when the item is gone or struck (`- ~~**K<n>`); idempotent by
   ref; never edits the source file. The README stays the text; the board is the view.
+  **Landed** (commit: see git log, P8.5). Measured read-only against freshpickedjobs three times
+  as the target file moved under the task (68 brief / 69 at `b633c84` / 64 at `44acaf1` and again
+  at `0427693`, the final build) — `git status --short` byte-identical before/after every call,
+  `.repoboard/` absent throughout. `docs/AGENTS.md` §12 has the full table and the K-number list.
+  Brief: `docs/P8.5-ARCHIVE-SYNC-BRIEF.md` §7.
 
 **Exit criterion for P8:** in freshpickedjobs, `repoboard init --practices` + `sync-issues
 README.md#Known issues` produces a board with one card per open K-entry and no second copy of any

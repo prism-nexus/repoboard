@@ -127,6 +127,44 @@ function headingLevels(lines: readonly string[]): (number | null)[] {
   });
 }
 
+/**
+ * P8.5 (`sync-issues`, plan §11 O9): the 0-based [start,end] inclusive line indices of the
+ * section under the first heading whose normalized text starts with `heading` — the SAME rule
+ * `resolveRef`'s `'heading'` case uses (extracted here so the two never disagree: `sync-issues`
+ * calls this directly rather than re-deriving "what is a heading's section"). Unlike
+ * `resolveRef`, this returns indices only — no `span()`, so no `REF_MAX_LINES`/`REF_MAX_BYTES`
+ * truncation: a K-entry list can run to thousands of lines and must be read in full, where a
+ * card's rendered `refs:` preview is deliberately capped.
+ */
+export function findHeadingSection(
+  lines: readonly string[],
+  heading: string,
+): { start: number; end: number } | null {
+  const want = normalizeHeading(heading);
+  const levels = headingLevels(lines);
+  const n = lines.length;
+  let start = -1;
+  let level = 0;
+  for (let i = 0; i < n; i++) {
+    const lvl = levels[i];
+    if (lvl !== null && lvl !== undefined && normalizeHeading(lines[i] ?? '').startsWith(want)) {
+      start = i;
+      level = lvl;
+      break;
+    }
+  }
+  if (start === -1) return null;
+  let end = n - 1;
+  for (let j = start + 1; j < n; j++) {
+    const lvl = levels[j];
+    if (lvl !== null && lvl !== undefined && lvl <= level) {
+      end = j - 1;
+      break;
+    }
+  }
+  return { start, end };
+}
+
 function utf8Bytes(s: string): number {
   let n = 0;
   for (let i = 0; i < s.length; i++) {
@@ -197,34 +235,11 @@ export function resolveRef(ref: Ref, fileText: string): ResolveRefResult {
       return span(lines, ref.start - 1, ref.end - 1);
     }
     case 'heading': {
-      const want = normalizeHeading(ref.heading);
-      const levels = headingLevels(lines);
-      let start = -1;
-      let level = 0;
-      for (let i = 0; i < n; i++) {
-        const lvl = levels[i];
-        if (
-          lvl !== null &&
-          lvl !== undefined &&
-          normalizeHeading(lines[i] ?? '').startsWith(want)
-        ) {
-          start = i;
-          level = lvl;
-          break;
-        }
-      }
-      if (start === -1) {
+      const found = findHeadingSection(lines, ref.heading);
+      if (found === null) {
         return { text: null, error: `heading "${ref.heading}" not found in ${ref.path}` };
       }
-      let end = n - 1;
-      for (let j = start + 1; j < n; j++) {
-        const lvl = levels[j];
-        if (lvl !== null && lvl !== undefined && lvl <= level) {
-          end = j - 1;
-          break;
-        }
-      }
-      return span(lines, start, end);
+      return span(lines, found.start, found.end);
     }
     case 'token': {
       const levels = headingLevels(lines);

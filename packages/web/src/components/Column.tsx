@@ -6,9 +6,11 @@ import type { ColumnCards } from '../store.js';
 interface Props {
   column: ColumnCards;
   children: ReactNode;
+  /** P8.5: present only for the `done` column — "archive older than 14d". */
+  onArchive?: () => void;
 }
 
-export function Column({ column, children }: Props) {
+export function Column({ column, children, onArchive }: Props) {
   const { setNodeRef, isOver } = useDroppable({ id: column.id, data: { type: 'column' } });
   const count = column.cards.length;
   const breached = column.wip !== undefined && count > column.wip;
@@ -39,6 +41,16 @@ export function Column({ column, children }: Props) {
           {column.wip !== undefined ? ` / ${column.wip}` : ''}
         </span>
         {column.unconfigured ? <span className="column__note">not in board.yml</span> : null}
+        {column.done && onArchive ? (
+          <button
+            type="button"
+            className="column__archive"
+            title="Move done cards older than 14 days to .repoboard/archive/"
+            onClick={onArchive}
+          >
+            archive older than 14d
+          </button>
+        ) : null}
       </header>
       <div ref={setNodeRef} className="column__cards">
         <SortableContext

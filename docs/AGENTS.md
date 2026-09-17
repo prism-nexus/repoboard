@@ -615,3 +615,120 @@ this turn" — not as "what gets loaded automatically."
 
 621 B is under the 700 B aim, for the same reason P8.2/P8.3's tools are: no `CARD_INTRO`/
 `ACTOR_DESC` reuse — a cost report is not a card.
+
+## 12. Archive and issue sync (P8.5)
+
+Two commands close the loop O5 opened: the board should be a **VIEW** of what already exists
+elsewhere, never a second copy. `repoboard archive` retires `done` cards the way a closed README
+`K`-entry retires itself (struck in place, eventually swept out); `repoboard sync-issues` is the
+other direction — it turns a README's `## Known issues` list into cards **without copying the
+entry's text**: `refs: [<path>@K<n>]` is the only pointer, and the source file is **never
+written**.
+
+### `repoboard archive`
+
+Moves every card in a `done: true` column whose `updated` is strictly older than a cutoff (default
+`14d`; also accepts `2h`/`90m` or an absolute ISO-8601 datetime) to `.repoboard/archive/`: `git mv`
+when `.repoboard/` sits inside a git work tree **and** the file is tracked, a plain `fs.rename`
+otherwise. **Byte-identical either way** — the card is never routed through `serializeCard`, so
+the file that lands in `archive/` is the exact bytes that left `cards/`. One `type: 'archive'`
+event per card (`from` the column it left, `to` the literal string `"archive"`). The store never
+loads `.repoboard/archive/` — an archived card simply stops existing as far as `list()`/the board
+are concerned; `card show <id>` on an archived id prints `archived: .repoboard/archive/<id>.md`
+instead of the file.
+
+| Surface | Example |
+|---|---|
+| CLI | `repoboard archive [--older-than 14d] [--dry-run] [--as actor]` |
+| MCP | `archive_cards({olderThan?, dryRun?, actor?})` |
+| HTTP | `POST /api/archive {olderThan?, dryRun?, actor?}` → `{dryRun, ids}` or `{dryRun, archived}` |
+| Web | The Board's `done` column header: an **"archive older than 14d"** button, reporting the
+count as a toast. Nothing else — no confirmation dialog, no options; the default cutoff is the
+one everyone gets. |
+
+`--dry-run` (`dryRun: true`) runs `selectArchivable` and prints/returns the ids **without calling
+the writer at all** — not a real run that happens to skip the last step, a code path that never
+reaches `archiveMoveFile`.
+
+### `repoboard sync-issues`
+
+```
+repoboard sync-issues <path>#<heading> [--status todo] [--label issue] [--dry-run] [--as actor]
+                       [--root <dir>]
+```
+
+Reads `path` (repo-relative; `..` and absolute paths refused — the same `resolveRepoPath` guard
+K7's `refs:` use) and finds the section under the first heading whose text starts with `heading`
+— **the identical function** `refs.ts`'s `path#Heading` ref case uses internally
+(`findHeadingSection`, refactored out of `resolveRef` for this task so the two can never disagree
+about where a section starts or ends — species 6's own lesson, applied structurally rather than
+by convention). Unlike a rendered `refs:` preview, this read has **no line/byte cap**: a K-list
+can run to thousands of lines, and every one of them has to be seen.
+
+**An item** is a list item whose FIRST LINE begins at column 0 with `- **K<n>` (open) or
+`- ~~**K<n>` (struck = closed). Nothing else is an item: a `- **K` line indented even one space is
+prose; a `Closes K<n>` sentence inside an entry's continuation lines is not a separate item; and
+`- ~~- **K` (a strike wrapped around a SECOND list marker — the E1 near-miss) is reported as
+`skipped: malformed strike: <line>`, never treated as an item. Title = `K<n> ` + the first line's
+text after `**K<n>` up to the first `**` or `—`, with a leading run of `.`/whitespace stripped
+(`- **K1. Full sweep…` reads as `K1 Full sweep…`), trimmed, truncated at 100 characters.
+
+For every **open** item with no card whose `refs` contains `<path>@K<n>`: create one — `status`
+per `--status` (default `todo`), `labels: [label]` (default `issue`), `refs: [<path>@K<n>]`, body
+`Filed from <path> §<heading>. The entry is the text; this card is the pointer.` For every
+**struck or vanished** item (gone from the section entirely) whose card exists and is not already
+in the done column: move it there with a log line naming the CAUSE — `synced: entry closed in
+<path>` — instead of the generic `moved <from> → <to>` a plain move would write. **Idempotent by
+ref**: a second run against the same state creates and moves nothing, because the check is always
+"does a card with this exact ref exist right now", never a saved list from a prior run.
+**NEVER writes `path`** — proven by a byte-hash comparison before/after in the test suite, and
+guarded structurally: `packages/server/src/issues.ts` calls `readRepoText` on the source and
+nothing else touches it.
+
+| Surface | Example |
+|---|---|
+| CLI | `repoboard sync-issues README.md#Known issues --dry-run --root <dir>` |
+| MCP | `sync_issues({path, heading, status?, label?, dryRun?, actor?})` |
+| HTTP | `POST /api/sync-issues {path, heading, status?, label?, dryRun?, actor?}` → `{dryRun, create, close, malformed, unchanged}` or `{dryRun, created, closed, malformed, errors}` |
+
+`--root` (CLI) works exactly like `repoboard cost --root`: it measures/acts on ANY directory, with
+or without a `.repoboard/` board, and does not climb from `cwd` — this is what makes it safe to
+point at a repo this one does not own. `--dry-run` is the only mode to run against a repo you do
+not maintain: it computes the plan and reports it without a single write call, even in a
+non-map-only board (nothing about the write path is reachable from the dry-run branch).
+
+### Measured on freshpickedjobs (read-only — `git status --short` and `.repoboard/` presence both
+unchanged before and after every call)
+
+`sync-issues README.md#Known issues --dry-run --root /Users/hometown/Projects/Repos/freshpickedjobs`,
+measured three times as the target repo moved under this task:
+
+| freshpickedjobs HEAD | create | close | malformed | Why it changed |
+|---|---|---|---|---|
+| `b633c84` (brief's own number) | 68 | — | — | the brief's stated expectation, superseded before the builder ran |
+| `b633c84` (orchestrator's re-measurement, same sha) | 69 | 0 | 0 | K130/K131/K132 were filed after the brief; K130 was struck in place, still counted (open-SHAPED, per the literal rule) |
+| `44acaf1` | 64 | 0 | 0 | K67/K68/K69/K70/K81 (closed-in-text but open-in-shape) and the struck K130 were all moved out to `docs/CLOSED-ISSUES.md` |
+| `0427693` (final measurement, this task's own build) | 64 | 0 | 0 | unchanged from `44acaf1` — confirms the count is stable, not a fluke of one commit |
+
+Every one of those runs left `git -C freshpickedjobs status --short` byte-identical before and
+after (empty both times) and `.repoboard/` absent both times — printed in full in this task's own
+§7 log. The CLI's own dry-run output for the final run is 323 bytes:
+
+```
+would create 64, close 0, malformed 0, unchanged 0
+create: K1 K7 K8 K9 K11 K12 K13 K14 K17 K18 K19 K21 K64 K66 K71 K72 K73 K74 K76 K80 K85 K87 K91 K94 K95 K97 K100 K101 K103 K75 K105 K108 K112 K126 K127 K128 K129 K131 K132 K22 K23 K24 K25 K26 K28 K29 K30 K31 K32 K33 K34 K35 K36 K38 K43 K45 K59 K47 K50 K51 K52 K53 K58 K61
+```
+
+### Bytes (O3)
+
+| Surface | Bytes |
+|---|---|
+| MCP `archive_cards` tool schema | 913 B |
+| MCP `sync_issues` tool schema | 2,145 B (reuses `CARD_INTRO` — a filed card IS a card, unlike a lease/cost tool) |
+| MCP tool schema, 19 tools (P8.4 baseline) | 20,303 B |
+| MCP tool schema, **21 tools** (`client.listTools()`, sum of each tool's own `JSON.stringify`) | **23,380 B** (+3,077 B) |
+| CLI `sync-issues --dry-run` against freshpickedjobs (64/0/0) | 323 B |
+
+`sync_issues` is over the terse 700 B lease/cost budget on purpose: it is a card-creating tool
+(like `create_card`/`ask_owner`), and those already carry `CARD_INTRO` — the alternative is an
+agent that creates a card here not knowing `decision`/`refs`/the log convention apply to it too.

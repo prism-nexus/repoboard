@@ -88,12 +88,29 @@ export function mockCards(now = Date.now()): Card[] {
         `${t(1)} claude/web-agent — store and socket wired; columns render`,
       ],
     }),
-    card(13, 'P3.3 Card drawer with markdown and log', 'review', 25, {
+    card(13, 'P3.3 Card drawer with markdown and log', 'decide', 25, {
       assignee: 'claude/web-agent',
       priority: 'medium',
       labels: ['web'],
       files: ['packages/web/src/components/Drawer.tsx'],
-      log: [`${t(25)} claude/web-agent — ready for review`],
+      decision: {
+        question: 'Autosave the drawer title on blur, or only on Enter?',
+        options: [
+          { letter: 'A', text: 'blur and Enter (current)' },
+          { letter: 'B', text: 'Enter only, Esc to discard' },
+        ],
+        askedBy: 'claude/web-agent',
+        askedAt: t(25),
+        returnTo: 'doing',
+        chosen: null,
+        words: null,
+        decidedBy: null,
+        decidedAt: null,
+      },
+      log: [
+        `${t(25)} claude/web-agent — moved doing → decide`,
+        `${t(25)} claude/web-agent — asked: Autosave the drawer title on blur, or only on Enter? [A|B]`,
+      ],
     }),
     card(14, 'P3.4 Ticker, avatars, fun layer', 'todo', 60, {
       priority: 'medium',

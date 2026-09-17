@@ -75,6 +75,7 @@ function Shell() {
           onMove={store.moveCard}
           onUpdate={store.updateCard}
           onShowOnMap={showOnMap}
+          onDecide={store.decideCard}
         />
       ) : null}
       <Toasts toasts={state.toasts} onDismiss={store.dismissToast} />

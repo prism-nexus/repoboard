@@ -433,7 +433,6 @@ button {
 .card__head {
   display: flex;
   align-items: center;
-  justify-content: space-between;
   gap: 6px;
 }
 .card__id {
@@ -694,6 +693,56 @@ button {
   color: var(--muted);
   font-weight: 600;
 }
+.drawer__decision {
+  border-color: var(--amber);
+}
+.drawer__decision-question {
+  margin: 0 0 8px;
+  font-size: 13.5px;
+  font-weight: 500;
+}
+.drawer__decision-options {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-bottom: 8px;
+}
+.drawer__decision-option {
+  display: flex;
+  gap: 6px;
+  align-items: baseline;
+  padding: 5px 8px;
+  text-align: left;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+.drawer__decision-option:hover {
+  border-color: var(--line-strong);
+}
+.drawer__decision-option--on {
+  border-color: var(--accent);
+  background: var(--surface-2);
+}
+.drawer__decision-option strong {
+  font-family: var(--font-mono);
+  color: var(--accent);
+}
+.drawer__decision-words {
+  width: 100%;
+  margin-bottom: 8px;
+}
+.drawer__decision-submit {
+  font-weight: 600;
+}
+.drawer__decision-submit:disabled {
+  opacity: 0.5;
+}
+.drawer__decision-answer {
+  margin: 0;
+  color: var(--ok);
+  font-weight: 500;
+}
 .drawer__files {
   margin: 0;
   padding: 0;
@@ -818,6 +867,36 @@ button {
 }
 .card__pin {
   position: relative;
+  margin-left: auto;
+}
+/* ---- decisions (P8.1) ---- */
+.card__decision {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-family: var(--font-mono);
+  font-size: 10px;
+}
+.card__decision-mark {
+  display: inline-grid;
+  place-items: center;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  font-weight: 700;
+  color: var(--amber);
+  background: var(--amber-bg);
+  border: 1px solid var(--amber);
+  line-height: 1;
+}
+.card__decision-letters {
+  color: var(--amber);
+  letter-spacing: 0.06em;
+}
+.chip--decided {
+  color: var(--ok);
+  border-color: var(--ok);
+  font-weight: 600;
 }
 .drawer__map-link {
   margin-left: 8px;

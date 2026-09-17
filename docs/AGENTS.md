@@ -89,7 +89,8 @@ The same thing as a `.mcp.json` at the repo root:
 
 The server finds `.repoboard/` by walking up from its working directory; pass `--root <dir>` when it is
 launched from somewhere else. Tools: `list_cards`, `get_card`, `create_card`, `move_card`,
-`update_card`, `append_log`, `board_summary`. Call `list_cards` or `board_summary` first: they
+`update_card`, `append_log`, `board_summary`, `ask_owner`, `record_decision` (P8.1, section 8).
+Call `list_cards` or `board_summary` first: they
 are cheap and return the column ids. `list_cards` takes optional `status`, `assignee`, `label`
 filters (exact match, AND) and `full: true` to include bodies; without it, rows are the same
 compact shape as the CLI's `--json` — byte-for-byte the same formatter: on this repo's 31 cards
@@ -156,8 +157,9 @@ Description in markdown. Agents append notes below a `## Log` heading; humans wr
 
 Rules:
 - `id`, `title`, `status`, `created`, `updated` are required; everything else is optional.
-- `status` must be a column `id` from `.repoboard/board.yml` (default board: `backlog`, `todo`,
-  `doing`, `review`, `done`). `id` is `<prefix>-<n>`; the next `n` is max existing + 1.
+- `status` must be a column `id` from `.repoboard/board.yml` (default board, O11: `backlog`,
+  `decide`, `todo`, `doing`, `done` — `decide` is the `decision: true` column §8 moves a card
+  into when its question is asked). `id` is `<prefix>-<n>`; the next `n` is max existing + 1.
 - **Quote a title that contains a colon.** `title: "P3.1 Board view: columns"`. Unquoted, that
   line is not valid YAML; since 2026-09-06 the parser recovers it by quoting the `title:` value
   and retrying once (K1(b)), and the next write through any surface stores it quoted — so the
@@ -190,8 +192,85 @@ identical across calls: the board's avatar (emoji + color) is a hash of the exac
 ## 7. Paste this into a CLAUDE.md
 
 > This repo has a `.repoboard/` board. Before starting a task, move its card to `doing` and put
-> your actor name on it as the assignee; when done, move it to `review` and append what you
-> verified. (`repoboard card move RB-12 doing --as claude/<role>` and
+> your actor name on it as the assignee; when done, append_log what you verified (`review` is not
+> in the default board — O11 — so unless this repo added it back, `doing` → `done` is the whole
+> path). (`repoboard card move RB-12 doing --as claude/<role>` and
 > `repoboard card update RB-12 --assignee claude/<role> --as claude/<role>` first; the `move_card`
 > / `update_card` / `append_log` MCP tools if you have no shell; editing
-> `.repoboard/cards/RB-12.md` by hand as a last resort — `docs/AGENTS.md` has the details.)
+> `.repoboard/cards/RB-12.md` by hand as a last resort — `docs/AGENTS.md` has the details.) If a
+> task needs a human decision, `repoboard card ask RB-12 "<question>" --option "A <text>"...`
+> instead of guessing or waiting on a chat relay — §8.
+
+## 8. Decisions on cards (P8.1)
+
+A card can carry one optional `decision:` block — the question, its options, and (once answered)
+the owner's choice. **No separate file, no Decisions tab (O10):** the card *is* the decision, and
+the board's `decide` column (`decision: true` in `board.yml`, O11) IS the owner's queue — a card
+with an open decision moves there when asked and moves back to where it was when answered.
+`decision.chosen !== null || decision.decidedAt !== null` means DECIDED; neither set means NEEDS
+OWNER. **A DECIDED card is authority: read `decision.chosen`/`decision.words` yourself, do not
+re-ask it and do not wait for a relay.**
+
+```markdown
+decision:
+  question: "Ops cost: shrink the seat or retire it?"
+  options:
+    - letter: C1
+      text: "waiter scripts into the repo, fuse counted as terminal"
+    - letter: C2
+      text: "K101 idle-OOM + K129(b) as builder items"
+  askedBy: claude/coordinator
+  askedAt: 2026-09-17T19:00:00Z
+  returnTo: doing        # the column it was in when asked; decide moves it back here
+  chosen: null           # a letter, once decided
+  words: null            # the owner's text VERBATIM, optional
+  decidedBy: null        # actor: web/owner, cli/<user>, mcp/<actor>
+  decidedAt: null
+```
+
+`options` may be empty — a yes/no or free-text question, answered with `words` only.
+
+### CLI
+
+| Command | Example |
+|---|---|
+| `repoboard card ask <id> "<question>" [--option "A1 <text>"]... [--as a] [--replace]` | `repoboard card ask RCB-36 "sync-issues: which column?" --option "A todo" --option "B backlog"` → `asked RCB-36: sync-issues: which column? (2 options)` |
+| `repoboard card decide <id> [<letter>] [--words "<verbatim>"] [--as a]` | `repoboard card decide RCB-36 A` → `decided RCB-36 A`; or `repoboard card decide RCB-36 --words "do it"` → `decided RCB-36 — "do it"` |
+| `repoboard card list --needs-decision` | filters to cards with an OPEN decision; the table gains a `DECISION` column (a `?` marker) only when at least one listed card has one — see the bytes below |
+
+Asking again on a card whose decision is OPEN is refused, naming the open question — pass
+`--replace` to withdraw it and ask a new one. Asking again on a DECIDED card just replaces the
+block (its `decided …` line is already in the `## Log`). `decide` refuses an unknown letter,
+naming the valid ones, and refuses when nothing is open. On a board with a `decision: true`
+column, `ask` moves the card there (recording `returnTo`) and `decide` moves it back — on a board
+without one, both only touch the badge.
+
+### MCP
+
+`ask_owner(id, question, options?, replace?)` and `record_decision(id, letter?, words?)`, plus
+`list_cards(needsDecision: true)` for the owner queue. `get_card` returns `decision` for free —
+nothing extra to ask for.
+
+### HTTP
+
+`POST /api/cards/:id/ask` `{question, options?, replace?}`, `POST /api/cards/:id/decide`
+`{letter?, words?}` — 200 with the card, 400 naming the bad field, 409 when the request conflicts
+with the decision's own state (nothing open to decide; one already open to ask again without
+`replace`). **`PATCH /api/cards/:id` refuses a `decision` field** with 400 ("use /ask and
+/decide") — the only two writers of `decision` are `ask`/`decide`, so nothing can bypass the log
+line that makes a decision auditable.
+
+### Bytes (O3), measured on a 10-card fixture (6 plain, 4 with an open 3-option decision)
+
+| Surface | Before P8.1 | After, 4/10 cards with a decision |
+|---|---|---|
+| `card list` (table) | unaffected — no `DECISION` column appears when no listed card has an open decision (measured: 6-plain-card table byte-identical to pre-P8.1 shape) | 533 B (10 rows, `DECISION` column added) |
+| `card list --needs-decision` (table) | n/a (flag did not exist) | 245 B (4 rows) |
+| `card list --json` | — | 1,447 B (10 rows) |
+| one card file, plain | 110 B | — |
+| one card file, with an open 3-option decision | — | 536 B (+426 B: the `decision:` block, its two extra `## Log` lines) |
+| MCP tool schema | 8.6 KB for 7 tools (2026-09-07) | **14,546 B for 9 tools** (+5,946 B: `ask_owner` 2,191 B, `record_decision` 1,514 B, plus `needsDecision` growing `list_cards`' own description) |
+
+So a decision costs roughly 400 B per card on disk and adds two tools' worth of schema to the MCP
+standing cost; the CLI and file-edit paths carry no new standing cost at all, which is the same
+ranking O3 already found and this does not change it.

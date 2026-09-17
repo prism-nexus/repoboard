@@ -18,9 +18,9 @@ describe('columns from config', () => {
     );
     expect(sections.map((s) => within(s).getByRole('heading', { level: 2 }).textContent)).toEqual([
       'Backlog',
+      'Needs decision',
       'To do',
       'Doing',
-      'Review',
       'Done',
     ]);
   });

@@ -8,6 +8,30 @@ const isoDatetime = z.string().refine((s) => !Number.isNaN(Date.parse(s)), {
 
 export const PrioritySchema = z.enum(['high', 'medium', 'low']);
 
+/** P8.1: one lettered choice on a `decision:` block. */
+export const DecisionOptionSchema = z.looseObject({
+  letter: z.string().min(1),
+  text: z.string(),
+});
+
+/**
+ * P8.1: field order here is the canonical order a fresh `decision:` block is written in
+ * (`decisions.ts` builds objects in this order, and zod's parsed output follows schema-declared
+ * order — see `askDecision`/`decide`). `options` defaults to `[]` and the four answer fields
+ * default to `null` so a hand edit that only sets `chosen:` still parses (AGENTS.md §5).
+ */
+export const DecisionSchema = z.looseObject({
+  question: z.string(),
+  options: z.array(DecisionOptionSchema).default(() => []),
+  askedBy: z.string(),
+  askedAt: isoDatetime,
+  returnTo: z.string().nullable().default(null),
+  chosen: z.string().nullable().default(null),
+  words: z.string().nullable().default(null),
+  decidedBy: z.string().nullable().default(null),
+  decidedAt: isoDatetime.nullable().default(null),
+});
+
 /** Frontmatter only. Loose: unknown keys pass through (§2: never dropped). */
 export const CardFrontmatterSchema = z.looseObject({
   id: z.string().min(1),
@@ -20,14 +44,25 @@ export const CardFrontmatterSchema = z.looseObject({
   labels: z.array(z.string()).optional(),
   files: z.array(z.string()).optional(),
   refs: z.array(z.string()).optional(),
+  decision: DecisionSchema.optional(),
 });
 
 /** Frontmatter + body = a Card. */
 export const CardSchema = CardFrontmatterSchema.extend({ body: z.string() });
 
 export const REQUIRED_CARD_KEYS = ['id', 'title', 'status', 'created', 'updated'] as const;
-export const OPTIONAL_CARD_KEYS = ['assignee', 'priority', 'labels', 'files', 'refs'] as const;
-/** Canonical frontmatter order on serialize; unknown keys follow in their original order. */
+export const OPTIONAL_CARD_KEYS = [
+  'assignee',
+  'priority',
+  'labels',
+  'files',
+  'refs',
+  'decision',
+] as const;
+/**
+ * Canonical frontmatter order on serialize; unknown keys follow in their original order.
+ * P8.1: `decision` sits after `refs` and before `created` (locked decision 3).
+ */
 const KNOWN_ORDER = [
   'id',
   'title',
@@ -37,6 +72,7 @@ const KNOWN_ORDER = [
   'labels',
   'files',
   'refs',
+  'decision',
   'created',
   'updated',
 ] as const;

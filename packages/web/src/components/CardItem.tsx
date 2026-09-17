@@ -1,8 +1,44 @@
 import { useSortable } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
-import type { Card } from '@repoboard/core';
+import type { Card, Decision } from '@repoboard/core';
 import type { Arrival } from '../hooks.js';
 import { Avatar } from './Avatar.jsx';
+
+/**
+ * P8.1: an OPEN decision shows a warning `?` (and the option letters, when there are any) so the
+ * owner sees the question and its choices from the board without opening the card. A DECIDED
+ * card shows the chosen letter (or a checkmark for a words-only answer) as a small chip.
+ */
+function DecisionMark({ decision, cardId }: { decision: Decision; cardId: string }) {
+  const open = decision.chosen === null && decision.decidedAt === null;
+  if (open) {
+    return (
+      <span
+        className="card__decision"
+        title={`needs a decision: ${decision.question}`}
+        data-testid={`decision-badge-${cardId}`}
+      >
+        <span className="card__decision-mark">?</span>
+        {decision.options.length > 0 ? (
+          <span className="card__decision-letters">
+            {decision.options.map((o) => o.letter).join(' ')}
+          </span>
+        ) : null}
+      </span>
+    );
+  }
+  return (
+    <span
+      className="chip chip--decided"
+      title={`Decided${decision.chosen ? ` ${decision.chosen}` : ''}${
+        decision.words ? ` — "${decision.words}"` : ''
+      }`}
+      data-testid={`decision-chip-${cardId}`}
+    >
+      {decision.chosen ?? '✓'}
+    </span>
+  );
+}
 
 interface Props {
   card: Card;
@@ -76,6 +112,7 @@ export function CardItem({
           >
             {card.id}
           </button>
+          {card.decision ? <DecisionMark decision={card.decision} cardId={card.id} /> : null}
           {card.assignee ? (
             <button
               type="button"

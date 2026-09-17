@@ -11,12 +11,21 @@ export type { CardParseResult } from './card.js';
 export {
   CardFrontmatterSchema,
   CardSchema,
+  DecisionOptionSchema,
+  DecisionSchema,
   OPTIONAL_CARD_KEYS,
   PrioritySchema,
   parseCard,
   REQUIRED_CARD_KEYS,
   serializeCard,
 } from './card.js';
+export type {
+  AskDecisionOptions,
+  AskDecisionResult,
+  DecideOptions,
+  DecideResult,
+} from './decisions.js';
+export { askDecision, decide, isDecided, needsDecision } from './decisions.js';
 export { appendLogLine, formatLogLine } from './log.js';
 export type { Avatar, BoardSummary, WipBreach } from './presence.js';
 export {
@@ -50,4 +59,13 @@ export type {
   UpdateResult,
 } from './transitions.js';
 export { allocateCardId, createCard, moveCard, updateCard } from './transitions.js';
-export type { BoardConfig, Card, Column, Event, Priority, RepoSnapshot } from './types.js';
+export type {
+  BoardConfig,
+  Card,
+  Column,
+  Decision,
+  DecisionOption,
+  Event,
+  Priority,
+  RepoSnapshot,
+} from './types.js';

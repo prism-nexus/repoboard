@@ -14,7 +14,9 @@ import {
   type CardPatch,
   type CreateCardInput,
   createCard,
+  type DecisionOption,
   defaultBoardConfig,
+  needsDecision,
   type Priority,
   serializeBoard,
   serializeCard,
@@ -58,10 +60,17 @@ Usage:
                                         the whole list, it does not append)
                                         --clear assignee|priority|labels|files|refs (repeatable)
                                         --as actor; status changes go through \`card move\`
-  repoboard card list [--status s] [--json]   list cards; --json is compact (id, title, status,
-                                        assignee, priority, labels, files, updated); add --full for bodies
+  repoboard card list [--status s] [--json] [--needs-decision]
+                                        list cards; --json is compact (id, title, status,
+                                        assignee, priority, labels, files, updated); add --full for bodies;
+                                        --needs-decision filters to cards with an open decision
   repoboard card show <id> [--resolve]        print the card file; --resolve appends the lines each
                                         refs: entry points at, read live from the file
+  repoboard card ask <id> "<question>" [--option "A1 <text>"]... [--as a] [--replace]
+                                        open a decision on a card (P8.1); --replace withdraws one
+                                        already open. With no options, the owner answers with --words.
+  repoboard card decide <id> [<letter>] [--words "<verbatim>"] [--as a]
+                                        answer the open decision; a letter, --words, or both
   repoboard serve [--root <dir>] [--port 4242] [--open] [--no-fun]
                                         start the dashboard (binds 127.0.0.1); --root serves that
                                         directory as given — a directory with no .repoboard/ opens
@@ -328,15 +337,85 @@ async function cmdCardUpdate(args: string[], io: CliIO): Promise<number> {
   return 0;
 }
 
+/** "<LETTER> <text>" — the first token is the letter (locked decision 5). */
+function parseOptionFlag(raw: string): DecisionOption {
+  const i = raw.indexOf(' ');
+  const letter = i === -1 ? raw : raw.slice(0, i);
+  const text = i === -1 ? '' : raw.slice(i + 1).trim();
+  if (!letter || !text) {
+    throw new UserError(`--option must be "<LETTER> <text>" (got "${raw}")`);
+  }
+  return { letter, text };
+}
+
+async function cmdCardAsk(args: string[], io: CliIO): Promise<number> {
+  const { values, positionals } = parse(args, {
+    option: { type: 'string', multiple: true },
+    as: { type: 'string' },
+    replace: { type: 'boolean', default: false },
+  });
+  const [id, question] = positionals;
+  if (!id || !question) {
+    throw new UserError(
+      'usage: repoboard card ask <id> "<question>" [--option "A1 <text>"]... [--as a] [--replace]',
+    );
+  }
+  const options = (values.option ?? []).map(parseOptionFlag);
+  const root = await requireRoot(io);
+  const store = await openStore(root, { watch: false, now: io.now });
+  const res = await store.ask(
+    id,
+    { question, options, replace: values.replace },
+    actorFrom(values.as, io),
+  );
+  if (!res.ok) throw new UserError(res.error);
+  for (const w of res.warnings) (io.stderr ?? io.stdout).write(`warning: ${w}\n`);
+  const n = options.length;
+  io.stdout.write(`asked ${id}: ${question} (${n} option${n === 1 ? '' : 's'})\n`);
+  return 0;
+}
+
+async function cmdCardDecide(args: string[], io: CliIO): Promise<number> {
+  const { values, positionals } = parse(args, {
+    words: { type: 'string' },
+    as: { type: 'string' },
+  });
+  const [id, letter] = positionals;
+  if (!id) {
+    throw new UserError('usage: repoboard card decide <id> [<letter>] [--words "<verbatim>"]');
+  }
+  const root = await requireRoot(io);
+  const store = await openStore(root, { watch: false, now: io.now });
+  const res = await store.decide(id, { letter, words: values.words }, actorFrom(values.as, io));
+  if (!res.ok) throw new UserError(res.error);
+  for (const w of res.warnings) (io.stderr ?? io.stdout).write(`warning: ${w}\n`);
+  const chosen = res.card.decision?.chosen ?? null;
+  const words = res.card.decision?.words ?? undefined;
+  io.stdout.write(chosen !== null ? `decided ${id} ${chosen}\n` : `decided ${id} — "${words}"\n`);
+  return 0;
+}
+
 function idNumber(id: string): number {
   const m = /-(\d+)$/.exec(id);
   return m?.[1] ? Number.parseInt(m[1], 10) : Number.MAX_SAFE_INTEGER;
 }
 
-/** Fixed-width table: id, status, assignee, title. */
+/**
+ * Fixed-width table: id, status, assignee, [decision,] title. The `DECISION` column (a `?` for
+ * an open decision) only appears when at least one listed card has one — §7 bytes measurement:
+ * a fixture with no open decisions is byte-identical to the table before P8.1.
+ */
 export function formatTable(cards: Card[]): string {
-  const rows = cards.map((c) => [c.id, c.status, c.assignee ?? '-', c.title]);
-  const header = ['ID', 'STATUS', 'ASSIGNEE', 'TITLE'];
+  const anyDecision = cards.some((c) => needsDecision(c));
+  const rows = cards.map((c) => {
+    const row = [c.id, c.status, c.assignee ?? '-'];
+    if (anyDecision) row.push(needsDecision(c) ? '?' : '');
+    row.push(c.title);
+    return row;
+  });
+  const header = anyDecision
+    ? ['ID', 'STATUS', 'ASSIGNEE', 'DECISION', 'TITLE']
+    : ['ID', 'STATUS', 'ASSIGNEE', 'TITLE'];
   const widths = header.map((h, i) => Math.max(h.length, ...rows.map((r) => (r[i] ?? '').length)));
   const line = (r: string[]) =>
     r
@@ -351,12 +430,14 @@ async function cmdCardList(args: string[], io: CliIO): Promise<number> {
     status: { type: 'string' },
     json: { type: 'boolean', default: false },
     full: { type: 'boolean', default: false },
+    'needs-decision': { type: 'boolean', default: false },
   });
   if (values.full && !values.json) throw new UserError('--full only applies with --json');
   const root = await requireRoot(io);
   const store = await openStore(root, { watch: false, now: io.now });
   let cards = store.list();
   if (values.status !== undefined) cards = cards.filter((c) => c.status === values.status);
+  if (values['needs-decision']) cards = cards.filter((c) => needsDecision(c));
   cards.sort((a, b) => idNumber(a.id) - idNumber(b.id) || (a.id < b.id ? -1 : 1));
   if (values.json) {
     // Compact rows by default (K6): bodies only with --full. Same shape as MCP list_cards.
@@ -494,7 +575,11 @@ export async function run(argv: string[], io: CliIO): Promise<number> {
       if (sub === 'update') return await cmdCardUpdate(rest, io);
       if (sub === 'list') return await cmdCardList(rest, io);
       if (sub === 'show') return await cmdCardShow(rest, io);
-      throw new UserError(`unknown card command "${sub ?? ''}" (add, move, update, list, show)`);
+      if (sub === 'ask') return await cmdCardAsk(rest, io);
+      if (sub === 'decide') return await cmdCardDecide(rest, io);
+      throw new UserError(
+        `unknown card command "${sub ?? ''}" (add, move, update, list, show, ask, decide)`,
+      );
     }
     throw new UserError(`unknown command "${cmd}" (try repoboard --help)`);
   } catch (e) {

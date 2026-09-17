@@ -56,7 +56,7 @@ function textOf(res: CallToolResult): string {
 }
 
 describe('repoboard mcp: handshake and tool list', () => {
-  it('lists exactly the seven tools of the brief, each described for a newcomer', async () => {
+  it('lists exactly the nine tools of the brief, each described for a newcomer', async () => {
     const r = await rig();
     const { tools } = await r.client.listTools();
     expect(tools.map((t) => t.name).sort()).toEqual([...MCP_TOOL_NAMES].sort());
@@ -65,7 +65,7 @@ describe('repoboard mcp: handshake and tool list', () => {
       expect(t.description, t.name).toMatch(/column id/);
     }
     const list = tools.find((t) => t.name === 'list_cards');
-    expect(list?.description).toMatch(/backlog, todo, doing, review, done/);
+    expect(list?.description).toMatch(/backlog, decide, todo, doing, done/);
   });
 });
 
@@ -178,9 +178,9 @@ describe('repoboard mcp: create → list → move → get', () => {
     }>('board_summary');
     expect(summary.columns.map((c) => c.id)).toEqual([
       'backlog',
+      'decide',
       'todo',
       'doing',
-      'review',
       'done',
     ]);
     expect(summary.columns.find((c) => c.id === 'doing')).toMatchObject({ count: 4, wip: 3 });
@@ -227,7 +227,9 @@ describe('repoboard mcp: errors', () => {
     const r = await rig({ 'RB-1.md': cardText('RB-1', 'todo') });
     const badStatus = await r.call('move_card', { id: 'RB-1', status: 'nowhere' });
     expect(badStatus.isError).toBe(true);
-    expect(textOf(badStatus)).toMatch(/^status: unknown column "nowhere" \(columns: backlog, todo/);
+    expect(textOf(badStatus)).toMatch(
+      /^status: unknown column "nowhere" \(columns: backlog, decide/,
+    );
     expect(textOf(badStatus)).not.toContain('\n');
 
     const badId = await r.call('get_card', { id: 'RB-99' });
@@ -301,5 +303,113 @@ describe('repoboard mcp: get_card resolveRefs and refs on create/update (K7)', (
     const updated = await r.json<Card>('update_card', { id: created.id, refs: null });
     expect('refs' in updated).toBe(false);
     expect(updated.body).toContain('updated refs');
+  });
+});
+
+describe('repoboard mcp: ask_owner / record_decision (P8.1)', () => {
+  it('ask_owner opens a decision, moves the card into decide, records returnTo', async () => {
+    const r = await rig({ 'RB-1.md': cardText('RB-1', 'todo') });
+    const res = await r.json<{ card: Card; warnings: string[] }>('ask_owner', {
+      id: 'RB-1',
+      question: 'Ship it?',
+      options: [
+        { letter: 'A', text: 'yes' },
+        { letter: 'B', text: 'no' },
+      ],
+    });
+    expect(res.card.status).toBe('decide');
+    expect(res.card.decision).toMatchObject({
+      question: 'Ship it?',
+      returnTo: 'todo',
+      chosen: null,
+    });
+    expect(res.warnings).toEqual([]);
+  });
+
+  it('asking again while OPEN is refused; replace: true withdraws and re-asks', async () => {
+    const r = await rig({ 'RB-1.md': cardText('RB-1', 'todo') });
+    await r.json('ask_owner', { id: 'RB-1', question: 'First?' });
+    const refused = await r.call('ask_owner', { id: 'RB-1', question: 'Second?' });
+    expect(refused.isError).toBe(true);
+    expect(textOf(refused)).toMatch(/already has an open decision: "First\?"/);
+    const replaced = await r.json<{ card: Card }>('ask_owner', {
+      id: 'RB-1',
+      question: 'Second?',
+      replace: true,
+    });
+    expect(replaced.card.decision?.question).toBe('Second?');
+    expect(replaced.card.body).toContain('question withdrawn');
+  });
+
+  it('record_decision answers, moves the card back, and is authority (chosen/words readable)', async () => {
+    const r = await rig({ 'RB-1.md': cardText('RB-1', 'doing') });
+    await r.json('ask_owner', {
+      id: 'RB-1',
+      question: 'Ship it?',
+      options: [
+        { letter: 'A', text: 'yes' },
+        { letter: 'B', text: 'no' },
+      ],
+    });
+    const decided = await r.json<{ card: Card }>('record_decision', { id: 'RB-1', letter: 'A' });
+    expect(decided.card.status).toBe('doing');
+    expect(decided.card.decision).toMatchObject({ chosen: 'A', decidedBy: 'test/mcp' });
+    const got = await r.json<Card>('get_card', { id: 'RB-1' });
+    expect(got.decision?.chosen).toBe('A');
+  });
+
+  it('record_decision refuses an unknown letter and refuses when nothing is open', async () => {
+    const r = await rig({ 'RB-1.md': cardText('RB-1', 'todo') });
+    const nothingOpen = await r.call('record_decision', { id: 'RB-1', letter: 'A' });
+    expect(nothingOpen.isError).toBe(true);
+    expect(textOf(nothingOpen)).toMatch(/no decision is open on RB-1/);
+
+    await r.json('ask_owner', {
+      id: 'RB-1',
+      question: 'q?',
+      options: [{ letter: 'A', text: 'x' }],
+    });
+    const bad = await r.call('record_decision', { id: 'RB-1', letter: 'Z' });
+    expect(bad.isError).toBe(true);
+    expect(textOf(bad)).toMatch(/letter: unknown option "Z" \(valid: A\)/);
+  });
+
+  it('list_cards needsDecision:true filters to open decisions only', async () => {
+    const r = await rig({
+      'RB-1.md': cardText('RB-1', 'todo'),
+      'RB-2.md': cardText('RB-2', 'todo'),
+    });
+    await r.json('ask_owner', { id: 'RB-1', question: 'q?' });
+    const rows = await r.json<{ id: string }[]>('list_cards', { needsDecision: true });
+    expect(rows.map((row) => row.id)).toEqual(['RB-1']);
+    await r.json('record_decision', { id: 'RB-1', words: 'ok' });
+    const rowsAfter = await r.json<{ id: string }[]>('list_cards', { needsDecision: true });
+    expect(rowsAfter).toEqual([]);
+  });
+
+  it('a board with no decision:true column leaves status alone (badge only)', async () => {
+    const repo = await makeTempRepoboard({ 'RB-1.md': cardText('RB-1', 'todo') });
+    cleanups.push(repo.cleanup);
+    await writeFile(
+      join(repo.root, '.repoboard', 'board.yml'),
+      'prefix: RB\nactiveWindowMinutes: 30\ncolumns:\n  - id: todo\n  - id: doing\n  - id: done\n',
+    );
+    const store = await openStore(repo.root, { watch: false, now: () => NOW });
+    const server = createMcpServer({ store, defaultActor: 'test/mcp', now: () => NOW });
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    await server.connect(serverTransport);
+    const client = new Client({ name: 'repoboard-test', version: '0.0.0' });
+    await client.connect(clientTransport);
+    cleanups.push(async () => {
+      await client.close();
+      await server.close();
+    });
+    const res = (await client.callTool({
+      name: 'ask_owner',
+      arguments: { id: 'RB-1', question: 'q?' },
+    })) as CallToolResult;
+    const parsed = JSON.parse(textOf(res)) as { card: Card };
+    expect(parsed.card.status).toBe('todo');
+    expect(parsed.card.decision?.returnTo).toBeNull();
   });
 });

@@ -1,4 +1,5 @@
 import { findColumn } from './board.js';
+import { needsDecision } from './decisions.js';
 import type { BoardConfig, Card } from './types.js';
 
 /**
@@ -108,6 +109,9 @@ export interface BoardSummary {
   perColumn: Record<string, number>;
   active: Card[];
   wipBreaches: WipBreach[];
+  /** P8.1: cards with an open decision (`needsDecision`), total and per column. */
+  needsDecision: number;
+  needsDecisionByColumn: Record<string, number>;
 }
 
 export function computeBoardSummary(cards: Card[], config: BoardConfig, now: Date): BoardSummary {
@@ -124,5 +128,20 @@ export function computeBoardSummary(cards: Card[], config: BoardConfig, now: Dat
       wipBreaches.push({ column: col.id, count, wip: col.wip });
     }
   }
-  return { perColumn, active, wipBreaches };
+
+  const needsDecisionByColumn: Record<string, number> = {};
+  let needsDecisionTotal = 0;
+  for (const card of cards) {
+    if (!needsDecision(card)) continue;
+    needsDecisionTotal++;
+    needsDecisionByColumn[card.status] = (needsDecisionByColumn[card.status] ?? 0) + 1;
+  }
+
+  return {
+    perColumn,
+    active,
+    wipBreaches,
+    needsDecision: needsDecisionTotal,
+    needsDecisionByColumn,
+  };
 }

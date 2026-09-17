@@ -56,9 +56,9 @@ describe('openStore: load', () => {
     expect(store.config.prefix).toBe('RB');
     expect(store.config.columns.map((c) => c.id)).toEqual([
       'backlog',
+      'decide',
       'todo',
       'doing',
-      'review',
       'done',
     ]);
     expect(store.list().map((c) => c.id)).toEqual(['RB-1', 'RB-2', 'RB-10']);
@@ -217,6 +217,56 @@ describe('move and update', () => {
       Array.from({ length: 5 }, (_, i) => store.create({ title: `c${i}` }, 't')),
     );
     expect(cards.map((c) => created(c).id)).toEqual(['RB-1', 'RB-2', 'RB-3', 'RB-4', 'RB-5']);
+  });
+});
+
+describe('ask and decide (P8.1)', () => {
+  it('ask writes the file, moves into decide, appends both log lines, one events.jsonl row', async () => {
+    const repo = await repoWith({ 'RB-1.md': cardText('RB-1', 'todo') });
+    const store = await open(repo, false);
+    const res = await store.ask(
+      'RB-1',
+      { question: 'Ship it?', options: [{ letter: 'A', text: 'yes' }] },
+      'claude/agent',
+    );
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    expect(res.card.status).toBe('decide');
+    expect(res.event).toMatchObject({ type: 'move', from: 'todo', to: 'decide' });
+    const text = await readFile(join(repo.cardsDir, 'RB-1.md'), 'utf8');
+    expect(text).toContain('moved todo → decide');
+    expect(text).toContain('asked: Ship it? [A]');
+    expect(text).toContain('returnTo: todo');
+    const log = await readFile(join(repo.root, '.repoboard', 'events.jsonl'), 'utf8');
+    expect(log.trim().split('\n')).toHaveLength(1);
+  });
+
+  it('decide writes the file, moves back to returnTo, and both surfaces read DECIDED', async () => {
+    const repo = await repoWith({ 'RB-1.md': cardText('RB-1', 'doing') });
+    const store = await open(repo, false);
+    const asked = await store.ask('RB-1', { question: 'Ship it?' }, 'claude/agent');
+    if (!asked.ok) throw new Error(asked.error);
+    const res = await store.decide('RB-1', { words: 'yes' }, 'human/matt');
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    expect(res.card.status).toBe('doing');
+    expect(res.card.decision).toMatchObject({ words: 'yes', decidedBy: 'human/matt' });
+    const text = await readFile(join(repo.cardsDir, 'RB-1.md'), 'utf8');
+    expect(text).toContain('decided — "yes"');
+    expect(text).toContain('moved decide → doing');
+  });
+
+  it('unknown card, unknown letter, and nothing-open are ok:false with notFound honestly reported', async () => {
+    const repo = await repoWith({ 'RB-1.md': cardText('RB-1', 'todo') });
+    const store = await open(repo, false);
+    expect(await store.ask('RB-99', { question: 'q' }, 't')).toMatchObject({
+      ok: false,
+      notFound: true,
+    });
+    expect(await store.decide('RB-1', { letter: 'A' }, 't')).toMatchObject({
+      ok: false,
+      error: expect.stringMatching(/no decision is open/),
+    });
   });
 });
 
@@ -503,7 +553,7 @@ describe('map-only roots refuse every mutation (K10)', () => {
     expect(res.error).toBe(MAP_ONLY_ERROR);
   });
 
-  it('move, update and appendLog cannot reach a write either', async () => {
+  it('move, update, appendLog, ask and decide cannot reach a write either', async () => {
     const { repo, store } = await boardless();
     // They stop earlier than the guard, at `unknown card`: a card can only be in memory if it was
     // read out of `.repoboard/cards/`, which cannot exist here. So `notFound`, not `readOnly` —
@@ -512,6 +562,8 @@ describe('map-only roots refuse every mutation (K10)', () => {
       await store.move('RB-1', 'doing', 'test-actor'),
       await store.update('RB-1', { title: 'x' }, 'test-actor'),
       await store.appendLog('RB-1', 'x', 'test-actor'),
+      await store.ask('RB-1', { question: 'q?' }, 'test-actor'),
+      await store.decide('RB-1', { words: 'x' }, 'test-actor'),
     ]) {
       expect(res.ok).toBe(false);
       if (res.ok) throw new Error('should have been refused');
@@ -587,8 +639,22 @@ describe('K10 structure of store.ts', () => {
     const decls = [
       ...SRC.matchAll(/^ {2}(\w+)\([^)]*\): Promise<(\w+Outcome)> \{\n {4}return this\.(\w+)\(/gm),
     ];
-    expect(decls.map((d) => d[1]).sort()).toEqual(['appendLog', 'create', 'move', 'update']);
-    expect(decls.map((d) => d[3])).toEqual(['mutate', 'mutate', 'mutate', 'mutate']);
+    expect(decls.map((d) => d[1]).sort()).toEqual([
+      'appendLog',
+      'ask',
+      'create',
+      'decide',
+      'move',
+      'update',
+    ]);
+    expect(decls.map((d) => d[3])).toEqual([
+      'mutate',
+      'mutate',
+      'mutate',
+      'mutate',
+      'mutate',
+      'mutate',
+    ]);
   });
 
   it('both disk writers open with the guard, on their first line', () => {

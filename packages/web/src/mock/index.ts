@@ -112,12 +112,14 @@ function openMock(handlers: TransportHandlers, options: MockOptions): MockTransp
     const columns = config.columns.map((c) => c.id);
     const r = rand();
     if (r < 0.55) {
-      // Nudge a card one column forward (or back into review→doing now and then).
-      const movable = cards.filter((c) => !findColumn(config, c.status)?.done);
+      // Nudge a card one column forward. Cards sitting on an open decision (the `decision: true`
+      // column) are left alone — that is the owner's move, not the demo stepper's.
+      const movable = cards.filter(
+        (c) => !findColumn(config, c.status)?.done && !findColumn(config, c.status)?.decision,
+      );
       const card = pick(movable);
       const idx = columns.indexOf(card.status);
-      const back = card.status === 'review' && rand() < 0.3;
-      const to = columns[back ? idx - 1 : Math.min(columns.length - 1, idx + 1)];
+      const to = columns[Math.min(columns.length - 1, idx + 1)];
       if (to) move(card.id, to, card.assignee ?? pick(MOCK_ACTORS));
     } else {
       const active = cards.filter((c) => findColumn(config, c.status)?.active);
@@ -138,7 +140,7 @@ function openMock(handlers: TransportHandlers, options: MockOptions): MockTransp
       ['claude/core-agent', 'RB-3', 'doing', 'done', 120],
       ['claude/orchestrator', 'RB-7', 'todo', 'doing', 40],
       ['claude/orchestrator', 'RB-12', 'todo', 'doing', 35],
-      ['claude/web-agent', 'RB-13', 'doing', 'review', 25],
+      ['claude/web-agent', 'RB-13', 'doing', 'decide', 25],
     ];
     for (const [actor, cardId, from, to, ago] of history) {
       emit({

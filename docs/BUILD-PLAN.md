@@ -246,16 +246,20 @@ held 11 h on a relay, lock windows sent as chat messages). One principle for eve
 under `.repoboard/` that `sed` can edit, written through core by all three surfaces, rendered by the
 dashboard, its bytes on the wire measured before it ships (O3).** Core stays I/O-free (0.5).
 
-- **P8.1 Decisions ON THE CARD** (rewritten on O10) — a card carries an optional `decision:` block:
-  `question`, `options: [{letter, text}]`, `askedBy/askedAt`, and once the owner answers `chosen`
-  (a letter), `words` (verbatim, optional), `decidedBy/decidedAt`. A card with a decision and no
-  answer NEEDS OWNER; the board badges it and shows the letters inline; the drawer shows one button
-  per option and a words field, and the owner decides **right there**. `ask` and `decide` are core
-  transitions that append `## Log` lines; `PATCH` refuses the field so nothing bypasses the log.
-  CLI `card ask <id> "<q>" --option "A1 …"...`, `card decide <id> [letter] [--words]`,
-  `card list --needs-decision`; MCP `ask_owner`, `record_decision`, `list_cards needsDecision`;
-  HTTP `/api/cards/:id/ask|decide`. A decided card is authority. **No separate file, no separate
-  tab** — the "owner queue" is the `needs decision` filter. Brief: `docs/P8.1-DECISIONS-BRIEF.md`.
+- **P8.1 Decisions ON THE CARD** (rewritten on O10, amended on O11) — **Landed `<pending — see
+  RCB-36 log for the sha>`.** A card carries an optional `decision:` block: `question`,
+  `options: [{letter, text}]`, `askedBy/askedAt`, `returnTo` (O11), and once the owner answers
+  `chosen` (a letter), `words` (verbatim, optional), `decidedBy/decidedAt`. A card with a decision
+  and no answer NEEDS OWNER; the board badges it and shows the letters inline; the drawer shows one
+  button per option and a words field, and the owner decides **right there**. `ask` and `decide`
+  are core transitions that append `## Log` lines and, on a board with a `decision: true` column
+  (O11), move the card there and back (recording `returnTo`); `PATCH` refuses the field so nothing
+  bypasses the log. CLI `card ask <id> "<q>" --option "A1 …"...`, `card decide <id> [letter]
+  [--words]`, `card list --needs-decision`; MCP `ask_owner`, `record_decision`, `list_cards
+  needsDecision`; HTTP `/api/cards/:id/ask|decide`. A decided card is authority. **No separate
+  file, no separate tab** — the "owner queue" is the `decide` column itself (O11 dropped the
+  TopBar `needs decision` filter as redundant with it; `card list --needs-decision` and MCP
+  `needsDecision` stay, for an agent with no dashboard). Brief: `docs/P8.1-DECISIONS-BRIEF.md`.
 - **P8.2 Leases and windows** — `.repoboard/leases.yml`: `leases: [{resource, holder, since, until?, note?}]`,
   `windows: [{resource, start, end, name}]`. A lease past `until` renders STALE, not held; a window past
   `end` is pruned on the next write. CLI `repoboard lease take|release <resource> --as <holder> [--until ts] [--note]`,

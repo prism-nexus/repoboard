@@ -502,6 +502,99 @@ describe('hasBoard (P7.2)', () => {
 
 // ---- K10: HTTP refuses mutations against a boardless root with 409 ----------------------------
 
+describe('POST /api/cards/:id/ask and /decide (P8.1)', () => {
+  it('ask opens a decision and moves the card into the default board’s decide column', async () => {
+    const r = await rig({ 'RB-1.md': cardText('RB-1', 'todo') });
+    const res = await fetch(`${r.url}/api/cards/RB-1/ask`, {
+      method: 'POST',
+      body: JSON.stringify({
+        question: 'Ship it?',
+        options: [
+          { letter: 'A', text: 'yes' },
+          { letter: 'B', text: 'no' },
+        ],
+      }),
+    });
+    expect(res.status).toBe(200);
+    const card = (await json(res)) as Card;
+    expect(card.status).toBe('decide');
+    expect(card.decision).toMatchObject({ question: 'Ship it?', returnTo: 'todo', chosen: null });
+    const text = await readFile(join(r.repo.cardsDir, 'RB-1.md'), 'utf8');
+    expect(text).toContain('web — moved todo → decide');
+    expect(text).toContain('asked: Ship it? [A|B]');
+  });
+
+  it('an empty question and an unknown field are 400', async () => {
+    const r = await rig({ 'RB-1.md': cardText('RB-1', 'todo') });
+    const empty = await fetch(`${r.url}/api/cards/RB-1/ask`, {
+      method: 'POST',
+      body: JSON.stringify({ question: '' }),
+    });
+    expect(empty.status).toBe(400);
+    const unknown = await fetch(`${r.url}/api/cards/RB-1/ask`, {
+      method: 'POST',
+      body: JSON.stringify({ question: 'q', bogus: 1 }),
+    });
+    expect(unknown.status).toBe(400);
+    expect(((await json(unknown)) as { error: string }).error).toMatch(/unknown field "bogus"/);
+  });
+
+  it('asking again while OPEN is 409; decide moves the card back and is 200', async () => {
+    const r = await rig({ 'RB-1.md': cardText('RB-1', 'doing') });
+    await fetch(`${r.url}/api/cards/RB-1/ask`, {
+      method: 'POST',
+      body: JSON.stringify({ question: 'First?' }),
+    });
+    const conflict = await fetch(`${r.url}/api/cards/RB-1/ask`, {
+      method: 'POST',
+      body: JSON.stringify({ question: 'Second?' }),
+    });
+    expect(conflict.status).toBe(409);
+
+    const decided = await fetch(`${r.url}/api/cards/RB-1/decide`, {
+      method: 'POST',
+      body: JSON.stringify({ words: 'go ahead' }),
+    });
+    expect(decided.status).toBe(200);
+    const card = (await json(decided)) as Card;
+    expect(card.status).toBe('doing');
+    expect(card.decision).toMatchObject({ chosen: null, words: 'go ahead', decidedBy: 'web' });
+  });
+
+  it('decide is 409 when nothing is open, and 400 for an unknown letter', async () => {
+    const r = await rig({ 'RB-1.md': cardText('RB-1', 'todo') });
+    const nothingOpen = await fetch(`${r.url}/api/cards/RB-1/decide`, {
+      method: 'POST',
+      body: JSON.stringify({ letter: 'A' }),
+    });
+    expect(nothingOpen.status).toBe(409);
+
+    await fetch(`${r.url}/api/cards/RB-1/ask`, {
+      method: 'POST',
+      body: JSON.stringify({ question: 'q?', options: [{ letter: 'A', text: 'x' }] }),
+    });
+    const badLetter = await fetch(`${r.url}/api/cards/RB-1/decide`, {
+      method: 'POST',
+      body: JSON.stringify({ letter: 'Z' }),
+    });
+    expect(badLetter.status).toBe(400);
+  });
+
+  it('PATCH refuses a `decision` field with 400, naming /ask and /decide', async () => {
+    const r = await rig({ 'RB-1.md': cardText('RB-1', 'todo') });
+    const res = await fetch(`${r.url}/api/cards/RB-1`, {
+      method: 'PATCH',
+      body: JSON.stringify({
+        decision: { question: 'sneaking in', options: [], chosen: 'A' },
+      }),
+    });
+    expect(res.status).toBe(400);
+    expect(((await json(res)) as { error: string }).error).toMatch(/use \/ask and \/decide/);
+    const text = await readFile(join(r.repo.cardsDir, 'RB-1.md'), 'utf8');
+    expect(text).not.toContain('decision:');
+  });
+});
+
 describe('map-only mode refuses mutations over HTTP (K10)', () => {
   async function boardlessRig() {
     const repo = await makeTempRepoNoBoard({ 'src/a.ts': 'export const a = 1;\n' });

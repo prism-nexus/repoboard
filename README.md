@@ -42,6 +42,12 @@ plan §11 O3):
 | **MCP** — `claude mcp add repoboard -- npx repoboard mcp` | tool schema 8.6 KB per turn where the harness loads it | ~80 B call, ~200 B result | 7,638 B — the same formatter, to the byte |
 | **File edit** — `sed -i 's/^status: todo$/status: doing/' .repoboard/cards/RB-12.md` | same AGENTS.md | ~60 B, but a correct move also bumps `updated` and appends a `## Log` line | n/a |
 
+A card can also carry a `decision:` block (P8.1) — `repoboard card ask RB-12 "Ship it?" --option
+"A ship now" --option "B wait"` and `repoboard card decide RB-12 A` (or `--words "<verbatim>"`),
+mirrored as MCP `ask_owner`/`record_decision` and HTTP `POST /api/cards/:id/ask|decide`. A DECIDED
+card is authority: `decision.chosen`/`decision.words` are the answer, not a chat relay. See
+`docs/AGENTS.md` §8 for the bytes and the wire shapes.
+
 The CLI is the cheapest per operation and has no standing cost. MCP pays off when the agent has
 no shell or its harness loads tool schemas on demand. Editing the file is the escape hatch: it
 always works, and the watcher synthesizes the event (`actor: file`). `docs/AGENTS.md` is the one

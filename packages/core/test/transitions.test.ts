@@ -36,13 +36,13 @@ describe('moveCard', () => {
 
   it('appends under an existing ## Log heading and keeps unknown keys', () => {
     const card = sampleCard({ status: 'doing', foo: 'bar' });
-    const r = moveCard(card, 'review', { actor, now: NOW, config });
+    const r = moveCard(card, 'backlog', { actor, now: NOW, config });
     expect(r.ok).toBe(true);
     if (!r.ok) return;
     expect(r.card.foo).toBe('bar');
     expect(
       r.card.body.endsWith(
-        'moved to doing\n- 2026-09-02T22:41:10Z claude/test — moved doing → review\n',
+        'moved to doing\n- 2026-09-02T22:41:10Z claude/test — moved doing → backlog\n',
       ),
     ).toBe(true);
     // and the result is a valid file
@@ -54,7 +54,7 @@ describe('moveCard', () => {
     const r = moveCard(sampleCard(), 'shipped', { actor, now: NOW, config });
     expect(r).toEqual({
       ok: false,
-      error: 'unknown column "shipped" (columns: backlog, todo, doing, review, done)',
+      error: 'unknown column "shipped" (columns: backlog, decide, todo, doing, done)',
     });
   });
 
@@ -72,11 +72,11 @@ describe('moveCard', () => {
     const noCounts = moveCard(card, 'doing', { actor, now: NOW, config });
     expect(noCounts.ok && noCounts.warnings).toEqual([]);
 
-    const noWip = moveCard(card, 'review', {
+    const noWip = moveCard(card, 'backlog', {
       actor,
       now: NOW,
       config,
-      columnCounts: { review: 99 },
+      columnCounts: { backlog: 99 },
     });
     expect(noWip.ok && noWip.warnings).toEqual([]);
   });

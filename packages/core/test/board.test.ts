@@ -6,15 +6,15 @@ activeWindowMinutes: 30
 columns:
   - id: backlog
     title: Backlog
+  - id: decide
+    title: Needs decision
+    decision: true
   - id: todo
     title: To do
   - id: doing
     title: Doing
     active: true
     wip: 3
-  - id: review
-    title: Review
-    active: true
   - id: done
     title: Done
     done: true
@@ -25,16 +25,16 @@ describe('defaultBoardConfig', () => {
     expect(defaultBoardConfig().prefix).toBe('RB');
   });
 
-  it('is exactly the §2 default and a fresh object each call', () => {
+  it('is exactly the §2 default and a fresh object each call (O11: decide, not review)', () => {
     const a = defaultBoardConfig();
     expect(a).toEqual({
       prefix: 'RB',
       activeWindowMinutes: 30,
       columns: [
         { id: 'backlog', title: 'Backlog' },
+        { id: 'decide', title: 'Needs decision', decision: true },
         { id: 'todo', title: 'To do' },
         { id: 'doing', title: 'Doing', active: true, wip: 3 },
-        { id: 'review', title: 'Review', active: true },
         { id: 'done', title: 'Done', done: true },
       ],
     });

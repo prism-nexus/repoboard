@@ -8,18 +8,23 @@ export const ColumnSchema = z.looseObject({
   active: z.boolean().optional(),
   wip: z.number().int().positive().optional(),
   done: z.boolean().optional(),
+  /** P8.1/O11: `ask` moves a card into the first such column; `decide` moves it back. */
+  decision: z.boolean().optional(),
 });
 
-/** The exact default from BUILD-PLAN §2. */
+/**
+ * The exact default from BUILD-PLAN §2 (O11, 2026-09-17: `review` retired — it took 14 cards and
+ * released 0 on its own; `decide` sits before `todo` and IS the owner's queue).
+ */
 export function defaultBoardConfig(): BoardConfig {
   return {
     prefix: 'RB',
     activeWindowMinutes: 30,
     columns: [
       { id: 'backlog', title: 'Backlog' },
+      { id: 'decide', title: 'Needs decision', decision: true },
       { id: 'todo', title: 'To do' },
       { id: 'doing', title: 'Doing', active: true, wip: 3 },
-      { id: 'review', title: 'Review', active: true },
       { id: 'done', title: 'Done', done: true },
     ],
   };
@@ -80,7 +85,7 @@ export function parseBoard(text: string): BoardParseResult {
 }
 
 const CONFIG_ORDER = ['prefix', 'activeWindowMinutes', 'columns'] as const;
-const COLUMN_ORDER = ['id', 'title', 'active', 'wip', 'done'] as const;
+const COLUMN_ORDER = ['id', 'title', 'active', 'wip', 'done', 'decision'] as const;
 
 function orderKeys(
   obj: Record<string, unknown>,

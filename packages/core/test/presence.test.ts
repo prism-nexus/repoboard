@@ -17,9 +17,11 @@ describe('isActive (D8)', () => {
     expect(
       isActive(sampleCard({ status: 'doing', updated: '2026-09-02T22:31:00Z' }), config, now),
     ).toBe(true);
+  });
+  it('the decide column (O11) is not active by default: a badge, not a work-in-progress state', () => {
     expect(
-      isActive(sampleCard({ status: 'review', updated: '2026-09-02T22:30:00Z' }), config, now),
-    ).toBe(true);
+      isActive(sampleCard({ status: 'decide', updated: '2026-09-02T22:59:00Z' }), config, now),
+    ).toBe(false);
   });
   it('active column but stale', () => {
     expect(
@@ -109,33 +111,60 @@ describe('computeBoardSummary', () => {
       sampleCard({ id: 'RB-2', status: 'doing', updated: '2026-09-02T22:50:00Z' }),
       sampleCard({ id: 'RB-3', status: 'doing', updated: '2026-09-02T20:00:00Z' }),
       sampleCard({ id: 'RB-4', status: 'doing', updated: '2026-09-02T20:00:00Z' }),
-      sampleCard({ id: 'RB-5', status: 'review', updated: '2026-09-02T22:59:00Z' }),
+      sampleCard({ id: 'RB-5', status: 'decide', updated: '2026-09-02T22:59:00Z' }),
       sampleCard({ id: 'RB-6', status: 'todo', updated: '2026-09-02T22:59:00Z' }),
       sampleCard({ id: 'RB-7', status: 'mystery', updated: '2026-09-02T22:59:00Z' }),
     ];
     const s = computeBoardSummary(cards, config, now);
     expect(s.perColumn).toEqual({
       backlog: 0,
+      decide: 1,
       todo: 1,
       doing: 4,
-      review: 1,
       done: 0,
       mystery: 1,
     });
-    expect(s.active.map((c) => c.id)).toEqual(['RB-1', 'RB-2', 'RB-5']);
+    // `decide` is not an `active` column by default (O11): RB-5 counts, but not as active.
+    expect(s.active.map((c) => c.id)).toEqual(['RB-1', 'RB-2']);
     expect(s.wipBreaches).toEqual([{ column: 'doing', count: 4, wip: 3 }]);
   });
 
-  it('empty board: zeros, nothing active, no breaches', () => {
+  it('empty board: zeros, nothing active, no breaches, no open decisions', () => {
     expect(computeBoardSummary([], config, now)).toEqual({
-      perColumn: { backlog: 0, todo: 0, doing: 0, review: 0, done: 0 },
+      perColumn: { backlog: 0, decide: 0, todo: 0, doing: 0, done: 0 },
       active: [],
       wipBreaches: [],
+      needsDecision: 0,
+      needsDecisionByColumn: {},
     });
   });
 
   it('exactly at the WIP limit is not a breach', () => {
     const cards = [1, 2, 3].map((n) => sampleCard({ id: `RB-${n}`, status: 'doing' }));
     expect(computeBoardSummary(cards, config, now).wipBreaches).toEqual([]);
+  });
+
+  it('needsDecision: totals and per-column counts only OPEN decisions (P8.1)', () => {
+    const open = {
+      question: 'q',
+      options: [],
+      askedBy: 'a',
+      askedAt: '2026-09-02T22:00:00Z',
+      returnTo: 'todo',
+      chosen: null,
+      words: null,
+      decidedBy: null,
+      decidedAt: null,
+    };
+    const decided = { ...open, chosen: 'A', decidedBy: 'a', decidedAt: '2026-09-02T22:10:00Z' };
+    const cards = [
+      sampleCard({ id: 'RB-1', status: 'decide', decision: open }),
+      sampleCard({ id: 'RB-2', status: 'decide', decision: decided }),
+      sampleCard({ id: 'RB-3', status: 'todo', decision: open }),
+      sampleCard({ id: 'RB-4', status: 'todo' }),
+    ];
+    const s = computeBoardSummary(cards, config, now);
+    expect(s.needsDecision).toBe(2);
+    expect(s.needsDecisionByColumn).toEqual({ decide: 1, todo: 1 });
   });
 });

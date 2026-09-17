@@ -10,7 +10,7 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import type { AddressInfo } from 'node:net';
 import { dirname, extname, join, normalize, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import type { Card, CardPatch, CreateCardInput, Priority } from '@repoboard/core';
+import type { Card, CardPatch, CreateCardInput, DecisionOption, Priority } from '@repoboard/core';
 import { watch as chokidarWatch, type FSWatcher } from 'chokidar';
 import { type WebSocket, WebSocketServer } from 'ws';
 import { resolveCardRefs } from './refs.js';
@@ -71,6 +71,8 @@ const CREATE_FIELDS: ReadonlySet<string> = new Set([
   'actor',
 ]);
 const PRIORITIES: ReadonlySet<string> = new Set(['high', 'medium', 'low']);
+const ASK_FIELDS: ReadonlySet<string> = new Set(['question', 'options', 'replace', 'actor']);
+const DECIDE_FIELDS: ReadonlySet<string> = new Set(['letter', 'words', 'actor']);
 
 const CONTENT_TYPES: Record<string, string> = {
   '.html': 'text/html; charset=utf-8',
@@ -199,6 +201,77 @@ function failureStatus(res: { notFound?: boolean; readOnly?: boolean }): number 
 }
 
 /**
+ * P8.1: like `failureStatus`, plus 409 when the request conflicts with the decision's own state
+ * — nothing open to decide, or one already open to ask again without `replace`. Everything else
+ * (an unknown letter, an empty question, a duplicate option) is a 400: the request itself is bad,
+ * not just untimely.
+ */
+const DECISION_CONFLICT = /no decision is open on|already has an open decision/;
+function decisionFailureStatus(res: {
+  notFound?: boolean;
+  readOnly?: boolean;
+  error: string;
+}): number {
+  if (res.readOnly === true) return 409;
+  if (res.notFound === true) return 404;
+  return DECISION_CONFLICT.test(res.error) ? 409 : 400;
+}
+
+function isOptionArray(v: unknown): v is DecisionOption[] {
+  return (
+    Array.isArray(v) &&
+    v.every(
+      (o) =>
+        isPlainObject(o) &&
+        typeof o.letter === 'string' &&
+        o.letter.length > 0 &&
+        typeof o.text === 'string',
+    )
+  );
+}
+
+interface AskInput {
+  question: string;
+  options?: DecisionOption[];
+  replace?: boolean;
+}
+
+function toAskInput(body: Json): AskInput {
+  rejectUnknown(body, ASK_FIELDS);
+  const question = body.question;
+  if (typeof question !== 'string' || question.trim().length === 0) {
+    throw new HttpError(400, 'question is required');
+  }
+  const input: AskInput = { question };
+  if (body.options !== undefined) {
+    if (!isOptionArray(body.options)) {
+      throw new HttpError(400, 'options must be [{letter, text}]');
+    }
+    input.options = body.options;
+  }
+  if (body.replace !== undefined) {
+    if (typeof body.replace !== 'boolean') throw new HttpError(400, 'replace must be a boolean');
+    input.replace = body.replace;
+  }
+  return input;
+}
+
+interface DecideInput {
+  letter?: string;
+  words?: string;
+}
+
+function toDecideInput(body: Json): DecideInput {
+  rejectUnknown(body, DECIDE_FIELDS);
+  const input: DecideInput = {};
+  const letter = optString(body, 'letter');
+  if (letter !== undefined) input.letter = letter;
+  const words = optString(body, 'words');
+  if (words !== undefined) input.words = words;
+  return input;
+}
+
+/**
  * Apply a PATCH-shaped body: a `status` change goes through `move`, everything else through
  * `update`. Used by `PATCH /api/cards/:id` and both WS client messages.
  */
@@ -208,6 +281,12 @@ async function applyPatch(
   body: Json,
   defaultActor: string,
 ): Promise<{ card: Card; warnings: string[] }> {
+  // P8.1: `decision` is never a PATCH field (it is not in PATCH_FIELDS), but it gets its own
+  // message rather than the generic "unknown field" — a silent path around /ask and /decide is
+  // how a decision would stop being authority (locked decision 7's own words).
+  if ('decision' in body) {
+    throw new HttpError(400, 'decision cannot be set via PATCH; use /ask and /decide');
+  }
   rejectUnknown(body, PATCH_FIELDS);
   const current = store.get(id);
   if (!current) throw new HttpError(404, `unknown card "${id}"`);
@@ -537,6 +616,33 @@ export async function startServer(opts: ServerOptions): Promise<RunningServer> {
       const card = store.get(id);
       if (!card) throw new HttpError(404, `unknown card "${id}"`);
       return sendJson(res, 200, await resolveCardRefs(root, card));
+    }
+    // P8.1: ask/decide are the only writers of `decision` — PATCH refuses the field above.
+    const askMatch = /^\/api\/cards\/([^/]+)\/ask$/.exec(path);
+    if (method === 'POST' && askMatch?.[1] !== undefined) {
+      const id = decodeURIComponent(askMatch[1]);
+      const body = await readBody(req);
+      const actor = optString(body, 'actor') ?? 'web';
+      const input = toAskInput(body);
+      const outcome = await store.ask(id, input, actor);
+      if (!outcome.ok) throw new HttpError(decisionFailureStatus(outcome), outcome.error);
+      if (outcome.warnings.length > 0) {
+        res.setHeader('x-repoboard-warnings', JSON.stringify(outcome.warnings));
+      }
+      return sendJson(res, 200, outcome.card);
+    }
+    const decideMatch = /^\/api\/cards\/([^/]+)\/decide$/.exec(path);
+    if (method === 'POST' && decideMatch?.[1] !== undefined) {
+      const id = decodeURIComponent(decideMatch[1]);
+      const body = await readBody(req);
+      const actor = optString(body, 'actor') ?? 'web';
+      const input = toDecideInput(body);
+      const outcome = await store.decide(id, input, actor);
+      if (!outcome.ok) throw new HttpError(decisionFailureStatus(outcome), outcome.error);
+      if (outcome.warnings.length > 0) {
+        res.setHeader('x-repoboard-warnings', JSON.stringify(outcome.warnings));
+      }
+      return sendJson(res, 200, outcome.card);
     }
     const m = /^\/api\/cards\/([^/]+)$/.exec(path);
     if (m?.[1] !== undefined) {

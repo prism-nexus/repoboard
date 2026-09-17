@@ -1,4 +1,4 @@
-import type { Card, ResolvedRef } from '@repoboard/core';
+import type { Card, Decision, ResolvedRef } from '@repoboard/core';
 import { useEffect, useMemo, useState } from 'react';
 import { renderMarkdown, splitBody } from '../markdown.js';
 import type { ColumnCards } from '../store.js';
@@ -15,6 +15,8 @@ interface Props {
   onUpdate: (id: string, patch: { title?: string; assignee?: string | null }) => void;
   /** P4.3: pin this card and switch to the map. */
   onShowOnMap?: (id: string) => void;
+  /** P8.1: answer the card's open decision. */
+  onDecide?: (id: string, input: { letter?: string; words?: string }) => void;
 }
 
 /** Slide-in card detail. ESC closes. Title/assignee commit on blur or Enter; status on change. */
@@ -27,6 +29,7 @@ export function Drawer({
   onMove,
   onUpdate,
   onShowOnMap,
+  onDecide,
 }: Props) {
   const [title, setTitle] = useState(card.title);
   const [assignee, setAssignee] = useState(card.assignee ?? '');
@@ -159,6 +162,13 @@ export function Drawer({
             ))}
           </ul>
         </section>
+      ) : null}
+      {card.decision ? (
+        <DecisionSection
+          decision={card.decision}
+          now={now}
+          onDecide={(input) => onDecide?.(card.id, input)}
+        />
       ) : null}
       <section className="drawer__section">
         {/* biome-ignore lint/security/noDangerouslySetInnerHtml: sanitized by DOMPurify in renderMarkdown */}
@@ -295,5 +305,93 @@ function Reference({ r }: { r: ResolvedRef }) {
         <pre className="drawer__ref-body mono">{r.text}</pre>
       )}
     </div>
+  );
+}
+
+/**
+ * P8.1: the Decision section, above the description. An OPEN decision shows one button per
+ * option (letter bold, text beside it), a single-line words field, and a Decide button enabled
+ * once a letter is picked or words are typed. A DECIDED card shows the answer and goes quiet —
+ * no buttons, no fun (D9: readability wins here).
+ */
+function DecisionSection({
+  decision,
+  now,
+  onDecide,
+}: {
+  decision: Decision;
+  now: number;
+  onDecide: (input: { letter?: string; words?: string }) => void;
+}) {
+  const open = decision.chosen === null && decision.decidedAt === null;
+  const [letter, setLetter] = useState<string | null>(null);
+  const [words, setWords] = useState('');
+  // A fresh question (or a hand edit that reopened one) clears any half-typed draft.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: reset keys on the question identity, not on letter/words themselves
+  useEffect(() => {
+    setLetter(null);
+    setWords('');
+  }, [decision.question, decision.askedAt]);
+
+  if (!open) {
+    return (
+      <section className="drawer__section drawer__decision" data-testid="decision-section">
+        <h3>Decision</h3>
+        <p className="drawer__decision-question">{decision.question}</p>
+        <p className="drawer__decision-answer" data-testid="decision-answer">
+          Decided{decision.chosen ? ` ${decision.chosen}` : ''}
+          {decision.words ? ` — "${decision.words}"` : ''} by {decision.decidedBy ?? 'unknown'}
+          {decision.decidedAt ? (
+            <>
+              {' '}
+              <span className="mono muted" title={decision.decidedAt}>
+                {relTime(decision.decidedAt, now)}
+              </span>
+            </>
+          ) : null}
+        </p>
+      </section>
+    );
+  }
+
+  const canDecide = letter !== null || words.trim().length > 0;
+  return (
+    <section className="drawer__section drawer__decision" data-testid="decision-section">
+      <h3>Decision</h3>
+      <p className="drawer__decision-question">{decision.question}</p>
+      {decision.options.length > 0 ? (
+        <div className="drawer__decision-options">
+          {decision.options.map((o) => (
+            <button
+              key={o.letter}
+              type="button"
+              className={`drawer__decision-option ${
+                letter === o.letter ? 'drawer__decision-option--on' : ''
+              }`}
+              aria-pressed={letter === o.letter}
+              onClick={() => setLetter((cur) => (cur === o.letter ? null : o.letter))}
+              data-testid={`decision-option-${o.letter}`}
+            >
+              <strong>{o.letter}</strong> {o.text}
+            </button>
+          ))}
+        </div>
+      ) : null}
+      <input
+        className="field__input mono drawer__decision-words"
+        placeholder="your words, kept verbatim"
+        value={words}
+        onChange={(e) => setWords(e.target.value)}
+        aria-label="Your words"
+      />
+      <button
+        type="button"
+        className="toggle drawer__decision-submit"
+        disabled={!canDecide}
+        onClick={() => onDecide({ letter: letter ?? undefined, words: words.trim() || undefined })}
+      >
+        Decide
+      </button>
+    </section>
   );
 }

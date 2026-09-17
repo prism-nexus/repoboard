@@ -798,3 +798,100 @@ describe('repoboard card show --resolve and card add --ref (K7)', () => {
     expect(shown.out.endsWith('\n(no refs)\n')).toBe(true);
   });
 });
+
+describe('repoboard card ask / decide (P8.1)', () => {
+  it('ask moves the card into the default board’s decide column and prints the count', async () => {
+    const root = await freshRepo({ 'RB-1.md': cardText('RB-1', 'todo') });
+    const res = await repoboard(
+      root,
+      'card',
+      'ask',
+      'RB-1',
+      'Ship it?',
+      '--option',
+      'A ship now',
+      '--option',
+      'B wait',
+    );
+    expect(res.code).toBe(0);
+    expect(res.out).toBe('asked RB-1: Ship it? (2 options)\n');
+    const file = await readFile(join(root, '.repoboard', 'cards', 'RB-1.md'), 'utf8');
+    expect(file).toContain('status: decide');
+    expect(file).toContain('returnTo: todo');
+    expect(file).toContain('moved todo → decide');
+    expect(file).toContain('asked: Ship it? [A|B]');
+  });
+
+  it('a bad --option is refused with the "<LETTER> <text>" shape named', async () => {
+    const root = await freshRepo({ 'RB-1.md': cardText('RB-1', 'todo') });
+    const res = await repoboard(root, 'card', 'ask', 'RB-1', 'q?', '--option', 'no-space');
+    expect(res.code).toBe(1);
+    expect(res.err).toMatch(/--option must be "<LETTER> <text>"/);
+  });
+
+  it('asking twice without --replace is refused; --replace withdraws and re-asks', async () => {
+    const root = await freshRepo({ 'RB-1.md': cardText('RB-1', 'todo') });
+    await repoboard(root, 'card', 'ask', 'RB-1', 'First?');
+    const refused = await repoboard(root, 'card', 'ask', 'RB-1', 'Second?');
+    expect(refused.code).toBe(1);
+    expect(refused.err).toMatch(/already has an open decision: "First\?"/);
+    const replaced = await repoboard(root, 'card', 'ask', 'RB-1', 'Second?', '--replace');
+    expect(replaced.code).toBe(0);
+    const file = await readFile(join(root, '.repoboard', 'cards', 'RB-1.md'), 'utf8');
+    expect(file).toContain('question withdrawn');
+    expect(file).toContain('question: Second?');
+  });
+
+  it('decide with a letter moves the card back and prints "decided <id> <letter>"', async () => {
+    const root = await freshRepo({ 'RB-1.md': cardText('RB-1', 'doing') });
+    await repoboard(root, 'card', 'ask', 'RB-1', 'Ship?', '--option', 'A yes', '--option', 'B no');
+    const res = await repoboard(root, 'card', 'decide', 'RB-1', 'A');
+    expect(res.code).toBe(0);
+    expect(res.out).toBe('decided RB-1 A\n');
+    const file = await readFile(join(root, '.repoboard', 'cards', 'RB-1.md'), 'utf8');
+    expect(file).toContain('status: doing');
+    expect(file).toContain('chosen: A');
+    expect(file).toContain('moved decide → doing');
+  });
+
+  it('decide with --words only prints "decided <id> — \\"<words>\\""', async () => {
+    const root = await freshRepo({ 'RB-1.md': cardText('RB-1', 'todo') });
+    await repoboard(root, 'card', 'ask', 'RB-1', 'Free text?');
+    const res = await repoboard(root, 'card', 'decide', 'RB-1', '--words', 'go ahead');
+    expect(res.code).toBe(0);
+    expect(res.out).toBe('decided RB-1 — "go ahead"\n');
+  });
+
+  it('decide refuses an unknown letter, naming the valid ones, and refuses when nothing is open', async () => {
+    const root = await freshRepo({ 'RB-1.md': cardText('RB-1', 'todo') });
+    const nothingOpen = await repoboard(root, 'card', 'decide', 'RB-1', 'A');
+    expect(nothingOpen.code).toBe(1);
+    expect(nothingOpen.err).toMatch(/no decision is open on RB-1/);
+    await repoboard(root, 'card', 'ask', 'RB-1', 'q?', '--option', 'A yes', '--option', 'B no');
+    const bad = await repoboard(root, 'card', 'decide', 'RB-1', 'Z');
+    expect(bad.code).toBe(1);
+    expect(bad.err).toMatch(/unknown option "Z" \(valid: A, B\)/);
+  });
+
+  it('card list --needs-decision filters to open decisions and the table gains a DECISION column', async () => {
+    const root = await freshRepo({
+      'RB-1.md': cardText('RB-1', 'todo', { title: 'Has a question' }),
+      'RB-2.md': cardText('RB-2', 'todo', { title: 'Plain' }),
+    });
+    await repoboard(root, 'card', 'ask', 'RB-1', 'q?');
+    const filtered = await repoboard(root, 'card', 'list', '--needs-decision');
+    expect(filtered.code).toBe(0);
+    expect(filtered.out.split('\n')).toEqual([
+      'ID    STATUS  ASSIGNEE  DECISION  TITLE',
+      'RB-1  decide  -         ?         Has a question',
+      '',
+    ]);
+    const all = await repoboard(root, 'card', 'list');
+    expect(all.out.split('\n')).toEqual([
+      'ID    STATUS  ASSIGNEE  DECISION  TITLE',
+      'RB-1  decide  -         ?         Has a question',
+      'RB-2  todo    -                   Plain',
+      '',
+    ]);
+  });
+});

@@ -10,11 +10,14 @@ import { appendFile, mkdir, readdir, readFile, rename, stat, writeFile } from 'n
 import { basename, join, relative, resolve, sep } from 'node:path';
 import {
   appendLogLine,
+  askDecision,
   type BoardConfig,
   type Card,
   type CardPatch,
   type CreateCardInput,
   createCard,
+  type DecisionOption,
+  decide as decideCard,
   defaultBoardConfig,
   type Event,
   formatLogLine,
@@ -67,6 +70,27 @@ export type MoveOutcome =
 
 export type UpdateOutcome =
   | { ok: true; card: Card; event: Event }
+  | { ok: false; error: string; notFound?: boolean; readOnly?: boolean };
+
+/** P8.1: `ask` input. `options` may be empty (a yes/no or free-text question). */
+export interface AskInput {
+  question: string;
+  options?: DecisionOption[];
+  replace?: boolean;
+}
+
+/** P8.1: `decide` input. At least one of `letter`/`words` is required (enforced by core). */
+export interface DecideInput {
+  letter?: string;
+  words?: string;
+}
+
+export type AskOutcome =
+  | { ok: true; card: Card; event: Event; warnings: string[] }
+  | { ok: false; error: string; notFound?: boolean; readOnly?: boolean };
+
+export type DecideOutcome =
+  | { ok: true; card: Card; event: Event; warnings: string[] }
   | { ok: false; error: string; notFound?: boolean; readOnly?: boolean };
 
 /** The refusal text, in one place: the CLI, HTTP and MCP all surface this string. */
@@ -271,6 +295,63 @@ export class CardStore extends EventEmitter<StoreEvents> {
       };
       await this.appendEvent(event);
       return { ok: true, card: res.card, event };
+    });
+  }
+
+  /**
+   * P8.1: open a decision on a card, or replace one already open (`--replace`). O11: when the
+   * board has a `decision: true` column, this also moves the card there through core's
+   * `askDecision` (same funnel: one write, one event, computed the same way `move` computes
+   * `columnCounts` for the WIP check).
+   */
+  ask(id: string, input: AskInput, actor: string): Promise<AskOutcome> {
+    return this.mutate(async () => {
+      const card = this.cards.get(id);
+      if (!card) return { ok: false, error: `unknown card "${id}"`, notFound: true };
+      const columnCounts: Record<string, number> = {};
+      for (const c of this.cards.values()) {
+        if (c.id !== id) columnCounts[c.status] = (columnCounts[c.status] ?? 0) + 1;
+      }
+      const res = askDecision(card, {
+        question: input.question,
+        options: input.options,
+        replace: input.replace,
+        actor,
+        now: this.now(),
+        config: this.cfg,
+        columnCounts,
+      });
+      if (!res.ok) return { ok: false, error: res.error };
+      await this.writeCard(res.card);
+      await this.appendEvent(res.event);
+      return { ok: true, card: res.card, event: res.event, warnings: res.warnings };
+    });
+  }
+
+  /**
+   * P8.1: answer the open decision. O11: when it recorded a `returnTo` column that still
+   * exists, this moves the card back through core's `decide`, same funnel as `ask`/`move`.
+   */
+  decide(id: string, input: DecideInput, actor: string): Promise<DecideOutcome> {
+    return this.mutate(async () => {
+      const card = this.cards.get(id);
+      if (!card) return { ok: false, error: `unknown card "${id}"`, notFound: true };
+      const columnCounts: Record<string, number> = {};
+      for (const c of this.cards.values()) {
+        if (c.id !== id) columnCounts[c.status] = (columnCounts[c.status] ?? 0) + 1;
+      }
+      const res = decideCard(card, {
+        letter: input.letter,
+        words: input.words,
+        actor,
+        now: this.now(),
+        config: this.cfg,
+        columnCounts,
+      });
+      if (!res.ok) return { ok: false, error: res.error };
+      await this.writeCard(res.card);
+      await this.appendEvent(res.event);
+      return { ok: true, card: res.card, event: res.event, warnings: res.warnings };
     });
   }
 

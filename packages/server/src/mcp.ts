@@ -9,7 +9,7 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
-import { type Card, type CardPatch, computeBoardSummary } from '@repoboard/core';
+import { type Card, type CardPatch, computeBoardSummary, needsDecision } from '@repoboard/core';
 import { z } from 'zod';
 import { resolveCardRefs } from './refs.js';
 import { type CardStore, openStore } from './store.js';
@@ -23,6 +23,8 @@ export const MCP_TOOL_NAMES = [
   'update_card',
   'append_log',
   'board_summary',
+  'ask_owner',
+  'record_decision',
 ] as const;
 
 export interface McpServerOptions {
@@ -81,14 +83,19 @@ function nameField(error: string): string {
   if (error === 'patch is empty') {
     return 'nothing to update: pass at least one of title, assignee, priority, labels, files';
   }
+  if (error.startsWith('unknown option')) return `letter: ${error}`;
+  if (error.startsWith('duplicate option letter')) return `options: ${error}`;
   return error;
 }
 
 const CARD_INTRO =
   "A card is one task on this repository's Kanban board: the file `.repoboard/cards/<id>.md`, " +
-  'YAML frontmatter (id, title, status, assignee, priority, labels, files, refs, created, updated) ' +
-  'plus a markdown body with a `## Log` section. `status` is always a column id from ' +
-  '`.repoboard/board.yml`. ';
+  'YAML frontmatter (id, title, status, assignee, priority, labels, files, refs, decision, ' +
+  'created, updated) plus a markdown body with a `## Log` section. `status` is always a column ' +
+  'id from `.repoboard/board.yml`. A card may carry a `decision` block (P8.1): a question, ' +
+  'optional lettered options, and — once answered — `chosen`/`words`. ' +
+  'A DECIDED card is authority: do not re-ask it and do not wait for a relay — read ' +
+  '`decision.chosen` and `decision.words` yourself. ';
 
 const ACTOR_DESC =
   'Who is acting, written `<tool>/<role>` (e.g. `claude/web-agent`) so the board can draw a ' +
@@ -107,8 +114,9 @@ export function createMcpServer(opts: McpServerOptions): McpServer {
       instructions:
         `${CARD_INTRO}Column ids on this board: ${columnIds()}. Call list_cards or ` +
         'board_summary first to see what exists. Before starting a task, move its card to the ' +
-        'active column (usually `doing`) with your actor name; when done, move it to `review` ' +
-        'and append_log what you verified.',
+        'active column (usually `doing`) with your actor name; when done, append_log what you ' +
+        'verified (or move it to `done` if you own that call). Use ask_owner when a task needs a ' +
+        'human decision instead of guessing or waiting on a chat relay.',
     },
   );
 
@@ -130,6 +138,12 @@ export function createMcpServer(opts: McpServerOptions): McpServer {
           .describe(`Only cards in this column id (one of: ${columnIds()}).`),
         assignee: z.string().optional().describe('Only cards whose assignee equals this string.'),
         label: z.string().optional().describe('Only cards whose labels include this label.'),
+        needsDecision: z
+          .boolean()
+          .optional()
+          .describe(
+            'Only cards with an OPEN decision (asked, not yet answered) — the owner queue.',
+          ),
         full: z
           .boolean()
           .optional()
@@ -137,11 +151,12 @@ export function createMcpServer(opts: McpServerOptions): McpServer {
       },
       annotations: { readOnlyHint: true },
     },
-    ({ status, assignee, label, full }) => {
+    ({ status, assignee, label, needsDecision: needsDecisionFilter, full }) => {
       let cards = store.list();
       if (status !== undefined) cards = cards.filter((c) => c.status === status);
       if (assignee !== undefined) cards = cards.filter((c) => c.assignee === assignee);
       if (label !== undefined) cards = cards.filter((c) => (c.labels ?? []).includes(label));
+      if (needsDecisionFilter) cards = cards.filter((c) => needsDecision(c));
       const rows: readonly unknown[] = full ? cards : cards.map(toRow);
       return { content: [{ type: 'text', text: formatRows(rows) }] };
     },
@@ -299,6 +314,63 @@ export function createMcpServer(opts: McpServerOptions): McpServer {
       const res = await store.appendLog(id, text, actor ?? defaultActor);
       if (!res.ok) return fail(nameField(res.error));
       return ok(res.card);
+    },
+  );
+
+  server.registerTool(
+    'ask_owner',
+    {
+      title: 'Ask the owner a decision, on the card',
+      description:
+        `${CARD_INTRO}Opens a \`decision\` block on a card: a question and optional lettered ` +
+        'options. The owner answers from the dashboard (or `record_decision`) — do not wait on a ' +
+        'chat relay; poll `get_card`/`list_cards` and read `decision.chosen`/`decision.words` when ' +
+        'it is DECIDED (`chosen !== null || decidedAt !== null`). If the board has a column with ' +
+        '`decision: true`, the card MOVES there (recording where it came from) and moves back ' +
+        'when `record_decision` answers it; a board with no such column just shows a badge. ' +
+        'Asking again on a card with an OPEN decision is refused — pass `replace: true` to ' +
+        'withdraw it and ask a new one; asking again on a DECIDED card simply replaces it.',
+      inputSchema: {
+        id: z.string().describe('Card id, e.g. RB-12.'),
+        question: z.string().min(1),
+        options: z
+          .array(z.object({ letter: z.string().min(1), text: z.string() }))
+          .optional()
+          .describe(
+            'Lettered choices, e.g. [{letter:"A",text:"ship now"}]. Omit for a yes/no or ' +
+              'free-text question — the owner then answers with words only.',
+          ),
+        replace: z.boolean().optional().describe('Withdraw an already-open decision and re-ask.'),
+        actor: z.string().optional().describe(ACTOR_DESC),
+      },
+    },
+    async ({ id, question, options, replace, actor }) => {
+      const res = await store.ask(id, { question, options, replace }, actor ?? defaultActor);
+      if (!res.ok) return fail(nameField(res.error));
+      return ok({ card: res.card, warnings: res.warnings });
+    },
+  );
+
+  server.registerTool(
+    'record_decision',
+    {
+      title: "Record the owner's answer to an open decision",
+      description:
+        `${CARD_INTRO}Answers the card's open \`decision\`: a \`letter\` naming one of its ` +
+        'options, `words` (verbatim), or both — at least one is required. Refuses an unknown ' +
+        'letter (names the valid ones) and refuses when nothing is open. Moves the card back to ' +
+        'where `ask_owner` moved it from, if anywhere.',
+      inputSchema: {
+        id: z.string().describe('Card id, e.g. RB-12.'),
+        letter: z.string().optional().describe('One of the decision’s option letters.'),
+        words: z.string().optional().describe('The verbatim answer, kept as written.'),
+        actor: z.string().optional().describe(ACTOR_DESC),
+      },
+    },
+    async ({ id, letter, words, actor }) => {
+      const res = await store.decide(id, { letter, words }, actor ?? defaultActor);
+      if (!res.ok) return fail(nameField(res.error));
+      return ok({ card: res.card, warnings: res.warnings });
     },
   );
 

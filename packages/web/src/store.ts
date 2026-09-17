@@ -62,6 +62,12 @@ export interface Store {
   moveCard(id: string, status: string): void;
   /** Optimistic patch + `card:update` on the wire; snaps back without an echo. */
   updateCard(id: string, patch: CardPatch): void;
+  /**
+   * P8.1: answer the open decision via `POST /api/cards/:id/decide` (PATCH refuses the field —
+   * this is not `updateCard`). Not optimistic: the drawer shows the result once the request
+   * returns, and a failure toasts rather than guessing at the new state.
+   */
+  decideCard(id: string, input: { letter?: string; words?: string }): Promise<void>;
   select(id: string | null): void;
   setView(view: View): void;
   togglePin(id: string): void;
@@ -221,6 +227,29 @@ export function createStore(factory: TransportFactory, opts: StoreOptions = {}):
         else if (v !== undefined) after[k] = v;
       }
       optimistic(before, after, { type: 'card:update', id, patch }, 'Update');
+    },
+    async decideCard(id, input) {
+      if (typeof fetch !== 'function') return;
+      let res: Response;
+      try {
+        res = await fetch(`/api/cards/${encodeURIComponent(id)}/decide`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ ...input, actor: 'web' }),
+        });
+      } catch (e) {
+        toast(`Decide of ${id} failed: ${e instanceof Error ? e.message : String(e)}`);
+        return;
+      }
+      if (!res.ok) {
+        const body: unknown = await res.json().catch(() => ({}));
+        const message =
+          body && typeof body === 'object' && 'error' in body ? String(body.error) : res.status;
+        toast(`Decide of ${id} failed: ${message}`);
+        return;
+      }
+      const card = (await res.json()) as Card;
+      set({ cards: replaceCard(card) });
     },
     select: (selectedId) => set({ selectedId }),
     setView: (view) => set({ view }),

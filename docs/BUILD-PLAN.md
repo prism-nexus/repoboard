@@ -246,15 +246,16 @@ held 11 h on a relay, lock windows sent as chat messages). One principle for eve
 under `.repoboard/` that `sed` can edit, written through core by all three surfaces, rendered by the
 dashboard, its bytes on the wire measured before it ships (O3).** Core stays I/O-free (0.5).
 
-- **P8.1 Decisions** — `.repoboard/decisions.jsonl`, append-only. One line per decision:
-  `{ts, id: "D-<n>", item, words, heardBy, refs?, open?, letters?, resolves?}`. `words` is the owner's
-  text VERBATIM; `heardBy` is the seat that heard it. An **open letter** is a line with `open: true` and
-  `letters: ["A1 …", "A2 …"]`; its answer is a NEW line with `resolves: "D-<n>"` (never an edit — core
-  exposes no update). CLI `repoboard decide "<item>" --words "<verbatim>" --by <seat> [--ref r]... [--resolves D-n]`,
-  `repoboard ask "<item>" --letter "…"... [--ref r]... --by <seat>`, `repoboard decisions [--open] [--json]`.
-  MCP `record_decision`, `ask_owner`, `list_decisions`. HTTP `GET/POST /api/decisions`. Web: a
-  **Decisions** tab — open letters first (the owner's agenda), then newest first; a card whose `refs:`
-  names `decisions.jsonl@D-7` renders that line live. Watcher pushes the file like cards.
+- **P8.1 Decisions ON THE CARD** (rewritten on O10) — a card carries an optional `decision:` block:
+  `question`, `options: [{letter, text}]`, `askedBy/askedAt`, and once the owner answers `chosen`
+  (a letter), `words` (verbatim, optional), `decidedBy/decidedAt`. A card with a decision and no
+  answer NEEDS OWNER; the board badges it and shows the letters inline; the drawer shows one button
+  per option and a words field, and the owner decides **right there**. `ask` and `decide` are core
+  transitions that append `## Log` lines; `PATCH` refuses the field so nothing bypasses the log.
+  CLI `card ask <id> "<q>" --option "A1 …"...`, `card decide <id> [letter] [--words]`,
+  `card list --needs-decision`; MCP `ask_owner`, `record_decision`, `list_cards needsDecision`;
+  HTTP `/api/cards/:id/ask|decide`. A decided card is authority. **No separate file, no separate
+  tab** — the "owner queue" is the `needs decision` filter. Brief: `docs/P8.1-DECISIONS-BRIEF.md`.
 - **P8.2 Leases and windows** — `.repoboard/leases.yml`: `leases: [{resource, holder, since, until?, note?}]`,
   `windows: [{resource, start, end, name}]`. A lease past `until` renders STALE, not held; a window past
   `end` is pruned on the next write. CLI `repoboard lease take|release <resource> --as <holder> [--until ts] [--note]`,
@@ -273,7 +274,7 @@ dashboard, its bytes on the wire measured before it ships (O3).** Core stays I/O
   newest log file; a card is in an `active` column with no lease held by its assignee; a lease is past
   `until`; CLAUDE.md is over the cost budget (P8.4). MCP `append_repo_log`, `get_state`, `check`. Web:
   STATE rendered as the landing panel of the Board view; the log as a timeline beside the ticker;
-  OWNER QUEUE on STATE is GENERATED from open decisions (P8.1), never typed.
+  OWNER QUEUE on STATE is GENERATED from cards that need a decision (P8.1), never typed.
 - **P8.4 Cost** — `repoboard cost [--budget <bytes>] [--json]`: bytes (and ≈tokens at 4 B/token) of
   CLAUDE.md, AGENTS.md if present, every repo-relative path CLAUDE.md names in backticks that exists,
   and the names of MCP servers in `.mcp.json`; total = "what a cold agent loads". Exit 1 when CLAUDE.md
@@ -396,3 +397,10 @@ Answered 2026-09-17:
   under `.repoboard/` (0.3), written through core (0.4), core stays pure (0.5). **Standing constraint:**
   `sync-issues` and `init --practices` must never edit a file they did not create — a repo's README is
   read, never written.
+- **O10 — decisions live on cards, not in a file; the owner picks the letter on the card.** The owner,
+  2026-09-17 19:1xZ, forty minutes into the first P8.1 build: "i think the plan actually should be owner
+  decisions where a decision is needed can be represented on the boards card with the ability to have
+  the human user select what letter option if applicable right there." That build (a separate
+  `decisions.jsonl` + Decisions tab) was stopped and discarded unmerged; P8.1 and its brief were
+  rewritten. Consequences: no new record type (0.3 stays one directory of cards); P8.3's OWNER QUEUE is
+  generated from `needs decision` cards; the dashboard's `needs decision` filter is the owner's agenda.

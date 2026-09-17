@@ -288,10 +288,14 @@ dashboard, its bytes on the wire measured before it ships (O3).** Core stays I/O
   OWNER QUEUE on STATE is GENERATED from cards that need a decision (P8.1), never typed, and a
   queue line scrolls to the `decide` column rather than toggling a filter (O11 retired it).
   Brief: `docs/P8.3-STATE-LOG-BRIEF.md`. **Landed `562a09d`.**
-- **P8.4 Cost** — `repoboard cost [--budget <bytes>] [--json]`: bytes (and ≈tokens at 4 B/token) of
-  CLAUDE.md, AGENTS.md if present, every repo-relative path CLAUDE.md names in backticks that exists,
-  and the names of MCP servers in `.mcp.json`; total = "what a cold agent loads". Exit 1 when CLAUDE.md
-  exceeds `--budget` (default 8192). MCP `cost`. Web: a tile on the Map view.
+- **P8.4 Cost** — **Landed `b16c115`.** `repoboard cost [--root <dir>] [--budget <bytes>] [--json]`:
+  bytes (and ≈tokens at 4 B/token) of CLAUDE.md and its variants, AGENTS.md and its variants, every
+  repo-relative path CLAUDE.md names in backticks that exists, and the names of MCP servers in
+  `.mcp.json`; total = "what a cold agent loads". Exit 1 when CLAUDE.md exceeds its budget (default
+  8192, or `board.yml`'s `claudeMdBudgetBytes`); `check`'s `cost-over-budget` finding (error-grade)
+  is wired to the same report. MCP `cost`, HTTP `GET /api/cost`, a Map-view header tile. Measured
+  both repoboard (111,875 B) and freshpickedjobs read-only via `--root` (2,536,728 B, 85% one
+  linked file) — `docs/AGENTS.md` §11 has both tables. Brief: `docs/P8.4-COST-BRIEF.md`.
 - **P8.5 Archive and issue sync** — `repoboard archive [--older-than 14d]` moves `done` cards whose
   `updated` is older than the cutoff to `.repoboard/archive/` (a `git mv` when the repo is git, else a
   rename); the store does not load `archive/`. `repoboard sync-issues <path>#<heading>` creates a card

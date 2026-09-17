@@ -286,7 +286,7 @@ dashboard, its bytes on the wire measured before it ships (O3).** Core stays I/O
   view (localStorage remembers collapsed/expanded); the log as a timeline beside the ticker;
   OWNER QUEUE on STATE is GENERATED from cards that need a decision (P8.1), never typed, and a
   queue line scrolls to the `decide` column rather than toggling a filter (O11 retired it).
-  Brief: `docs/P8.3-STATE-LOG-BRIEF.md`.
+  Brief: `docs/P8.3-STATE-LOG-BRIEF.md`. **Landed `562a09d`.**
 - **P8.4 Cost** — `repoboard cost [--budget <bytes>] [--json]`: bytes (and ≈tokens at 4 B/token) of
   CLAUDE.md, AGENTS.md if present, every repo-relative path CLAUDE.md names in backticks that exists,
   and the names of MCP servers in `.mcp.json`; total = "what a cold agent loads". Exit 1 when CLAUDE.md

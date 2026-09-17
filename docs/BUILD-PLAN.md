@@ -32,7 +32,7 @@ Name: **repoboard** (Remember · Connect · Build) — decided 2026-09-03, §11 
 | # | Decision | Why |
 |---|---|---|
 | D1 | **Cards are markdown files with YAML frontmatter** in `.repoboard/cards/<id>.md`. One file per card. | Diffable, mergeable, agent-editable with zero tooling, readable on GitHub. |
-| D2 | **Columns are configured in `.repoboard/board.yml`**; `status` on a card is a column id. Default columns: `backlog, todo, doing, review, done`. | Teams differ; the default matches how the owner already works. |
+| D2 | **Columns are configured in `.repoboard/board.yml`**; `status` on a card is a column id. Default columns: `backlog, decide, todo, doing, done` (O11; was `backlog, todo, doing, review, done` until 2026-09-17). | Teams differ; the default matches how the owner already works. |
 | D3 | **Card ids are `<PREFIX>-<n>`**, prefix from `board.yml`, `n` monotonic, allocated by scanning existing ids (max+1). Default prefix `RB`. | Matches the owner's `K<n>` habit. No counter file to merge-conflict. |
 | D4 | **Three agent surfaces, one core:** direct file edit · CLI (`repoboard card move RB-3 doing`) · MCP server (`repoboard mcp`). Plus HTTP for the web UI. | An agent that can only edit files still works. Claude Code gets a native tool. |
 | D5 | **Stack:** TypeScript, Node ≥ 20, pnpm workspace. `packages/core` (domain), `packages/server` (CLI + HTTP + WS + watcher + MCP), `packages/web` (Vite + React + d3). Tests: vitest. Lint: biome. | Widest contributor pool for an OSS utility. d3 for treemap/graph. |
@@ -54,15 +54,15 @@ activeWindowMinutes: 30
 columns:
   - id: backlog
     title: Backlog
+  - id: decide
+    title: Needs decision
+    decision: true      # O11: cards asking the owner a question land here
   - id: todo
     title: To do
   - id: doing
     title: Doing
     active: true
     wip: 3
-  - id: review
-    title: Review
-    active: true
   - id: done
     title: Done
     done: true
@@ -404,3 +404,17 @@ Answered 2026-09-17:
   `decisions.jsonl` + Decisions tab) was stopped and discarded unmerged; P8.1 and its brief were
   rewritten. Consequences: no new record type (0.3 stays one directory of cards); P8.3's OWNER QUEUE is
   generated from `needs decision` cards; the dashboard's `needs decision` filter is the owner's agenda.
+- **O11 — `review` leaves the default board; a `decide` column ("Needs decision") sits before `todo`
+  and IS the owner's queue.** The owner, 2026-09-17 19:2xZ: "there was the outstanding review column
+  issue I think we retire that column unless you see a purpose and it is replaced by a pre to do column
+  for the user decisions needed column." Measured basis (O6): `review` took 14 cards and released 0 on
+  its own; the owner drained it by hand on 09-07 and again on 09-08 (RCB-31/32/33/35, committed
+  2026-09-17). The orchestrator's stated purpose for `review` ("built, awaiting the orchestrator's
+  verification") is served by a `verified:` log line on the card while it stays in `doing`, and by the
+  orchestrator moving it to `done`. Consequences: `defaultBoardConfig()` and §2 become
+  `backlog, decide, todo, doing, done` with `decide: { title: "Needs decision", decision: true }`;
+  P8.1's `card ask` MOVES the card into the first `decision: true` column (recording `returnTo`) and
+  `card decide` moves it back to `returnTo` — the column is the agenda, so the `needs decision` FILTER
+  is dropped (the badge and inline letters stay); a board with no `decision: true` column keeps the
+  card where it is (the badge alone). O6's rule stands: anyone who wants `review` adds it to
+  `board.yml`. This repo's own `board.yml` changes in the same commit; no card was in `review`.

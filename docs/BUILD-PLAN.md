@@ -246,8 +246,8 @@ held 11 h on a relay, lock windows sent as chat messages). One principle for eve
 under `.repoboard/` that `sed` can edit, written through core by all three surfaces, rendered by the
 dashboard, its bytes on the wire measured before it ships (O3).** Core stays I/O-free (0.5).
 
-- **P8.1 Decisions ON THE CARD** (rewritten on O10, amended on O11) — **Landed `<pending — see
-  RCB-36 log for the sha>`.** A card carries an optional `decision:` block: `question`,
+- **P8.1 Decisions ON THE CARD** (rewritten on O10, amended on O11) — **Landed `aef44c3`.** A card
+  carries an optional `decision:` block: `question`,
   `options: [{letter, text}]`, `askedBy/askedAt`, `returnTo` (O11), and once the owner answers
   `chosen` (a letter), `words` (verbatim, optional), `decidedBy/decidedAt`. A card with a decision
   and no answer NEEDS OWNER; the board badges it and shows the letters inline; the drawer shows one

@@ -302,7 +302,7 @@ dashboard, its bytes on the wire measured before it ships (O3).** Core stays I/O
   (status `todo`, label `issue`, `refs: [<path>@K<n>]`) for every `- **K<n>` list item under the
   heading, and moves the card to `done` when the item is gone or struck (`- ~~**K<n>`); idempotent by
   ref; never edits the source file. The README stays the text; the board is the view.
-  **Landed** (commit: see git log, P8.5). Measured read-only against freshpickedjobs three times
+  **Landed `3c314d5`** (verified by the orchestrator: 562/562 ×2 independently, typecheck 0, lint 0; fpj dry-run re-run read-only at 0427693 → 64/0/0, K list identical to an independent grep; C1 and C2 re-perturbed by the orchestrator and watched failing). Measured read-only against freshpickedjobs three times
   as the target file moved under the task (68 brief / 69 at `b633c84` / 64 at `44acaf1` and again
   at `0427693`, the final build) — `git status --short` byte-identical before/after every call,
   `.repoboard/` absent throughout. `docs/AGENTS.md` §12 has the full table and the K-number list.

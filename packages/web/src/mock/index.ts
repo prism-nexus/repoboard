@@ -4,7 +4,7 @@
  */
 import { appendLogLine, type Card, type Event, findColumn, formatLogLine } from '@repoboard/core';
 import type { ServerMessage, Transport, TransportFactory, TransportHandlers } from '../wire.js';
-import { MOCK_ACTORS, mockCards, mockConfig, mockRepo } from './data.js';
+import { MOCK_ACTORS, mockCards, mockConfig, mockLeases, mockRepo } from './data.js';
 
 export interface MockOptions {
   /** Interval between fake events in ms; `null` emits nothing on its own. */
@@ -133,7 +133,12 @@ function openMock(handlers: TransportHandlers, options: MockOptions): MockTransp
 
   later(0, () => {
     handlers.onConnected(true);
-    emit({ type: 'snapshot', board: { config, cards, hasBoard: true }, repo: mockRepo() });
+    emit({
+      type: 'snapshot',
+      board: { config, cards, hasBoard: true },
+      repo: mockRepo(),
+      leases: { ...mockLeases(), now: iso() },
+    });
     // A little history so the ticker has something to say.
     const now = Date.now();
     const history: Array<[string, string, string, string, number]> = [

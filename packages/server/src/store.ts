@@ -9,22 +9,34 @@ import { EventEmitter } from 'node:events';
 import { appendFile, mkdir, readdir, readFile, rename, stat, writeFile } from 'node:fs/promises';
 import { basename, join, relative, resolve, sep } from 'node:path';
 import {
+  type AddWindowInput,
+  addWindow,
   appendLogLine,
   askDecision,
   type BoardConfig,
   type Card,
   type CardPatch,
+  type CheckResourceResult,
   type CreateCardInput,
+  checkResource,
   createCard,
   type DecisionOption,
   decide as decideCard,
   defaultBoardConfig,
   type Event,
   formatLogLine,
+  type LeasesDoc,
   moveCard,
   parseBoard,
   parseCard,
+  parseLeases,
+  pruneWindows,
+  type ReleaseLeaseInput,
+  releaseLease,
   serializeCard,
+  serializeLeases,
+  type TakeLeaseInput,
+  takeLease,
   toIso,
   updateCard,
 } from '@repoboard/core';
@@ -46,6 +58,8 @@ export interface StoreEvents {
   invalid: [invalid: InvalidCard[]];
   event: [event: Event];
   warning: [message: string];
+  /** P8.2: `.repoboard/leases.yml` changed, by a mutation here or by an external edit. */
+  leases: [doc: LeasesDoc];
 }
 
 export interface OpenStoreOptions {
@@ -93,6 +107,11 @@ export type DecideOutcome =
   | { ok: true; card: Card; event: Event; warnings: string[] }
   | { ok: false; error: string; notFound?: boolean; readOnly?: boolean };
 
+/** P8.2: `takeLease`/`releaseLease`/`addWindow` outcomes. `readOnly` is the map-only refusal (K10). */
+export type LeaseOutcome =
+  | { ok: true; doc: LeasesDoc; event: Event; warnings: string[] }
+  | { ok: false; error: string; readOnly?: boolean };
+
 /** The refusal text, in one place: the CLI, HTTP and MCP all surface this string. */
 export const MAP_ONLY_ERROR =
   'this repo has no .repoboard/ — repoboard is serving it map-only and will not create one. ' +
@@ -134,8 +153,10 @@ export class CardStore extends EventEmitter<StoreEvents> {
   readonly cardsDir: string;
   readonly boardPath: string;
   readonly eventsPath: string;
+  readonly leasesPath: string;
 
   private cfg: BoardConfig = defaultBoardConfig();
+  private leasesDoc: LeasesDoc = { leases: [], windows: [] };
   private board = false;
   private readonly cards = new Map<string, Card>();
   /** Per file: the card id it currently holds (null when invalid) and the content hash. */
@@ -154,6 +175,7 @@ export class CardStore extends EventEmitter<StoreEvents> {
     this.cardsDir = join(this.repoboardDir, 'cards');
     this.boardPath = join(this.repoboardDir, 'board.yml');
     this.eventsPath = join(this.repoboardDir, 'events.jsonl');
+    this.leasesPath = join(this.repoboardDir, 'leases.yml');
     this.now = opts.now ?? (() => new Date());
   }
 
@@ -176,6 +198,15 @@ export class CardStore extends EventEmitter<StoreEvents> {
 
   get invalid(): InvalidCard[] {
     return [...this.invalidByPath.values()];
+  }
+
+  /**
+   * P8.2: the current `.repoboard/leases.yml` doc. A read, never a write — windows are pruned
+   * only on the next mutation (locked decision 2), so a leftover expired window can still show up
+   * here between mutations; that is the documented behaviour, not a bug.
+   */
+  leases(): LeasesDoc {
+    return this.leasesDoc;
   }
 
   list(): Card[] {
@@ -204,6 +235,7 @@ export class CardStore extends EventEmitter<StoreEvents> {
   async load(watch: boolean): Promise<void> {
     this.board = await isDirectory(this.repoboardDir);
     await this.loadConfig();
+    await this.loadLeases();
     let names: string[] = [];
     try {
       names = await readdir(this.cardsDir);
@@ -356,6 +388,49 @@ export class CardStore extends EventEmitter<StoreEvents> {
   }
 
   /**
+   * P8.2: take a resource, or renew it (same holder), or refuse/force past another holder's live
+   * lease (`releaseLease` and `addWindow` follow the same shape). Every successful mutation prunes
+   * expired windows before writing (locked decision 2: prune on write, never on read).
+   */
+  takeLease(input: TakeLeaseInput, actor: string): Promise<LeaseOutcome> {
+    return this.mutate(async () => {
+      const res = takeLease(this.leasesDoc, input, { actor, now: this.now() });
+      if (!res.ok) return { ok: false, error: res.error };
+      const doc = pruneWindows(res.doc, this.now());
+      await this.writeLeases(doc);
+      await this.appendEvent(res.event);
+      return { ok: true, doc, event: res.event, warnings: res.warnings };
+    });
+  }
+
+  releaseLease(input: ReleaseLeaseInput, actor: string): Promise<LeaseOutcome> {
+    return this.mutate(async () => {
+      const res = releaseLease(this.leasesDoc, input, { actor, now: this.now() });
+      if (!res.ok) return { ok: false, error: res.error };
+      const doc = pruneWindows(res.doc, this.now());
+      await this.writeLeases(doc);
+      await this.appendEvent(res.event);
+      return { ok: true, doc, event: res.event, warnings: res.warnings };
+    });
+  }
+
+  addWindow(input: AddWindowInput, actor: string): Promise<LeaseOutcome> {
+    return this.mutate(async () => {
+      const res = addWindow(this.leasesDoc, input, { actor, now: this.now() });
+      if (!res.ok) return { ok: false, error: res.error };
+      const doc = pruneWindows(res.doc, this.now());
+      await this.writeLeases(doc);
+      await this.appendEvent(res.event);
+      return { ok: true, doc, event: res.event, warnings: res.warnings };
+    });
+  }
+
+  /** P8.2: pure read of the in-memory doc — no write, so it works in map-only mode too. */
+  checkResource(resource: string, at?: Date): CheckResourceResult {
+    return checkResource(this.leasesDoc, resource, at ?? this.now());
+  }
+
+  /**
    * Append one `- <ts> <actor> — <text>` bullet under `## Log` and bump `updated`. Unlike
    * `update({body})` this writes exactly one log line. Newlines in `text` collapse to spaces
    * so the bullet stays one line.
@@ -470,6 +545,36 @@ export class CardStore extends EventEmitter<StoreEvents> {
   private isClaimed(card: Card, prevCard: Card | undefined): boolean {
     if (prevCard && prevCard.updated === card.updated) return false;
     return this.eventLog.some((e) => e.cardId === card.id && e.ts === card.updated);
+  }
+
+  /** Atomic: write `<file>.tmp`, rename over the target, then update the cache (mirrors `writeCard`). */
+  private async writeLeases(doc: LeasesDoc): Promise<void> {
+    this.refuseWriteWithoutBoard();
+    const text = serializeLeases(doc);
+    await mkdir(this.repoboardDir, { recursive: true });
+    const tmp = `${this.leasesPath}.tmp`;
+    await writeFile(tmp, text, 'utf8');
+    await rename(tmp, this.leasesPath);
+    this.leasesDoc = doc;
+    this.emit('leases', doc);
+  }
+
+  private async loadLeases(): Promise<void> {
+    let text: string;
+    try {
+      text = await readFile(this.leasesPath, 'utf8');
+    } catch (e) {
+      if ((e as NodeJS.ErrnoException).code !== 'ENOENT') throw e;
+      this.leasesDoc = { leases: [], windows: [] };
+      return;
+    }
+    const res = parseLeases(text);
+    if (res.ok) {
+      this.leasesDoc = res.doc;
+    } else {
+      // Keep the last good doc rather than losing every lease/window to a bad hand edit.
+      this.emit('warning', `${relative(this.root, this.leasesPath)}: ${res.error}`);
+    }
   }
 
   private async loadConfig(): Promise<void> {
@@ -618,6 +723,11 @@ export class CardStore extends EventEmitter<StoreEvents> {
             .then(() => undefined);
         }
         if (rel === 'events.jsonl') return this.loadEvents();
+        if (rel === 'leases.yml') {
+          return this.loadLeases().then(() => {
+            this.emit('leases', this.leasesDoc);
+          });
+        }
         if (/^cards\/[^/]+\.md$/.test(rel)) {
           if (event === 'unlink') {
             this.removeCardFile(path);
@@ -636,7 +746,24 @@ export class CardStore extends EventEmitter<StoreEvents> {
   }
 }
 
-const EVENT_TYPES: ReadonlySet<string> = new Set(['move', 'update', 'create']);
+/**
+ * P8.2 correction (§7): this set was `['move', 'update', 'create']` only, silently dropping every
+ * P8.1 `ask`/`decide` line on a read from disk (initial `load()`, or catching up on a line another
+ * process appended) — in-memory it was fine, because `appendEvent` pushes the event object it was
+ * given directly, bypassing this filter entirely; only a REREAD ever ran an ask/decide line
+ * through it. Measured by writing an `ask` line, restarting a store against the same
+ * `.repoboard/`, and finding `store.events()` come back without it. Widened here to the full set,
+ * P8.2's `lease`/`window` included.
+ */
+const EVENT_TYPES: ReadonlySet<string> = new Set([
+  'move',
+  'update',
+  'create',
+  'ask',
+  'decide',
+  'lease',
+  'window',
+]);
 
 function parseEventLines(text: string): Event[] {
   const out: Event[] = [];
@@ -651,16 +778,21 @@ function parseEventLines(text: string): Event[] {
     }
     if (typeof obj !== 'object' || obj === null) continue;
     const o = obj as Record<string, unknown>;
-    if (typeof o.ts !== 'string' || typeof o.cardId !== 'string') continue;
+    if (typeof o.ts !== 'string') continue;
+    // P8.2: `cardId` is `null` on a `lease`/`window` event (it is not about a card).
+    if (typeof o.cardId !== 'string' && o.cardId !== null) continue;
     if (typeof o.type !== 'string' || !EVENT_TYPES.has(o.type)) continue;
-    out.push({
+    const event: Event = {
       ts: o.ts,
       actor: typeof o.actor === 'string' ? o.actor : 'unknown',
       type: o.type as Event['type'],
       cardId: o.cardId,
       from: typeof o.from === 'string' ? o.from : null,
       to: typeof o.to === 'string' ? o.to : '',
-    });
+    };
+    if (typeof o.resource === 'string') event.resource = o.resource;
+    if (typeof o.letter === 'string') event.letter = o.letter;
+    out.push(event);
   }
   return out;
 }

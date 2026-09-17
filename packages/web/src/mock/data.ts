@@ -2,7 +2,9 @@ import {
   type BoardConfig,
   type Card,
   defaultBoardConfig,
+  type Lease,
   type RepoSnapshot,
+  type Window,
 } from '@repoboard/core';
 
 export const MOCK_ACTORS = ['claude/web-agent', 'claude/server-agent', 'claude/core-agent', 'matt'];
@@ -146,6 +148,30 @@ export function mockCards(now = Date.now()): Card[] {
       labels: ['docs'],
     }),
   ];
+}
+
+/** P8.2: a Now-strip demo — one live hold, one upcoming window, one stale lease. */
+export function mockLeases(now = Date.now()): {
+  leases: Lease[];
+  windows: Window[];
+  stale: string[];
+} {
+  const iso = (offsetMin: number) =>
+    new Date(now + offsetMin * min).toISOString().replace(/\.\d{3}Z$/, 'Z');
+  const leases: Lease[] = [
+    {
+      resource: 'vitest-lock',
+      holder: 'claude/ops',
+      since: iso(-10),
+      until: iso(20),
+      note: 'cold4 gate',
+    },
+    { resource: 'dev-server', holder: 'claude/web-agent', since: iso(-240), until: iso(-180) },
+  ];
+  const windows: Window[] = [
+    { resource: 'vitest-lock', start: iso(15), end: iso(55), name: 'cold4 gate' },
+  ];
+  return { leases, windows, stale: ['dev-server'] };
 }
 
 export function mockRepo(now = Date.now()): RepoSnapshot {

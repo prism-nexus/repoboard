@@ -4,7 +4,13 @@
  * Optimistic moves/updates snap back if the server's `card` echo does not arrive in time.
  */
 import type { BoardConfig, Card, CardPatch, Event, RepoSnapshot } from '@repoboard/core';
-import type { ClientMessage, ServerMessage, Transport, TransportFactory } from './wire.js';
+import type {
+  ClientMessage,
+  LeasesPayload,
+  ServerMessage,
+  Transport,
+  TransportFactory,
+} from './wire.js';
 
 export type Theme = 'dark' | 'light';
 export type View = 'board' | 'map';
@@ -24,6 +30,8 @@ export interface State {
   hasBoard: boolean;
   cards: Card[];
   repo: RepoSnapshot | null;
+  /** P8.2: `.repoboard/leases.yml`, or null before the first snapshot (the Now strip's quiet line). */
+  leases: LeasesPayload | null;
   events: Event[];
   connected: boolean;
   /** False until the first snapshot; the disconnected banner only shows after that. */
@@ -97,6 +105,7 @@ export function createStore(factory: TransportFactory, opts: StoreOptions = {}):
     hasBoard: true,
     cards: [],
     repo: null,
+    leases: null,
     events: [],
     connected: false,
     everConnected: false,
@@ -179,6 +188,7 @@ export function createStore(factory: TransportFactory, opts: StoreOptions = {}):
             hasBoard,
             cards: msg.board.cards,
             repo: msg.repo,
+            leases: msg.leases ?? null,
             everConnected: true,
             fun: chosen === null || chosen === undefined ? funFromConfig : chosen === '1',
             // Map is the default tab in map-only mode, but only on the FIRST snapshot: a
@@ -205,6 +215,9 @@ export function createStore(factory: TransportFactory, opts: StoreOptions = {}):
           break;
         case 'event':
           set({ events: [...state.events, msg.event].slice(-EVENTS_KEPT) });
+          break;
+        case 'leases':
+          set({ leases: msg.leases });
           break;
       }
     },

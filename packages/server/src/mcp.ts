@@ -9,7 +9,15 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
-import { type Card, type CardPatch, computeBoardSummary, needsDecision } from '@repoboard/core';
+import {
+  type Card,
+  type CardPatch,
+  computeBoardSummary,
+  isStale,
+  type Lease,
+  needsDecision,
+  type Window,
+} from '@repoboard/core';
 import { z } from 'zod';
 import { resolveCardRefs } from './refs.js';
 import { type CardStore, openStore } from './store.js';
@@ -25,6 +33,11 @@ export const MCP_TOOL_NAMES = [
   'board_summary',
   'ask_owner',
   'record_decision',
+  'take_lease',
+  'release_lease',
+  'list_leases',
+  'add_window',
+  'check_window',
 ] as const;
 
 export interface McpServerOptions {
@@ -68,6 +81,38 @@ export function toRow(card: Card): CardRow {
   };
 }
 
+/** P8.2: the row shape `lease list --json`/`list_leases` share (locked decision 7). */
+export interface LeaseRow {
+  resource: string;
+  holder: string;
+  since: string;
+  until: string | null;
+  state: 'live' | 'stale';
+  note: string | null;
+}
+
+export function toLeaseRow(l: Lease, now: Date): LeaseRow {
+  return {
+    resource: l.resource,
+    holder: l.holder,
+    since: l.since,
+    until: l.until ?? null,
+    state: isStale(l, now) ? 'stale' : 'live',
+    note: l.note ?? null,
+  };
+}
+
+export interface WindowRow {
+  resource: string;
+  start: string;
+  end: string;
+  name: string;
+}
+
+export function toWindowRow(w: Window): WindowRow {
+  return { resource: w.resource, start: w.start, end: w.end, name: w.name };
+}
+
 function ok(payload: unknown): CallToolResult {
   return { content: [{ type: 'text', text: JSON.stringify(payload, null, 2) }] };
 }
@@ -100,6 +145,9 @@ const CARD_INTRO =
 const ACTOR_DESC =
   'Who is acting, written `<tool>/<role>` (e.g. `claude/web-agent`) so the board can draw a ' +
   'stable avatar. Defaults to $REPOBOARD_ACTOR, then "mcp".';
+
+/** P8.2: the five lease/window tools stay terse (orchestrator note: aim <=700 B each) — no CARD_INTRO. */
+const ACTOR_SHORT = 'Who is acting, e.g. claude/agent. Default: $REPOBOARD_ACTOR, then "mcp".';
 
 const PRIORITY = z.enum(['high', 'medium', 'low']);
 
@@ -409,6 +457,106 @@ export function createMcpServer(opts: McpServerOptions): McpServer {
         invalid: store.invalid,
       });
     },
+  );
+
+  server.registerTool(
+    'take_lease',
+    {
+      title: 'Take a lease on a resource',
+      description:
+        'Take/renew a lease on `resource`. Refuses a live lease held by another (names holder, ' +
+        'until) unless force; same holder renews, replacing until/note (omit to clear).',
+      inputSchema: {
+        resource: z.string().min(1),
+        until: z.string().optional().describe('ISO-8601; omit for until-released.'),
+        note: z.string().optional(),
+        force: z.boolean().optional(),
+        actor: z.string().optional().describe(ACTOR_SHORT),
+      },
+    },
+    async ({ resource, until, note, force, actor }) => {
+      const res = await store.takeLease({ resource, until, note, force }, actor ?? defaultActor);
+      if (!res.ok) return fail(res.error);
+      return ok({ doc: res.doc, warnings: res.warnings });
+    },
+  );
+
+  server.registerTool(
+    'release_lease',
+    {
+      title: 'Release a lease',
+      description:
+        "Release a lease on a resource. Refuses on another holder's lease, naming them, unless force.",
+      inputSchema: {
+        resource: z.string().min(1),
+        force: z.boolean().optional(),
+        actor: z.string().optional().describe(ACTOR_SHORT),
+      },
+    },
+    async ({ resource, force, actor }) => {
+      const res = await store.releaseLease({ resource, force }, actor ?? defaultActor);
+      if (!res.ok) return fail(res.error);
+      return ok({ doc: res.doc, warnings: res.warnings });
+    },
+  );
+
+  server.registerTool(
+    'list_leases',
+    {
+      title: 'List leases and windows',
+      description:
+        'Every held lease and time window in .repoboard/leases.yml: leases as ' +
+        '[{resource, holder, since, until, state: live|stale, note}], windows as ' +
+        '[{resource, start, end, name}]. Cheap; call before take_lease.',
+      annotations: { readOnlyHint: true },
+    },
+    () => {
+      const doc = store.leases();
+      return ok({
+        leases: doc.leases.map((l) => toLeaseRow(l, now())),
+        windows: doc.windows.map(toWindowRow),
+      });
+    },
+  );
+
+  server.registerTool(
+    'add_window',
+    {
+      title: 'Add a time window on a resource',
+      description:
+        'Reserve `resource` for a named window (`end` after `start`, both ISO-8601), e.g. a ' +
+        'scheduled sweep. No overlap check.',
+      inputSchema: {
+        resource: z.string().min(1),
+        start: z.string(),
+        end: z.string(),
+        name: z.string().min(1),
+        actor: z.string().optional().describe(ACTOR_SHORT),
+      },
+    },
+    async ({ resource, start, end, name, actor }) => {
+      const res = await store.addWindow({ resource, start, end, name }, actor ?? defaultActor);
+      if (!res.ok) return fail(res.error);
+      return ok({ doc: res.doc, warnings: res.warnings });
+    },
+  );
+
+  server.registerTool(
+    'check_window',
+    {
+      title: 'Is a resource clear right now?',
+      description:
+        'Call check_window before starting any long-running shared-resource job such as a test ' +
+        'suite; exit/clear false means DO NOT start. Returns {clear:true} or {clear:false, ' +
+        'reasons} naming a window covering `at` (default now), a live lease on resource, or both.',
+      inputSchema: {
+        resource: z.string().min(1),
+        at: z.string().optional().describe('ISO-8601. Defaults to now.'),
+      },
+      annotations: { readOnlyHint: true },
+    },
+    ({ resource, at }) =>
+      ok(store.checkResource(resource, at !== undefined ? new Date(at) : undefined)),
   );
 
   return server;

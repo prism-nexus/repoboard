@@ -18,11 +18,20 @@ import {
   defaultBoardConfig,
   needsDecision,
   type Priority,
+  resolveTimeSpec,
   serializeBoard,
   serializeCard,
 } from '@repoboard/core';
 import { type RunningServer, startServer } from './http.js';
-import { formatRows, serveMcp, toRow } from './mcp.js';
+import {
+  formatRows,
+  type LeaseRow,
+  serveMcp,
+  toLeaseRow,
+  toRow,
+  toWindowRow,
+  type WindowRow,
+} from './mcp.js';
 import { formatResolvedRefs, resolveCardRefs } from './refs.js';
 import { openStore } from './store.js';
 import { VERSION } from './version.js';
@@ -71,6 +80,20 @@ Usage:
                                         already open. With no options, the owner answers with --words.
   repoboard card decide <id> [<letter>] [--words "<verbatim>"] [--as a]
                                         answer the open decision; a letter, --words, or both
+  repoboard lease take <resource> [--as h] [--until ts] [--note n] [--force]
+                                        take (or renew) a lease on a named resource; ts is ISO or
+                                        +90m / +2h relative to now; omit --until to hold until
+                                        released; --force takes it from a live holder
+  repoboard lease release <resource> [--as h] [--force]
+                                        release a lease you hold; --force releases another holder's
+  repoboard lease list [--json]        RESOURCE HOLDER SINCE UNTIL STATE(live|stale) NOTE
+  repoboard window add <resource> <start> <end> <name> [--as a]
+                                        start/end are ISO or +90m / +2h relative to now
+  repoboard window list [--json]
+  repoboard window check <resource> [--at ts]
+                                        exit 0 "clear <resource>" when nothing blocks it; exit 1
+                                        naming what does (a window, a live lease, or both) — this is
+                                        what a lock shim calls
   repoboard serve [--root <dir>] [--port 4242] [--open] [--no-fun]
                                         start the dashboard (binds 127.0.0.1); --root serves that
                                         directory as given — a directory with no .repoboard/ opens
@@ -469,6 +492,160 @@ async function cmdCardShow(args: string[], io: CliIO): Promise<number> {
   return 0;
 }
 
+// ---- lease / window (P8.2) -----------------------------------------------------------------
+
+/** ISO or `+90m`/`+2h` relative to `now` (locked decision 6); a bad spec is a UserError. */
+function resolveTime(spec: string, now: Date): string {
+  const r = resolveTimeSpec(spec, now);
+  if (!r.ok) throw new UserError(r.error);
+  return r.iso;
+}
+
+async function cmdLeaseTake(args: string[], io: CliIO): Promise<number> {
+  const { values, positionals } = parse(args, {
+    as: { type: 'string' },
+    until: { type: 'string' },
+    note: { type: 'string' },
+    force: { type: 'boolean', default: false },
+  });
+  const [resource] = positionals;
+  if (!resource) throw new UserError('usage: repoboard lease take <resource> [options]');
+  const root = await requireRoot(io);
+  const store = await openStore(root, { watch: false, now: io.now });
+  const now = io.now?.() ?? new Date();
+  const until = values.until !== undefined ? resolveTime(values.until, now) : undefined;
+  const actor = actorFrom(values.as, io);
+  const res = await store.takeLease(
+    { resource, until, note: values.note, force: values.force },
+    actor,
+  );
+  if (!res.ok) throw new UserError(res.error);
+  for (const w of res.warnings) (io.stderr ?? io.stdout).write(`warning: ${w}\n`);
+  io.stdout.write(`took ${resource} as ${actor} until ${until ?? '—'}\n`);
+  return 0;
+}
+
+async function cmdLeaseRelease(args: string[], io: CliIO): Promise<number> {
+  const { values, positionals } = parse(args, {
+    as: { type: 'string' },
+    force: { type: 'boolean', default: false },
+  });
+  const [resource] = positionals;
+  if (!resource)
+    throw new UserError('usage: repoboard lease release <resource> [--as a] [--force]');
+  const root = await requireRoot(io);
+  const store = await openStore(root, { watch: false, now: io.now });
+  const res = await store.releaseLease({ resource, force: values.force }, actorFrom(values.as, io));
+  if (!res.ok) throw new UserError(res.error);
+  for (const w of res.warnings) (io.stderr ?? io.stdout).write(`warning: ${w}\n`);
+  io.stdout.write(`released ${resource}\n`);
+  return 0;
+}
+
+export function formatLeaseTable(rows: LeaseRow[]): string {
+  const header = ['RESOURCE', 'HOLDER', 'SINCE', 'UNTIL', 'STATE', 'NOTE'];
+  const body = rows.map((r) => [
+    r.resource,
+    r.holder,
+    r.since,
+    r.until ?? '—',
+    r.state,
+    r.note ?? '-',
+  ]);
+  const widths = header.map((h, i) => Math.max(h.length, ...body.map((r) => (r[i] ?? '').length)));
+  const line = (r: string[]) =>
+    r
+      .map((cell, i) => (i === r.length - 1 ? cell : cell.padEnd(widths[i] ?? 0)))
+      .join('  ')
+      .trimEnd();
+  return [line(header), ...body.map(line)].join('\n');
+}
+
+async function cmdLeaseList(args: string[], io: CliIO): Promise<number> {
+  const { values } = parse(args, { json: { type: 'boolean', default: false } });
+  const root = await requireRoot(io);
+  const store = await openStore(root, { watch: false, now: io.now });
+  const now = io.now?.() ?? new Date();
+  const rows = store
+    .leases()
+    .leases.map((l) => toLeaseRow(l, now))
+    .sort((a, b) => (a.resource < b.resource ? -1 : a.resource > b.resource ? 1 : 0));
+  if (values.json) {
+    io.stdout.write(`${formatRows(rows)}\n`);
+    return 0;
+  }
+  io.stdout.write(`${formatLeaseTable(rows)}\n`);
+  return 0;
+}
+
+async function cmdWindowAdd(args: string[], io: CliIO): Promise<number> {
+  const { values, positionals } = parse(args, { as: { type: 'string' } });
+  const [resource, startArg, endArg, ...nameParts] = positionals;
+  const name = nameParts.join(' ');
+  if (!resource || !startArg || !endArg || !name) {
+    throw new UserError('usage: repoboard window add <resource> <start> <end> <name>');
+  }
+  const root = await requireRoot(io);
+  const store = await openStore(root, { watch: false, now: io.now });
+  const now = io.now?.() ?? new Date();
+  const start = resolveTime(startArg, now);
+  const end = resolveTime(endArg, now);
+  const res = await store.addWindow({ resource, start, end, name }, actorFrom(values.as, io));
+  if (!res.ok) throw new UserError(res.error);
+  io.stdout.write(`added window ${name} ${start}–${end} ${resource}\n`);
+  return 0;
+}
+
+export function formatWindowTable(rows: WindowRow[]): string {
+  const header = ['RESOURCE', 'START', 'END', 'NAME'];
+  const body = rows.map((r) => [r.resource, r.start, r.end, r.name]);
+  const widths = header.map((h, i) => Math.max(h.length, ...body.map((r) => (r[i] ?? '').length)));
+  const line = (r: string[]) =>
+    r
+      .map((cell, i) => (i === r.length - 1 ? cell : cell.padEnd(widths[i] ?? 0)))
+      .join('  ')
+      .trimEnd();
+  return [line(header), ...body.map(line)].join('\n');
+}
+
+async function cmdWindowList(args: string[], io: CliIO): Promise<number> {
+  const { values } = parse(args, { json: { type: 'boolean', default: false } });
+  const root = await requireRoot(io);
+  const store = await openStore(root, { watch: false, now: io.now });
+  const rows = store
+    .leases()
+    .windows.map(toWindowRow)
+    .sort((a, b) => Date.parse(a.start) - Date.parse(b.start));
+  if (values.json) {
+    io.stdout.write(`${formatRows(rows)}\n`);
+    return 0;
+  }
+  io.stdout.write(`${formatWindowTable(rows)}\n`);
+  return 0;
+}
+
+/**
+ * Locked decision 3: exit 0 "clear <resource>" when nothing blocks it; exit 1 naming every
+ * reason (one per line) when something does — a window, a live lease, or both. This is the
+ * shell-callable contract a lock shim depends on (C1: it must never say "clear" while blocked).
+ */
+async function cmdWindowCheck(args: string[], io: CliIO): Promise<number> {
+  const { values, positionals } = parse(args, { at: { type: 'string' } });
+  const [resource] = positionals;
+  if (!resource) throw new UserError('usage: repoboard window check <resource> [--at ts]');
+  const root = await requireRoot(io);
+  const store = await openStore(root, { watch: false, now: io.now });
+  const now = io.now?.() ?? new Date();
+  const at = values.at !== undefined ? new Date(resolveTime(values.at, now)) : now;
+  const res = store.checkResource(resource, at);
+  if (res.clear) {
+    io.stdout.write(`clear ${resource}\n`);
+    return 0;
+  }
+  for (const reason of res.reasons) io.stdout.write(`${reason}\n`);
+  return 1;
+}
+
 function openInBrowser(url: string): void {
   const [cmd, args] =
     process.platform === 'darwin'
@@ -580,6 +757,18 @@ export async function run(argv: string[], io: CliIO): Promise<number> {
       throw new UserError(
         `unknown card command "${sub ?? ''}" (add, move, update, list, show, ask, decide)`,
       );
+    }
+    if (cmd === 'lease') {
+      if (sub === 'take') return await cmdLeaseTake(rest, io);
+      if (sub === 'release') return await cmdLeaseRelease(rest, io);
+      if (sub === 'list') return await cmdLeaseList(rest, io);
+      throw new UserError(`unknown lease command "${sub ?? ''}" (take, release, list)`);
+    }
+    if (cmd === 'window') {
+      if (sub === 'add') return await cmdWindowAdd(rest, io);
+      if (sub === 'list') return await cmdWindowList(rest, io);
+      if (sub === 'check') return await cmdWindowCheck(rest, io);
+      throw new UserError(`unknown window command "${sub ?? ''}" (add, list, check)`);
     }
     throw new UserError(`unknown command "${cmd}" (try repoboard --help)`);
   } catch (e) {

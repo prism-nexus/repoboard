@@ -1,6 +1,7 @@
 import { isActive } from '@repoboard/core';
 import { useCallback, useEffect, useMemo } from 'react';
 import { Drawer } from './components/Drawer.jsx';
+import { NowStrip } from './components/NowStrip.jsx';
 import { Ticker } from './components/Ticker.jsx';
 import { Toasts } from './components/Toasts.jsx';
 import { TopBar } from './components/TopBar.jsx';
@@ -58,6 +59,7 @@ function Shell() {
         onFun={store.setFun}
         onTheme={store.setTheme}
       />
+      <NowStrip leases={state.leases} now={now} />
       <Ticker events={state.events} fun={state.fun} now={now} />
       {state.everConnected && !state.connected ? (
         <div className="banner" role="alert">

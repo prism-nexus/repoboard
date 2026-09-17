@@ -55,17 +55,57 @@ function textOf(res: CallToolResult): string {
   return first.text;
 }
 
+/** The nine card/board tools from P8.1 and before; the five P8.2 lease/window tools are separate. */
+const CARD_TOOLS = [
+  'list_cards',
+  'get_card',
+  'create_card',
+  'move_card',
+  'update_card',
+  'append_log',
+  'board_summary',
+  'ask_owner',
+  'record_decision',
+];
+const LEASE_TOOLS = ['take_lease', 'release_lease', 'list_leases', 'add_window', 'check_window'];
+
 describe('repoboard mcp: handshake and tool list', () => {
-  it('lists exactly the nine tools of the brief, each described for a newcomer', async () => {
+  it('lists exactly the fourteen tools of the brief, card tools described for a newcomer', async () => {
     const r = await rig();
     const { tools } = await r.client.listTools();
     expect(tools.map((t) => t.name).sort()).toEqual([...MCP_TOOL_NAMES].sort());
+    expect(tools).toHaveLength(CARD_TOOLS.length + LEASE_TOOLS.length);
     for (const t of tools) {
+      if (!CARD_TOOLS.includes(t.name)) continue;
       expect(t.description, t.name).toMatch(/A card is one task/);
       expect(t.description, t.name).toMatch(/column id/);
     }
     const list = tools.find((t) => t.name === 'list_cards');
     expect(list?.description).toMatch(/backlog, decide, todo, doing, done/);
+  });
+
+  it('P8.2: the five lease/window tool descriptions are terse (<=700 B each) and byte-report cleanly', async () => {
+    const r = await rig();
+    const { tools } = await r.client.listTools();
+    const byName = new Map(tools.map((t) => [t.name, t]));
+    const bytes: Record<string, number> = {};
+    for (const name of LEASE_TOOLS) {
+      const t = byName.get(name);
+      expect(t, name).toBeDefined();
+      bytes[name] = Buffer.byteLength(JSON.stringify(t));
+      expect(bytes[name], name).toBeLessThanOrEqual(700);
+    }
+    // Not a magic number: just proves the test above actually measured something real.
+    expect(Object.values(bytes).every((b) => b > 0)).toBe(true);
+  });
+
+  it('check_window carries the authority sentence locked decision 7 requires verbatim', async () => {
+    const r = await rig();
+    const { tools } = await r.client.listTools();
+    const checkWindow = tools.find((t) => t.name === 'check_window');
+    expect(checkWindow?.description).toContain(
+      'Call check_window before starting any long-running shared-resource job such as a test suite; exit/clear false means DO NOT start.',
+    );
   });
 });
 
@@ -411,5 +451,112 @@ describe('repoboard mcp: ask_owner / record_decision (P8.1)', () => {
     const parsed = JSON.parse(textOf(res)) as { card: Card };
     expect(parsed.card.status).toBe('todo');
     expect(parsed.card.decision?.returnTo).toBeNull();
+  });
+});
+
+describe('repoboard mcp: take_lease / release_lease / list_leases / add_window / check_window (P8.2)', () => {
+  it('take_lease writes the lease, list_leases reflects it with state live', async () => {
+    const r = await rig();
+    const taken = await r.json<{ doc: { leases: unknown[] }; warnings: string[] }>('take_lease', {
+      resource: 'vitest-lock',
+      until: '2026-09-03T00:00:00Z',
+      note: 'cold4 gate',
+    });
+    expect(taken.warnings).toEqual([]);
+    const listed = await r.json<{ leases: Array<Record<string, unknown>> }>('list_leases');
+    expect(listed.leases).toEqual([
+      {
+        resource: 'vitest-lock',
+        holder: 'test/mcp',
+        since: NOW.toISOString().replace(/\.\d{3}Z$/, 'Z'),
+        until: '2026-09-03T00:00:00Z',
+        state: 'live',
+        note: 'cold4 gate',
+      },
+    ]);
+  });
+
+  it('a conflicting take_lease is an error result naming the holder; force overrides', async () => {
+    const r = await rig();
+    await r.json('take_lease', { resource: 'r', actor: 'claude/ops' });
+    const conflict = await r.call('take_lease', { resource: 'r', actor: 'claude/fix' });
+    expect(conflict.isError).toBe(true);
+    expect(textOf(conflict)).toMatch(/is held by claude\/ops/);
+    const forced = await r.json<{ warnings: string[] }>('take_lease', {
+      resource: 'r',
+      actor: 'claude/fix',
+      force: true,
+    });
+    expect(forced.warnings[0]).toMatch(/forced: took "r" from claude\/ops/);
+  });
+
+  it('release_lease frees it; a non-holder is an error result', async () => {
+    const r = await rig();
+    await r.json('take_lease', { resource: 'r', actor: 'claude/ops' });
+    const bad = await r.call('release_lease', { resource: 'r', actor: 'claude/fix' });
+    expect(bad.isError).toBe(true);
+    const released = await r.json<{ doc: { leases: unknown[] } }>('release_lease', {
+      resource: 'r',
+      actor: 'claude/ops',
+    });
+    expect(released.doc.leases).toEqual([]);
+  });
+
+  it('add_window then check_window: clear before/after, blocked inside', async () => {
+    const r = await rig();
+    await r.json('add_window', {
+      resource: 'vitest-lock',
+      start: '2026-09-02T22:00:00Z',
+      end: '2026-09-02T23:00:00Z',
+      name: 'cold4 gate',
+    });
+    const before = await r.json<{ clear: boolean }>('check_window', {
+      resource: 'vitest-lock',
+      at: '2026-09-02T21:00:00Z',
+    });
+    expect(before).toEqual({ clear: true });
+    const inside = await r.json<{ clear: boolean; reasons: string[] }>('check_window', {
+      resource: 'vitest-lock',
+      at: '2026-09-02T22:30:00Z',
+    });
+    expect(inside).toEqual({
+      clear: false,
+      reasons: ['inside cold4 gate 2026-09-02T22:00:00Z–2026-09-02T23:00:00Z vitest-lock'],
+    });
+  });
+
+  it('check_window defaults `at` to now and never returns clear:true while a live lease is held (C1 target)', async () => {
+    const r = await rig();
+    await r.json('take_lease', { resource: 'vitest-lock', until: '2026-09-02T23:00:00Z' });
+    const res = await r.json<{ clear: boolean; reasons?: string[] }>('check_window', {
+      resource: 'vitest-lock',
+    });
+    expect(res.clear).toBe(false);
+    expect(res.reasons?.[0]).toMatch(/^held by test\/mcp until/);
+  });
+
+  it('list_leases also returns windows, pruning only happens on a write, not on this read', async () => {
+    // An expired window can only get INTO leases.yml without being pruned via an external hand
+    // edit (any mutation through the store prunes on its own write) — exactly the shape locked
+    // decision 2 describes: pruning happens on write, never on read.
+    const repo = await makeTempRepoboard({});
+    cleanups.push(repo.cleanup);
+    await writeFile(
+      join(repo.root, '.repoboard', 'leases.yml'),
+      'windows:\n  - resource: r\n    start: 2020-01-01T00:00:00Z\n    end: 2020-01-01T01:00:00Z\n    name: ancient\n',
+    );
+    const store = await openStore(repo.root, { watch: false, now: () => NOW });
+    const server = createMcpServer({ store, defaultActor: 'test/mcp', now: () => NOW });
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    await server.connect(serverTransport);
+    const client = new Client({ name: 'repoboard-test', version: '0.0.0' });
+    await client.connect(clientTransport);
+    cleanups.push(async () => {
+      await client.close();
+      await server.close();
+    });
+    const res = (await client.callTool({ name: 'list_leases', arguments: {} })) as CallToolResult;
+    const parsed = JSON.parse(textOf(res)) as { windows: unknown[] };
+    expect(parsed.windows).toHaveLength(1); // still there: a read never prunes
   });
 });

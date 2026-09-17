@@ -649,3 +649,210 @@ describe('map-only mode refuses mutations over HTTP (K10)', () => {
     expect(bad.status).toBe(400);
   });
 });
+
+describe('leases/windows over HTTP (P8.2)', () => {
+  it('GET /api/leases returns leases, windows, stale, now; empty when there is nothing yet', async () => {
+    const r = await rig({});
+    const res = await fetch(`${r.url}/api/leases`);
+    expect(res.status).toBe(200);
+    const body = (await json(res)) as {
+      leases: unknown[];
+      windows: unknown[];
+      stale: string[];
+      now: string;
+    };
+    expect(body).toEqual({ leases: [], windows: [], stale: [], now: expect.any(String) });
+  });
+
+  it('POST /api/leases/take then /release round-trip; GET reflects both', async () => {
+    const r = await rig({});
+    const taken = await fetch(`${r.url}/api/leases/take`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ resource: 'vitest-lock', actor: 'claude/ops' }),
+    });
+    expect(taken.status).toBe(200);
+    const afterTake = (await json(taken)) as {
+      leases: Array<{ resource: string; holder: string }>;
+    };
+    expect(afterTake.leases).toEqual([
+      {
+        resource: 'vitest-lock',
+        holder: 'claude/ops',
+        since: NOW.toISOString().replace(/\.\d{3}Z$/, 'Z'),
+      },
+    ]);
+
+    const released = await fetch(`${r.url}/api/leases/release`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ resource: 'vitest-lock', actor: 'claude/ops' }),
+    });
+    expect(released.status).toBe(200);
+    const afterRelease = (await json(released)) as { leases: unknown[] };
+    expect(afterRelease.leases).toEqual([]);
+  });
+
+  it('a conflicting take is 409; an unknown-field / empty-resource request is 400', async () => {
+    const r = await rig({});
+    await fetch(`${r.url}/api/leases/take`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ resource: 'r', actor: 'claude/ops' }),
+    });
+    const conflict = await fetch(`${r.url}/api/leases/take`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ resource: 'r', actor: 'claude/fix' }),
+    });
+    expect(conflict.status).toBe(409);
+    expect(((await json(conflict)) as { error: string }).error).toMatch(/is held by claude\/ops/);
+
+    const badField = await fetch(`${r.url}/api/leases/take`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ resource: 'r2', nonsense: true }),
+    });
+    expect(badField.status).toBe(400);
+
+    const emptyResource = await fetch(`${r.url}/api/leases/take`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ resource: '' }),
+    });
+    expect(emptyResource.status).toBe(400);
+  });
+
+  it('release by a non-holder is 409; releasing a never-taken resource is 409', async () => {
+    const r = await rig({});
+    await fetch(`${r.url}/api/leases/take`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ resource: 'r', actor: 'claude/ops' }),
+    });
+    const wrongHolder = await fetch(`${r.url}/api/leases/release`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ resource: 'r', actor: 'claude/fix' }),
+    });
+    expect(wrongHolder.status).toBe(409);
+    const never = await fetch(`${r.url}/api/leases/release`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ resource: 'never' }),
+    });
+    expect(never.status).toBe(409);
+  });
+
+  it('POST /api/leases/windows adds one; end<=start is 400', async () => {
+    const r = await rig({});
+    const added = await fetch(`${r.url}/api/leases/windows`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        resource: 'vitest-lock',
+        start: '2026-09-02T22:00:00Z',
+        end: '2026-09-02T23:00:00Z',
+        name: 'cold4 gate',
+      }),
+    });
+    expect(added.status).toBe(200);
+    const body = (await json(added)) as { windows: unknown[] };
+    expect(body.windows).toEqual([
+      {
+        resource: 'vitest-lock',
+        start: '2026-09-02T22:00:00Z',
+        end: '2026-09-02T23:00:00Z',
+        name: 'cold4 gate',
+      },
+    ]);
+    const bad = await fetch(`${r.url}/api/leases/windows`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        resource: 'r',
+        start: '2026-09-02T23:00:00Z',
+        end: '2026-09-02T22:00:00Z',
+        name: 'backwards',
+      }),
+    });
+    expect(bad.status).toBe(400);
+  });
+
+  it('GET /api/leases/check/:resource: 200 clear, 200 not-clear (inside a window), --at query works', async () => {
+    const r = await rig({});
+    await fetch(`${r.url}/api/leases/windows`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        resource: 'vitest-lock',
+        start: '2026-09-02T22:00:00Z',
+        end: '2026-09-02T23:00:00Z',
+        name: 'cold4 gate',
+      }),
+    });
+    const clear = await fetch(`${r.url}/api/leases/check/vitest-lock?at=2026-09-02T21:00:00Z`);
+    expect(clear.status).toBe(200);
+    expect(await json(clear)).toEqual({ clear: true });
+    const blocked = await fetch(`${r.url}/api/leases/check/vitest-lock?at=2026-09-02T22:30:00Z`);
+    expect(blocked.status).toBe(200);
+    expect(await json(blocked)).toEqual({
+      clear: false,
+      reasons: ['inside cold4 gate 2026-09-02T22:00:00Z–2026-09-02T23:00:00Z vitest-lock'],
+    });
+    const badAt = await fetch(`${r.url}/api/leases/check/vitest-lock?at=nonsense`);
+    expect(badAt.status).toBe(400);
+  });
+
+  it('map-only: GET /api/leases and check work, POST take/release/windows are 409', async () => {
+    const repo = await makeTempRepoNoBoard({ 'src/a.ts': 'export const a = 1;\n' });
+    cleanups.push(repo.cleanup);
+    const store = await openStore(repo.root, { watch: true, now: () => NOW });
+    cleanups.push(() => store.close());
+    const server = await startServer({ store, port: 0, scan: false });
+    cleanups.push(() => server.close());
+    const url = server.url.replace(/\/$/, '');
+
+    expect((await fetch(`${url}/api/leases`)).status).toBe(200);
+    expect((await fetch(`${url}/api/leases/check/r`)).status).toBe(200);
+
+    const take = await fetch(`${url}/api/leases/take`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ resource: 'r' }),
+    });
+    expect(take.status).toBe(409);
+    expect(((await json(take)) as { error: string }).error).toContain('map-only');
+    expect(await repo.hasRepoboard()).toBe(false);
+
+    const addWin = await fetch(`${url}/api/leases/windows`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        resource: 'r',
+        start: '2026-09-02T22:00:00Z',
+        end: '2026-09-02T23:00:00Z',
+        name: 'g',
+      }),
+    });
+    expect(addWin.status).toBe(409);
+    expect(await repo.hasRepoboard()).toBe(false);
+  });
+
+  it('WS snapshot carries leases; a take through the store broadcasts a leases message', async () => {
+    const r = await rig({});
+    const ws = await connect(r.url);
+    cleanups.push(async () => ws.close());
+    const snap = await nextMessage<{ type: string; leases: { leases: unknown[] } }>(ws);
+    expect(snap.type).toBe('snapshot');
+    expect(snap.leases).toEqual({ leases: [], windows: [], stale: [], now: expect.any(String) });
+
+    const leasesMsg = nextMessage<{
+      type: string;
+      leases: { leases: Array<{ resource: string }> };
+    }>(ws, (m) => m.type === 'leases');
+    await r.store.takeLease({ resource: 'vitest-lock' }, 'claude/ops');
+    const msg = await leasesMsg;
+    expect(msg.leases.leases.map((l) => l.resource)).toEqual(['vitest-lock']);
+  });
+});

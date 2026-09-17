@@ -16,3 +16,13 @@ export function shortActor(actor: string): string {
   const tail = actor.split('/').filter(Boolean).pop();
   return tail ?? actor;
 }
+
+/** P8.2: an ISO-8601 UTC datetime as `HH:MMZ` (the Now strip's compact form). Invalid input: "—". */
+export function shortTime(iso: string): string {
+  const t = Date.parse(iso);
+  if (Number.isNaN(t)) return '—';
+  const d = new Date(t);
+  const hh = String(d.getUTCHours()).padStart(2, '0');
+  const mm = String(d.getUTCMinutes()).padStart(2, '0');
+  return `${hh}:${mm}Z`;
+}

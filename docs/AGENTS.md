@@ -89,7 +89,8 @@ The same thing as a `.mcp.json` at the repo root:
 
 The server finds `.repoboard/` by walking up from its working directory; pass `--root <dir>` when it is
 launched from somewhere else. Tools: `list_cards`, `get_card`, `create_card`, `move_card`,
-`update_card`, `append_log`, `board_summary`, `ask_owner`, `record_decision` (P8.1, section 8).
+`update_card`, `append_log`, `board_summary`, `ask_owner`, `record_decision` (P8.1, section 8),
+`take_lease`, `release_lease`, `list_leases`, `add_window`, `check_window` (P8.2, section 9).
 Call `list_cards` or `board_summary` first: they
 are cheap and return the column ids. `list_cards` takes optional `status`, `assignee`, `label`
 filters (exact match, AND) and `full: true` to include bodies; without it, rows are the same
@@ -274,3 +275,101 @@ line that makes a decision auditable.
 So a decision costs roughly 400 B per card on disk and adds two tools' worth of schema to the MCP
 standing cost; the CLI and file-edit paths carry no new standing cost at all, which is the same
 ranking O3 already found and this does not change it.
+
+## 9. Leases and windows (P8.2)
+
+`.repoboard/leases.yml` is a second plain file, a sibling of `board.yml`: who holds a named
+resource right now (a lock, a dev server, a lane) and the time windows during which one is
+claimed for something. **Absent file = no leases, no windows** — nothing to initialise. Every
+mutation goes through the same core→store→CLI/MCP/HTTP funnel as a card move; the server watches
+the file and re-reads it on an external `sed`/hand edit, exactly like `board.yml`.
+
+```yaml
+leases:
+  - resource: vitest-lock        # free string, the team's name for the thing
+    holder: claude/ops           # same actor string as a card's assignee (D8)
+    since: 2026-09-17T18:50:00Z
+    until: 2026-09-17T19:30:00Z  # optional; absent = held until released
+    note: cold4 gate             # optional
+windows:
+  - resource: vitest-lock
+    start: 2026-09-17T18:50:00Z
+    end: 2026-09-17T19:30:00Z
+    name: cold4 gate
+```
+
+A lease with `until` in the past is **STALE** — reported as such (`lease list`'s `STATE` column,
+`list_leases`' `state`), never silently held and never silently dropped; a human (or `--force`)
+decides whether to take it anyway. `until === now` is still LIVE — only strictly-past `until` is
+stale. A window whose `end` is past is pruned on the next **write** of the file, never on a read:
+`lease list`/`window list`/`GET /api/leases` can still show an expired window until some other
+mutation writes the file next.
+
+### CLI
+
+| Command | Example |
+|---|---|
+| `repoboard lease take <resource> [--as h] [--until ts] [--note n] [--force]` | `repoboard lease take vitest-lock --until +90m --note "cold4 gate"` → `took vitest-lock as claude/ops until 2026-09-17T20:20:00Z` |
+| `repoboard lease release <resource> [--as h] [--force]` | `repoboard lease release vitest-lock` → `released vitest-lock` |
+| `repoboard lease list [--json]` | table: `RESOURCE HOLDER SINCE UNTIL STATE NOTE` |
+| `repoboard window add <resource> <start> <end> <name> [--as a]` | `repoboard window add vitest-lock +5m +45m cold4 gate` |
+| `repoboard window list [--json]` | table: `RESOURCE START END NAME` |
+| `repoboard window check <resource> [--at ts]` | `repoboard window check vitest-lock` → exit 0 `clear vitest-lock`, or exit 1 naming what blocks it |
+
+`--until` and window `<start>`/`<end>` accept **ISO-8601 or `+90m` / `+2h`, relative to now**
+(`resolveTimeSpec` in `@repoboard/core`). A live lease held by ANOTHER holder refuses `take`
+(names the holder and `until`) unless `--force`; the same holder renews — `since` is kept, `until`
+and `note` are replaced by whatever the call gives (omit to clear). `release` by a non-holder
+refuses the same way, naming the holder; releasing a resource with no lease at all is also
+refused — there is nothing to release.
+
+**`window check` is the shell-callable contract a lock shim calls before starting a long job**:
+exit 0 and print `clear <resource>` when nothing blocks it (no window contains `now`/`--at`, no
+live lease on the resource); exit 1 and print every reason that does, one per line — `inside
+<name> <start>–<end> <resource>` for a window (start inclusive, end exclusive), `held by <holder>
+until <until|—>` for a live lease. Exit 2 is a crash, as everywhere. **A `clear` result must never
+be printed while blocked** — that silent failure is what C1 exists to catch (a check that always
+says clear is silence that reads as health, same species as a `pgrep` guard that never matches).
+
+### MCP
+
+`take_lease(resource, until?, note?, force?, actor?)`, `release_lease(resource, force?, actor?)`,
+`list_leases()` → `{leases: [{resource, holder, since, until, state: live|stale, note}], windows:
+[{resource, start, end, name}]}` (same row shape and same formatter as the CLI's `--json`),
+`add_window(resource, start, end, name, actor?)`, `check_window(resource, at?)` → `{clear: true}`
+or `{clear: false, reasons: [...]}`. **`check_window`'s description carries the sentence an agent
+needs verbatim: "Call check_window before starting any long-running shared-resource job such as a
+test suite; exit/clear false means DO NOT start."** All five tool descriptions are terse (no
+`CARD_INTRO` reuse — leases are not cards) and each measures under 700 B; see the bytes table.
+
+### HTTP
+
+`GET /api/leases` → `{leases, windows, stale: [<resource>, ...], now}` (the whole doc, plus which
+resources are currently stale and the server's own clock, so a client renders staleness without
+trusting its own). `POST /api/leases/take` `{resource, until?, note?, force?, actor?}`,
+`POST /api/leases/release` `{resource, force?, actor?}`, `POST /api/leases/windows` `{resource,
+start, end, name, actor?}` — 200 with the refreshed `GET /api/leases` payload, 400 for a bad
+request (empty resource, unknown field, `end` not after `start`), 409 for a request that conflicts
+with who currently holds the resource ("is held by …") or for the map-only refusal (K10).
+`GET /api/leases/check/:resource?at=` is a pure read and always 200 (`{clear:false}` is not an
+error — it is the answer). The WS `snapshot` message carries `leases` alongside `board`/`repo`; a
+`{type:"leases", leases}` message follows any take/release/add-window, from any surface.
+
+### Bytes (O3), measured on a fixture of 3 leases (2 live, 1 stale) + 4 windows
+
+| Surface | Bytes |
+|---|---|
+| `lease list` (table) | 350 B |
+| `lease list --json` | 411 B |
+| `window list` (table) | 340 B |
+| `window list --json` | 435 B |
+| `leases.yml` on disk | 781 B |
+| `GET /api/leases` | 826 B |
+| MCP `list_leases` result | 1,214 B |
+| MCP tool schema, 9 tools (P8.1 baseline, 2026-09-17) | 14,546 B |
+| MCP tool schema, **14 tools** (measured via `client.listTools()`, sum of each tool's own `JSON.stringify`) | **17,411 B** (+2,865 B for the five P8.2 tools) |
+
+Per-tool bytes of the five new tools: `take_lease` 691 B, `release_lease` 509 B, `list_leases`
+400 B, `add_window` 630 B, `check_window` 645 B — every one at or under the 700 B budget a terse
+tool aims for (contrast P8.1's `ask_owner`/`record_decision` at 2,191 B / 1,514 B, which reused the
+long `CARD_INTRO` prefix; these five do not, because a lease is not a card).

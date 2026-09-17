@@ -26,6 +26,32 @@ export type {
   DecideResult,
 } from './decisions.js';
 export { askDecision, decide, isDecided, needsDecision } from './decisions.js';
+export type {
+  AddWindowInput,
+  AddWindowResult,
+  CheckResourceResult,
+  LeaseMutationOptions,
+  LeaseMutationResult,
+  LeasesParseResult,
+  ReleaseLeaseInput,
+  TakeLeaseInput,
+  TimeSpecResult,
+} from './leases.js';
+export {
+  addWindow,
+  checkResource,
+  isStale,
+  LeaseSchema,
+  LeasesSchema,
+  parseLeases,
+  pruneWindows,
+  releaseLease,
+  resolveTimeSpec,
+  serializeLeases,
+  staleLeases,
+  takeLease,
+  WindowSchema,
+} from './leases.js';
 export { appendLogLine, formatLogLine } from './log.js';
 export type { Avatar, BoardSummary, WipBreach } from './presence.js';
 export {
@@ -66,6 +92,9 @@ export type {
   Decision,
   DecisionOption,
   Event,
+  Lease,
+  LeasesDoc,
   Priority,
   RepoSnapshot,
+  Window,
 } from './types.js';

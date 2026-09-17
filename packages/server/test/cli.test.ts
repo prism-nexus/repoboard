@@ -895,3 +895,191 @@ describe('repoboard card ask / decide (P8.1)', () => {
     ]);
   });
 });
+
+describe('repoboard lease / window (P8.2)', () => {
+  it('lease take writes leases.yml and prints "took <resource> as <holder> until <until|—>"', async () => {
+    const root = await freshRepo({});
+    const noUntil = await repoboard(root, 'lease', 'take', 'vitest-lock');
+    expect(noUntil.code).toBe(0);
+    expect(noUntil.out).toBe('took vitest-lock as test-actor until —\n');
+    const withUntil = await repoboard(root, 'lease', 'take', 'r2', '--until', '+90m');
+    expect(withUntil.code).toBe(0);
+    expect(withUntil.out).toBe('took r2 as test-actor until 2026-09-03T00:11:10Z\n');
+    const text = await readFile(join(root, '.repoboard', 'leases.yml'), 'utf8');
+    expect(text).toContain('resource: vitest-lock');
+    expect(text).toContain('resource: r2');
+    expect(text).toContain('until: 2026-09-03T00:11:10Z');
+  });
+
+  it('a conflicting take is refused (exit 1); --force overrides with a warning', async () => {
+    const root = await freshRepo({});
+    await repoboard(root, 'lease', 'take', 'r', '--as', 'claude/ops');
+    const conflict = await repoboard(root, 'lease', 'take', 'r', '--as', 'claude/fix');
+    expect(conflict.code).toBe(1);
+    expect(conflict.err).toMatch(/is held by claude\/ops/);
+    const forced = await repoboard(root, 'lease', 'take', 'r', '--as', 'claude/fix', '--force');
+    expect(forced.code).toBe(0);
+    expect(forced.err).toMatch(/warning: forced: took "r" from claude\/ops/);
+  });
+
+  it('lease release frees it; a non-holder is refused', async () => {
+    const root = await freshRepo({});
+    await repoboard(root, 'lease', 'take', 'r', '--as', 'claude/ops');
+    const badRelease = await repoboard(root, 'lease', 'release', 'r', '--as', 'claude/fix');
+    expect(badRelease.code).toBe(1);
+    expect(badRelease.err).toMatch(/is held by claude\/ops/);
+    const release = await repoboard(root, 'lease', 'release', 'r', '--as', 'claude/ops');
+    expect(release.code).toBe(0);
+    expect(release.out).toBe('released r\n');
+  });
+
+  it('lease list: table has RESOURCE HOLDER SINCE UNTIL STATE NOTE, --json matches', async () => {
+    const root = await freshRepo({});
+    await repoboard(root, 'lease', 'take', 'a', '--as', 'claude/ops', '--note', 'cold4 gate');
+    await repoboard(
+      root,
+      'lease',
+      'take',
+      'b',
+      '--as',
+      'claude/ops',
+      '--until',
+      '2026-09-01T00:00:00Z',
+    );
+    const table = await repoboard(root, 'lease', 'list');
+    expect(table.out.split('\n')).toEqual([
+      'RESOURCE  HOLDER      SINCE                 UNTIL                 STATE  NOTE',
+      'a         claude/ops  2026-09-02T22:41:10Z  —                     live   cold4 gate',
+      'b         claude/ops  2026-09-02T22:41:10Z  2026-09-01T00:00:00Z  stale  -',
+      '',
+    ]);
+    const json = await repoboard(root, 'lease', 'list', '--json');
+    expect(JSON.parse(json.out)).toEqual([
+      {
+        resource: 'a',
+        holder: 'claude/ops',
+        since: '2026-09-02T22:41:10Z',
+        until: null,
+        state: 'live',
+        note: 'cold4 gate',
+      },
+      {
+        resource: 'b',
+        holder: 'claude/ops',
+        since: '2026-09-02T22:41:10Z',
+        until: '2026-09-01T00:00:00Z',
+        state: 'stale',
+        note: null,
+      },
+    ]);
+  });
+
+  it('window add accepts ISO and relative times, list shows it, --json matches', async () => {
+    const root = await freshRepo({});
+    const added = await repoboard(
+      root,
+      'window',
+      'add',
+      'vitest-lock',
+      '2026-09-02T22:50:00Z',
+      '+90m',
+      'cold4',
+      'gate',
+    );
+    expect(added.code).toBe(0);
+    expect(added.out).toBe(
+      'added window cold4 gate 2026-09-02T22:50:00Z–2026-09-03T00:11:10Z vitest-lock\n',
+    );
+    const table = await repoboard(root, 'window', 'list');
+    expect(table.out.split('\n')).toEqual([
+      'RESOURCE     START                 END                   NAME',
+      'vitest-lock  2026-09-02T22:50:00Z  2026-09-03T00:11:10Z  cold4 gate',
+      '',
+    ]);
+    const json = await repoboard(root, 'window', 'list', '--json');
+    expect(JSON.parse(json.out)).toEqual([
+      {
+        resource: 'vitest-lock',
+        start: '2026-09-02T22:50:00Z',
+        end: '2026-09-03T00:11:10Z',
+        name: 'cold4 gate',
+      },
+    ]);
+  });
+
+  it('window add: end before start is refused', async () => {
+    const root = await freshRepo({});
+    const res = await repoboard(root, 'window', 'add', 'r', '+90m', '+1m', 'backwards');
+    expect(res.code).toBe(1);
+    expect(res.err).toMatch(/end must be after start/);
+  });
+
+  describe('window check: the shell-callable exit-code contract (C1)', () => {
+    it('exit 0 "clear <resource>" when nothing blocks it', async () => {
+      const root = await freshRepo({});
+      const res = await repoboard(root, 'window', 'check', 'vitest-lock');
+      expect(res.code).toBe(0);
+      expect(res.out).toBe('clear vitest-lock\n');
+    });
+
+    it('exit 1, naming the window, when inside one', async () => {
+      const root = await freshRepo({});
+      await repoboard(
+        root,
+        'window',
+        'add',
+        'vitest-lock',
+        '2026-09-02T22:00:00Z',
+        '2026-09-02T23:00:00Z',
+        'cold4',
+        'gate',
+      );
+      const res = await repoboard(root, 'window', 'check', 'vitest-lock');
+      expect(res.code).toBe(1);
+      expect(res.out).toBe(
+        'inside cold4 gate 2026-09-02T22:00:00Z–2026-09-02T23:00:00Z vitest-lock\n',
+      );
+    });
+
+    it('exit 1, naming the holder, when a live lease is held', async () => {
+      const root = await freshRepo({});
+      await repoboard(
+        root,
+        'lease',
+        'take',
+        'vitest-lock',
+        '--as',
+        'claude/ops',
+        '--until',
+        '+30m',
+      );
+      const res = await repoboard(root, 'window', 'check', 'vitest-lock');
+      expect(res.code).toBe(1);
+      expect(res.out).toBe('held by claude/ops until 2026-09-02T23:11:10Z\n');
+    });
+
+    it('a different resource, or --at outside the window, is clear (exit 0)', async () => {
+      const root = await freshRepo({});
+      await repoboard(
+        root,
+        'window',
+        'add',
+        'vitest-lock',
+        '2026-09-02T22:00:00Z',
+        '2026-09-02T23:00:00Z',
+        'gate',
+      );
+      expect((await repoboard(root, 'window', 'check', 'other')).code).toBe(0);
+      const later = await repoboard(
+        root,
+        'window',
+        'check',
+        'vitest-lock',
+        '--at',
+        '2026-09-03T00:00:00Z',
+      );
+      expect(later.code).toBe(0);
+      expect(later.out).toBe('clear vitest-lock\n');
+    });
+  });
+});

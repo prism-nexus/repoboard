@@ -10,7 +10,15 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import type { AddressInfo } from 'node:net';
 import { dirname, extname, join, normalize, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import type { Card, CardPatch, CreateCardInput, DecisionOption, Priority } from '@repoboard/core';
+import {
+  type Card,
+  type CardPatch,
+  type CreateCardInput,
+  type DecisionOption,
+  type Priority,
+  staleLeases,
+  toIso,
+} from '@repoboard/core';
 import { watch as chokidarWatch, type FSWatcher } from 'chokidar';
 import { type WebSocket, WebSocketServer } from 'ws';
 import { resolveCardRefs } from './refs.js';
@@ -73,6 +81,21 @@ const CREATE_FIELDS: ReadonlySet<string> = new Set([
 const PRIORITIES: ReadonlySet<string> = new Set(['high', 'medium', 'low']);
 const ASK_FIELDS: ReadonlySet<string> = new Set(['question', 'options', 'replace', 'actor']);
 const DECIDE_FIELDS: ReadonlySet<string> = new Set(['letter', 'words', 'actor']);
+const TAKE_LEASE_FIELDS: ReadonlySet<string> = new Set([
+  'resource',
+  'until',
+  'note',
+  'force',
+  'actor',
+]);
+const RELEASE_LEASE_FIELDS: ReadonlySet<string> = new Set(['resource', 'force', 'actor']);
+const ADD_WINDOW_FIELDS: ReadonlySet<string> = new Set([
+  'resource',
+  'start',
+  'end',
+  'name',
+  'actor',
+]);
 
 const CONTENT_TYPES: Record<string, string> = {
   '.html': 'text/html; charset=utf-8',
@@ -215,6 +238,81 @@ function decisionFailureStatus(res: {
   if (res.readOnly === true) return 409;
   if (res.notFound === true) return 404;
   return DECISION_CONFLICT.test(res.error) ? 409 : 400;
+}
+
+/**
+ * P8.2: like `decisionFailureStatus` — `readOnly` (map-only) is 409; a request that conflicts
+ * with who currently holds the resource ("is held by …") is also 409 (well-formed, untimely);
+ * everything else (an empty resource, `end` not after `start`) is 400.
+ */
+const LEASE_CONFLICT = /is held by|no lease is held on/;
+function leaseFailureStatus(res: { readOnly?: boolean; error: string }): number {
+  if (res.readOnly === true) return 409;
+  return LEASE_CONFLICT.test(res.error) ? 409 : 400;
+}
+
+interface TakeLeaseHttpInput {
+  resource: string;
+  until?: string;
+  note?: string;
+  force?: boolean;
+}
+
+function toTakeLeaseInput(body: Json): TakeLeaseHttpInput {
+  rejectUnknown(body, TAKE_LEASE_FIELDS);
+  const resource = body.resource;
+  if (typeof resource !== 'string' || resource.trim().length === 0) {
+    throw new HttpError(400, 'resource is required');
+  }
+  const input: TakeLeaseHttpInput = { resource };
+  const until = optString(body, 'until');
+  if (until !== undefined) input.until = until;
+  const note = optString(body, 'note');
+  if (note !== undefined) input.note = note;
+  if (body.force !== undefined) {
+    if (typeof body.force !== 'boolean') throw new HttpError(400, 'force must be a boolean');
+    input.force = body.force;
+  }
+  return input;
+}
+
+interface ReleaseLeaseHttpInput {
+  resource: string;
+  force?: boolean;
+}
+
+function toReleaseLeaseInput(body: Json): ReleaseLeaseHttpInput {
+  rejectUnknown(body, RELEASE_LEASE_FIELDS);
+  const resource = body.resource;
+  if (typeof resource !== 'string' || resource.trim().length === 0) {
+    throw new HttpError(400, 'resource is required');
+  }
+  const input: ReleaseLeaseHttpInput = { resource };
+  if (body.force !== undefined) {
+    if (typeof body.force !== 'boolean') throw new HttpError(400, 'force must be a boolean');
+    input.force = body.force;
+  }
+  return input;
+}
+
+interface AddWindowHttpInput {
+  resource: string;
+  start: string;
+  end: string;
+  name: string;
+}
+
+function toAddWindowInput(body: Json): AddWindowHttpInput {
+  rejectUnknown(body, ADD_WINDOW_FIELDS);
+  const resource = optString(body, 'resource');
+  const start = optString(body, 'start');
+  const end = optString(body, 'end');
+  const name = optString(body, 'name');
+  if (!resource) throw new HttpError(400, 'resource is required');
+  if (!start) throw new HttpError(400, 'start is required');
+  if (!end) throw new HttpError(400, 'end is required');
+  if (!name) throw new HttpError(400, 'name is required');
+  return { resource, start, end, name };
 }
 
 function isOptionArray(v: unknown): v is DecisionOption[] {
@@ -460,6 +558,20 @@ export async function startServer(opts: ServerOptions): Promise<RunningServer> {
     hasBoard: store.hasBoard,
   });
 
+  // P8.2: one payload for `GET /api/leases` and the `leases` half of the WS snapshot — same
+  // reasoning as `boardPayload`. `now` travels with it so a client can render staleness without
+  // trusting its own clock; `stale` is resource names, since one lease per resource is unique.
+  const leasesPayload = () => {
+    const doc = store.leases();
+    const nowDate = new Date();
+    return {
+      leases: doc.leases,
+      windows: doc.windows,
+      stale: staleLeases(doc, nowDate).map((l) => l.resource),
+      now: toIso(nowDate),
+    };
+  };
+
   function broadcast(msg: unknown): void {
     const text = JSON.stringify(msg);
     for (const client of wss.clients) {
@@ -534,11 +646,13 @@ export async function startServer(opts: ServerOptions): Promise<RunningServer> {
   const onEvent = (event: unknown) => broadcast({ type: 'event', event });
   const onConfig = () => broadcast({ type: 'config', config: { ...store.config, fun } });
   const onInvalid = (invalid: unknown) => broadcast({ type: 'invalid', invalid });
+  const onLeases = () => broadcast({ type: 'leases', leases: leasesPayload() });
   store.on('card', onCard);
   store.on('card:removed', onRemoved);
   store.on('event', onEvent);
   store.on('config', onConfig);
   store.on('invalid', onInvalid);
+  store.on('leases', onLeases);
 
   // ---- clients → store ----------------------------------------------------------------
   async function onClientMessage(ws: WebSocket, raw: unknown): Promise<void> {
@@ -578,7 +692,9 @@ export async function startServer(opts: ServerOptions): Promise<RunningServer> {
   }
 
   wss.on('connection', (ws) => {
-    ws.send(JSON.stringify({ type: 'snapshot', board: boardPayload(), repo }));
+    ws.send(
+      JSON.stringify({ type: 'snapshot', board: boardPayload(), repo, leases: leasesPayload() }),
+    );
     ws.on('message', (data) => void onClientMessage(ws, data));
     ws.on('error', () => undefined);
   });
@@ -592,6 +708,50 @@ export async function startServer(opts: ServerOptions): Promise<RunningServer> {
   ): Promise<void> {
     const path = url.pathname;
     if (method === 'GET' && path === '/api/board') return sendJson(res, 200, boardPayload());
+    // P8.2: leases/windows. `check` is a pure read (never 400/409 for "blocked" — that is what
+    // `clear:false` means), so it stays 200 either way; the others follow the ask/decide shape.
+    if (method === 'GET' && path === '/api/leases') return sendJson(res, 200, leasesPayload());
+    const checkMatch = /^\/api\/leases\/check\/([^/]+)$/.exec(path);
+    if (method === 'GET' && checkMatch?.[1] !== undefined) {
+      const resource = decodeURIComponent(checkMatch[1]);
+      const atParam = url.searchParams.get('at');
+      let at: Date | undefined;
+      if (atParam !== null) {
+        at = new Date(atParam);
+        if (Number.isNaN(at.getTime())) throw new HttpError(400, 'at must be an ISO-8601 datetime');
+      }
+      return sendJson(res, 200, store.checkResource(resource, at));
+    }
+    if (method === 'POST' && path === '/api/leases/take') {
+      const body = await readBody(req);
+      const actor = optString(body, 'actor') ?? 'web';
+      const input = toTakeLeaseInput(body);
+      const outcome = await store.takeLease(input, actor);
+      if (!outcome.ok) throw new HttpError(leaseFailureStatus(outcome), outcome.error);
+      if (outcome.warnings.length > 0) {
+        res.setHeader('x-repoboard-warnings', JSON.stringify(outcome.warnings));
+      }
+      return sendJson(res, 200, leasesPayload());
+    }
+    if (method === 'POST' && path === '/api/leases/release') {
+      const body = await readBody(req);
+      const actor = optString(body, 'actor') ?? 'web';
+      const input = toReleaseLeaseInput(body);
+      const outcome = await store.releaseLease(input, actor);
+      if (!outcome.ok) throw new HttpError(leaseFailureStatus(outcome), outcome.error);
+      if (outcome.warnings.length > 0) {
+        res.setHeader('x-repoboard-warnings', JSON.stringify(outcome.warnings));
+      }
+      return sendJson(res, 200, leasesPayload());
+    }
+    if (method === 'POST' && path === '/api/leases/windows') {
+      const body = await readBody(req);
+      const actor = optString(body, 'actor') ?? 'web';
+      const input = toAddWindowInput(body);
+      const outcome = await store.addWindow(input, actor);
+      if (!outcome.ok) throw new HttpError(leaseFailureStatus(outcome), outcome.error);
+      return sendJson(res, 200, leasesPayload());
+    }
     if (method === 'GET' && path === '/api/repo') {
       if (!repo) throw new HttpError(404, 'repo scanning is disabled');
       return sendJson(res, 200, repo);
@@ -715,6 +875,7 @@ export async function startServer(opts: ServerOptions): Promise<RunningServer> {
       store.off('event', onEvent);
       store.off('config', onConfig);
       store.off('invalid', onInvalid);
+      store.off('leases', onLeases);
       if (repoWatcher) await repoWatcher.close();
       for (const client of wss.clients) client.terminate();
       await new Promise<void>((res) => wss.close(() => res()));

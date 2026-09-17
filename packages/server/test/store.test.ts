@@ -270,6 +270,129 @@ describe('ask and decide (P8.1)', () => {
   });
 });
 
+describe('leases and windows (P8.2)', () => {
+  it('take writes leases.yml, one events.jsonl row, checkResource sees it', async () => {
+    const repo = await repoWith({});
+    const store = await open(repo, false);
+    expect(store.leases()).toEqual({ leases: [], windows: [] });
+    const res = await store.takeLease({ resource: 'vitest-lock' }, 'claude/ops');
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    expect(res.doc.leases).toEqual([
+      { resource: 'vitest-lock', holder: 'claude/ops', since: '2026-09-02T22:41:10Z' },
+    ]);
+    const text = await readFile(join(repo.root, '.repoboard', 'leases.yml'), 'utf8');
+    expect(text).toContain('resource: vitest-lock');
+    expect(text).toContain('holder: claude/ops');
+    const log = await readFile(join(repo.root, '.repoboard', 'events.jsonl'), 'utf8');
+    expect(log.trim().split('\n')).toHaveLength(1);
+    expect(JSON.parse(log.trim())).toMatchObject({
+      type: 'lease',
+      cardId: null,
+      resource: 'vitest-lock',
+    });
+    expect(store.checkResource('vitest-lock')).toEqual({
+      clear: false,
+      reasons: ['held by claude/ops until —'],
+    });
+    expect(store.checkResource('something-else')).toEqual({ clear: true });
+  });
+
+  it('a conflicting take is refused; release by the holder frees it', async () => {
+    const repo = await repoWith({});
+    const store = await open(repo, false);
+    const first = await store.takeLease({ resource: 'r' }, 'claude/ops');
+    expect(first.ok).toBe(true);
+    const conflict = await store.takeLease({ resource: 'r' }, 'claude/fix');
+    expect(conflict).toMatchObject({
+      ok: false,
+      error: expect.stringMatching(/is held by claude\/ops/),
+    });
+    const badRelease = await store.releaseLease({ resource: 'r' }, 'claude/fix');
+    expect(badRelease).toMatchObject({
+      ok: false,
+      error: expect.stringMatching(/is held by claude\/ops/),
+    });
+    const release = await store.releaseLease({ resource: 'r' }, 'claude/ops');
+    expect(release.ok).toBe(true);
+    if (!release.ok) return;
+    expect(release.doc.leases).toEqual([]);
+    expect(store.checkResource('r')).toEqual({ clear: true });
+  });
+
+  it('addWindow writes leases.yml and checkResource reflects it', async () => {
+    const repo = await repoWith({});
+    const store = await open(repo, false);
+    const res = await store.addWindow(
+      {
+        resource: 'vitest-lock',
+        start: '2026-09-02T22:00:00Z',
+        end: '2026-09-02T23:00:00Z',
+        name: 'gate',
+      },
+      'claude/ops',
+    );
+    expect(res.ok).toBe(true);
+    expect(store.checkResource('vitest-lock', NOW)).toEqual({
+      clear: false,
+      reasons: ['inside gate 2026-09-02T22:00:00Z–2026-09-02T23:00:00Z vitest-lock'],
+    });
+  });
+
+  it('an external sed edit of leases.yml is re-read by the watcher', async () => {
+    const repo = await repoWith({});
+    const path = join(repo.root, '.repoboard', 'leases.yml');
+    // The file must already EXIST before the watcher starts: chokidar's `add` event for a
+    // brand-new file is measurably unreliable under concurrent watcher load in this sandbox
+    // (reproduced independently of P8.2's own code — a plain `cards/*.md` create under 20
+    // concurrent watchers times out the same way `card` events would; `change` on a pre-existing
+    // file does not, at any concurrency tried). Every other "external edit" test here (K8, the
+    // card watcher describe block) modifies a file the fixture already created, for the same
+    // reason; this test now matches that pattern instead of being the one exception.
+    await writeFile(path, 'leases: []\nwindows: []\n');
+    const store = await open(repo, true);
+    const leasesSeen = waitForEvent(store, 'leases', () => true);
+    await writeFile(
+      path,
+      [
+        'leases:',
+        '  - resource: r',
+        '    holder: cli/hand',
+        '    since: 2026-09-02T22:00:00Z',
+        '',
+      ].join('\n'),
+    );
+    await leasesSeen;
+    await sleep(20);
+    expect(store.leases().leases).toEqual([
+      { resource: 'r', holder: 'cli/hand', since: '2026-09-02T22:00:00Z' },
+    ]);
+  });
+
+  it('map-only: reads (leases/checkResource) work, writes refuse', async () => {
+    const repo = await makeTempRepoNoBoard({});
+    const store = await open(repo, false);
+    expect(store.leases()).toEqual({ leases: [], windows: [] });
+    expect(store.checkResource('r')).toEqual({ clear: true });
+    expect(await store.takeLease({ resource: 'r' }, 't')).toMatchObject({
+      ok: false,
+      readOnly: true,
+      error: MAP_ONLY_ERROR,
+    });
+    // releaseLease has nothing to release here (no lease was ever taken — taking one is itself
+    // refused above), so this hits core's "no lease is held" refusal before the write guard ever
+    // runs; the write guard's coverage for release/addWindow comes from the K10 structural tests
+    // (both route only through the same guarded `writeLeases`, proven to open with the guard).
+    expect(await store.releaseLease({ resource: 'r' }, 't')).toMatchObject({ ok: false });
+    expect(
+      await store.addWindow(
+        { resource: 'r', start: '2026-09-02T22:00:00Z', end: '2026-09-02T23:00:00Z', name: 'g' },
+        't',
+      ),
+    ).toMatchObject({ ok: false, readOnly: true });
+  });
+});
+
 describe('watcher', () => {
   it('picks up an external sed-style edit and synthesises a file event', async () => {
     const repo = await repoWith({ 'RB-1.md': cardText('RB-1', 'todo') });
@@ -640,11 +763,14 @@ describe('K10 structure of store.ts', () => {
       ...SRC.matchAll(/^ {2}(\w+)\([^)]*\): Promise<(\w+Outcome)> \{\n {4}return this\.(\w+)\(/gm),
     ];
     expect(decls.map((d) => d[1]).sort()).toEqual([
+      'addWindow',
       'appendLog',
       'ask',
       'create',
       'decide',
       'move',
+      'releaseLease',
+      'takeLease',
       'update',
     ]);
     expect(decls.map((d) => d[3])).toEqual([
@@ -654,11 +780,18 @@ describe('K10 structure of store.ts', () => {
       'mutate',
       'mutate',
       'mutate',
+      'mutate',
+      'mutate',
+      'mutate',
     ]);
   });
 
-  it('both disk writers open with the guard, on their first line', () => {
-    for (const decl of ['private async writeCard', 'private async appendEvent']) {
+  it('all three disk writers open with the guard, on their first line', () => {
+    for (const decl of [
+      'private async writeCard',
+      'private async appendEvent',
+      'private async writeLeases',
+    ]) {
       const [start, end] = methodRange(decl);
       const first = SRC.slice(start, end).split('\n')[1]?.trim();
       expect(first, `${decl} first statement`).toBe('this.refuseWriteWithoutBoard();');
@@ -669,6 +802,7 @@ describe('K10 structure of store.ts', () => {
     const ranges = [
       methodRange('private async writeCard'),
       methodRange('private async appendEvent'),
+      methodRange('private async writeLeases'),
     ];
     const writes = [...SRC.matchAll(/await (writeFile|appendFile|rename|mkdir)\(/g)];
     expect(writes.length).toBeGreaterThan(0);

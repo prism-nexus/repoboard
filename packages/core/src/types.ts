@@ -58,6 +58,40 @@ export interface Card {
   [key: string]: unknown;
 }
 
+/**
+ * P8.2: one held lock on a named resource in `.repoboard/leases.yml`. `until` absent means "held
+ * until released" — never renews itself, never expires. A lease with `until` in the past is
+ * STALE (`leases.ts`'s `staleLeases`/liveness checks), reported as such and never silently
+ * dropped: the holder may have died, and a human decides whether to `--force` past it.
+ */
+export interface Lease {
+  resource: string;
+  holder: string;
+  since: string;
+  until?: string;
+  note?: string;
+  [key: string]: unknown;
+}
+
+/** P8.2: a named time window during which `resource` is claimed, in `.repoboard/leases.yml`. */
+export interface Window {
+  resource: string;
+  start: string;
+  end: string;
+  name: string;
+  [key: string]: unknown;
+}
+
+/**
+ * P8.2: the whole of `.repoboard/leases.yml`. An absent file means `{leases: [], windows: []}` —
+ * no leases, no windows (the store supplies this default; core never invents a file).
+ */
+export interface LeasesDoc {
+  leases: Lease[];
+  windows: Window[];
+  [key: string]: unknown;
+}
+
 export interface Column {
   id: string;
   title?: string;
@@ -84,13 +118,18 @@ export interface BoardConfig {
  * `status`; `update` (from === to) and `create` (from === null) are written by the store so
  * the ticker sees every mutation (K2). P8.1: `ask`/`decide` (from === to, like `update`) are
  * written by `askDecision`/`decide` in `decisions.ts`; `letter` is present only on a `decide`
- * event that carried a lettered choice.
+ * event that carried a lettered choice. P8.2: `lease`/`window` events are about a `leases.yml`
+ * resource, not a card — `cardId` is `null` and `resource` names it instead; `from`/`to` carry
+ * the holder change (`from` the previous holder or `null`, `to` the new holder or `"released"`)
+ * for `lease`, and `to` the window's name for `window` (`leases.ts`).
  */
 export interface Event {
   ts: string;
   actor: string;
-  type: 'move' | 'update' | 'create' | 'ask' | 'decide';
-  cardId: string;
+  type: 'move' | 'update' | 'create' | 'ask' | 'decide' | 'lease' | 'window';
+  cardId: string | null;
+  /** P8.2: present on `lease`/`window` events, absent on card events. */
+  resource?: string;
   from: string | null;
   to: string;
   letter?: string;

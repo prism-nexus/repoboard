@@ -48,6 +48,13 @@ mirrored as MCP `ask_owner`/`record_decision` and HTTP `POST /api/cards/:id/ask|
 card is authority: `decision.chosen`/`decision.words` are the answer, not a chat relay. See
 `docs/AGENTS.md` §8 for the bytes and the wire shapes.
 
+A sibling file, `.repoboard/leases.yml` (P8.2), tracks who holds a named resource and the time
+windows during which one is claimed — `repoboard lease take vitest-lock --until +90m`,
+`repoboard window check vitest-lock` (exit 0 clear / 1 blocked, so a lock shim can call it before
+starting a test run), mirrored as MCP `take_lease`/`release_lease`/`list_leases`/`add_window`/
+`check_window` and HTTP `GET /api/leases`, `POST /api/leases/take|release|windows`. A lease past
+`until` reads STALE, never silently held. See `docs/AGENTS.md` §9.
+
 The CLI is the cheapest per operation and has no standing cost. MCP pays off when the agent has
 no shell or its harness loads tool schemas on demand. Editing the file is the escape hatch: it
 always works, and the watcher synthesizes the event (`actor: file`). `docs/AGENTS.md` is the one

@@ -3,7 +3,7 @@ import { render } from '@testing-library/react';
 import { App } from '../src/App.jsx';
 import { createMockTransport } from '../src/mock/index.js';
 import { createStore, type Store } from '../src/store.js';
-import type { ClientMessage } from '../src/wire.js';
+import type { ClientMessage, LeasesPayload } from '../src/wire.js';
 
 export function card(id: string, status: string, extra: Partial<Card> = {}): Card {
   return {
@@ -35,9 +35,15 @@ export function snapshot(
   config: BoardConfig = defaultBoardConfig(),
   /** P7.2. Omit to send a payload with no `hasBoard` at all (a pre-P7.2 server). */
   hasBoard?: boolean,
+  /** P8.2. Omit to send a payload with no `leases` at all (a pre-P8.2 server; reads as empty). */
+  leases?: LeasesPayload,
 ) {
   const board = hasBoard === undefined ? { config, cards } : { config, cards, hasBoard };
-  store.dispatch({ type: 'snapshot', board, repo: null });
+  store.dispatch({ type: 'snapshot', board, repo: null, ...(leases ? { leases } : {}) });
+}
+
+export function emptyLeases(): LeasesPayload {
+  return { leases: [], windows: [], stale: [], now: '2026-09-02T22:41:10Z' };
 }
 
 export function renderApp(store: Store) {

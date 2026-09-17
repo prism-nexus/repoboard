@@ -109,7 +109,8 @@ button {
 .app {
   height: 100%;
   display: grid;
-  grid-template-rows: auto auto auto 1fr;
+  /* topbar, now-strip (P8.2, always rendered), ticker, banner (optional), main. */
+  grid-template-rows: auto auto auto auto 1fr;
 }
 .topbar {
   display: flex;
@@ -256,10 +257,29 @@ button {
   font-weight: 600;
 }
 
+/* ---- now strip (P8.2) ---- */
+.now-strip {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 14px;
+  padding: 5px 12px;
+  font-size: 12px;
+  border-bottom: 1px solid var(--line);
+  background: var(--surface);
+}
+.now-strip--quiet {
+  color: var(--muted);
+}
+.now-strip__item--stale {
+  color: var(--amber);
+  font-weight: 600;
+}
+
 /* ---- board ---- */
 .main {
-  /* Always the 1fr row (row 3 is the optional banner); an `auto` row would size it to content. */
-  grid-row: 4;
+  /* Always the 1fr row (row 4 is the optional banner); an `auto` row would size it to content. */
+  grid-row: 5;
   min-height: 0;
   overflow: hidden;
   position: relative;

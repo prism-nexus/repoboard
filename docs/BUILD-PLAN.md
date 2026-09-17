@@ -239,6 +239,58 @@ columns.
 
 ---
 
+### P8 Practices — the board becomes the framework for how agents work in a repo (owner decision O9, 2026-09-17)
+Source: `~/Projects/Repos/freshpickedjobs/docs/REPOBOARD-FIT-ASSESSMENT.md` §3 (the problems were
+measured there: a 32.6 KB CLAUDE.md in every context, a 23,877-line running record, an owner decision
+held 11 h on a relay, lock windows sent as chat messages). One principle for every task: **a plain file
+under `.repoboard/` that `sed` can edit, written through core by all three surfaces, rendered by the
+dashboard, its bytes on the wire measured before it ships (O3).** Core stays I/O-free (0.5).
+
+- **P8.1 Decisions** — `.repoboard/decisions.jsonl`, append-only. One line per decision:
+  `{ts, id: "D-<n>", item, words, heardBy, refs?, open?, letters?, resolves?}`. `words` is the owner's
+  text VERBATIM; `heardBy` is the seat that heard it. An **open letter** is a line with `open: true` and
+  `letters: ["A1 …", "A2 …"]`; its answer is a NEW line with `resolves: "D-<n>"` (never an edit — core
+  exposes no update). CLI `repoboard decide "<item>" --words "<verbatim>" --by <seat> [--ref r]... [--resolves D-n]`,
+  `repoboard ask "<item>" --letter "…"... [--ref r]... --by <seat>`, `repoboard decisions [--open] [--json]`.
+  MCP `record_decision`, `ask_owner`, `list_decisions`. HTTP `GET/POST /api/decisions`. Web: a
+  **Decisions** tab — open letters first (the owner's agenda), then newest first; a card whose `refs:`
+  names `decisions.jsonl@D-7` renders that line live. Watcher pushes the file like cards.
+- **P8.2 Leases and windows** — `.repoboard/leases.yml`: `leases: [{resource, holder, since, until?, note?}]`,
+  `windows: [{resource, start, end, name}]`. A lease past `until` renders STALE, not held; a window past
+  `end` is pruned on the next write. CLI `repoboard lease take|release <resource> --as <holder> [--until ts] [--note]`,
+  `lease list`; `repoboard window add <resource> <start> <end> <name>`, `window list`,
+  **`repoboard window check <resource> [--at ts]` exits 0 clear / 1 inside, printing the window** — so a
+  test-lock shim can call it. MCP `take_lease`, `release_lease`, `list_leases`, `add_window`,
+  `check_window`. HTTP `GET /api/leases`. Web: a **Now** strip under the top bar — who holds what, the
+  next window, the next expiry.
+- **P8.3 State, the daily log, `init --practices`, `check`** — `.repoboard/STATE.md` (fixed sections
+  `## LIVE`, `## LAST LANDINGS`, `## OWNER QUEUE`, `## SEATS`; rewritten in place, never appended) and
+  `.repoboard/log/YYYY-MM-DD.md` (every seat appends its own block; never rewritten).
+  `repoboard log --as <seat> [--title "…"] <text | --stdin>` appends `##### <SEAT> <ts>` + the text to
+  today's file (creates it). `repoboard state` prints STATE; `repoboard init --practices` scaffolds
+  STATE.md, today's log, `decisions.jsonl`, `leases.yml`, and an eight-line NEXT-AGENT-PROMPT.md at the
+  repo root (only if absent). **`repoboard check`** warns (exit 1) when: STATE's stamp is older than the
+  newest log file; a card is in an `active` column with no lease held by its assignee; a lease is past
+  `until`; CLAUDE.md is over the cost budget (P8.4). MCP `append_repo_log`, `get_state`, `check`. Web:
+  STATE rendered as the landing panel of the Board view; the log as a timeline beside the ticker;
+  OWNER QUEUE on STATE is GENERATED from open decisions (P8.1), never typed.
+- **P8.4 Cost** — `repoboard cost [--budget <bytes>] [--json]`: bytes (and ≈tokens at 4 B/token) of
+  CLAUDE.md, AGENTS.md if present, every repo-relative path CLAUDE.md names in backticks that exists,
+  and the names of MCP servers in `.mcp.json`; total = "what a cold agent loads". Exit 1 when CLAUDE.md
+  exceeds `--budget` (default 8192). MCP `cost`. Web: a tile on the Map view.
+- **P8.5 Archive and issue sync** — `repoboard archive [--older-than 14d]` moves `done` cards whose
+  `updated` is older than the cutoff to `.repoboard/archive/` (a `git mv` when the repo is git, else a
+  rename); the store does not load `archive/`. `repoboard sync-issues <path>#<heading>` creates a card
+  (status `todo`, label `issue`, `refs: [<path>@K<n>]`) for every `- **K<n>` list item under the
+  heading, and moves the card to `done` when the item is gone or struck (`- ~~**K<n>`); idempotent by
+  ref; never edits the source file. The README stays the text; the board is the view.
+
+**Exit criterion for P8:** in freshpickedjobs, `repoboard init --practices` + `sync-issues
+README.md#Known issues` produces a board with one card per open K-entry and no second copy of any
+entry's text; `decide`, `lease take`, `window check` and `log` each round-trip through CLI, MCP and a
+`sed` edit within 1 s on the dashboard; `repoboard check` exits 1 on a STATE older than the log and 0
+after STATE is rewritten; every new surface's bytes are in `docs/AGENTS.md` alongside O3's table.
+
 ## §6 Repo layout
 ```
 packages/core/      domain, I/O-free
@@ -335,3 +387,12 @@ Answered 2026-09-07:
   CLI must add is a way to say `null`, which a shell flag cannot carry; that is `--clear <field>`,
   and it is the only new concept in the change. Brief: `docs/K9-UPDATE-BRIEF.md`. Card: RCB-31.
 
+Answered 2026-09-17:
+- **O9 — P8 Practices: build all five tasks, in order P8.1 → P8.5, then adopt on freshpickedjobs.**
+  The owner, after `REPOBOARD-FIT-ASSESSMENT.md` (letters F/G/H): "lets make all the improvements to
+  repoboard then lets adopt it." Measured basis: that assessment's §1 table — the board solves queue
+  visibility and embodies O5, and has no object for decisions, leases/windows, live state or the daily
+  log, which freshpickedjobs had to build by hand on 2026-09-17. The four new record types are files
+  under `.repoboard/` (0.3), written through core (0.4), core stays pure (0.5). **Standing constraint:**
+  `sync-issues` and `init --practices` must never edit a file they did not create — a repo's README is
+  read, never written.

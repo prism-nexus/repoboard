@@ -260,7 +260,7 @@ dashboard, its bytes on the wire measured before it ships (O3).** Core stays I/O
   file, no separate tab** — the "owner queue" is the `decide` column itself (O11 dropped the
   TopBar `needs decision` filter as redundant with it; `card list --needs-decision` and MCP
   `needsDecision` stay, for an agent with no dashboard). Brief: `docs/P8.1-DECISIONS-BRIEF.md`.
-- **P8.2 Leases and windows** — `.repoboard/leases.yml`: `leases: [{resource, holder, since, until?, note?}]`,
+- **P8.2 Leases and windows** — **Landed `6ceb5ce`.** `.repoboard/leases.yml`: `leases: [{resource, holder, since, until?, note?}]`,
   `windows: [{resource, start, end, name}]`. A lease past `until` renders STALE, not held; a window past
   `end` is pruned on the next write. CLI `repoboard lease take|release <resource> --as <holder> [--until ts] [--note]`,
   `lease list`; `repoboard window add <resource> <start> <end> <name>`, `window list`,

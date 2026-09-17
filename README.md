@@ -247,3 +247,11 @@ that call is the owner's. No GitHub repo until after v1 (O2).
   an existing file are reliable — the same reason every "external edit" test pre-writes its file.
   Not a product defect; the watcher does re-read. Fix candidates: pre-create then modify in that one
   test (matches its siblings), or a longer timeout for `add` only. Filed by the orchestrator.
+- **K12** `serve --root <large repo>` in map-only mode ran at 141 % CPU with RSS 2.9 GB after 3 m 44 s
+  and answered `/api/board` only intermittently (2026-09-17 22:0xZ, root = freshpickedjobs: 1,021
+  scanned files, 1,368 edges, but a working tree with `node_modules/`, `apps/web/dist/`, and four
+  sibling worktrees' worth of git history). An earlier start of the same root answered in ≈4 s on an
+  idle box, so this is load-sensitive, not deterministic. Unmeasured: whether the watcher (chokidar
+  over the root — does it honour `.gitignore`?) or the churn scan (`git log` per file) is the cost.
+  Measure both before fixing; the P7.2 read-only guarantee held throughout (`git status` clean,
+  `.repoboard/` absent). Filed by the orchestrator; the process was killed to free the box.

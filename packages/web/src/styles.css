@@ -409,6 +409,13 @@ button {
   max-height: 240px;
   overflow-y: auto;
 }
+/* RCB-45: a grid item's automatic minimum is its min-content width, so a wide table in LIVE
+   would widen the section past its track and the window's opaque background would cover its
+   neighbours (seen on the fpj board). `min-width: 0` pins the section to the track; the window
+   scrolls the overflow. */
+.state-panel__section {
+  min-width: 0;
+}
 .state-panel__heading {
   margin: 0 0 4px;
   font-size: 11px;
@@ -421,6 +428,19 @@ button {
 }
 .state-panel__prose :is(p, ul, ol) {
   margin: 0 0 6px;
+}
+/* RCB-45: LIVE is window-locked — a fixed height (not max-height) that scrolls inside, pinned
+   width, no reflow as it grows, so it reads like a status board. The heading stays outside this
+   box, on the section's own layout. */
+.state-panel__window {
+  height: 160px;
+  min-width: 0;
+  overflow-y: auto;
+  overflow-wrap: anywhere;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  padding: 6px 8px;
+  background: var(--surface-2);
 }
 .state-panel__queue {
   list-style: none;

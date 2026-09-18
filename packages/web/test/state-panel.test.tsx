@@ -4,9 +4,15 @@
  * a queue line scrolls to the `decide` column rather than toggling a filter (O11 dropped the
  * TopBar filter; orchestrator note 2).
  */
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { fireEvent, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { card, emptyState, mockState, renderApp, snapshot, testStore } from './helpers.jsx';
+
+// Not `fileURLToPath(new URL(…, import.meta.url))`: under the jsdom environment that throws
+// "The URL must be of scheme file". vitest shims `__dirname` for ESM test modules.
+const STYLES_PATH = join(__dirname, '..', 'src', 'styles.css');
 
 beforeEach(() => vi.useFakeTimers({ now: new Date('2026-09-02T22:41:10Z') }));
 afterEach(() => vi.useRealTimers());
@@ -135,5 +141,54 @@ describe('StatePanel', () => {
     } finally {
       vi.unstubAllGlobals();
     }
+  });
+
+  // RCB-45: LIVE is window-locked — fixed height, scrolls inside, pinned width, no reflow.
+  it('the LIVE section renders inside a window-locked box', () => {
+    const store = testStore();
+    snapshot(store, [card('RB-1', 'todo')], undefined, undefined, undefined, mockState());
+    renderApp(store);
+    const live = screen.getByTestId('state-panel-live');
+    expect(live).toHaveClass('state-panel__window');
+    expect(live).toHaveTextContent('Tree is dev.');
+  });
+
+  it('only LIVE is window-locked', () => {
+    const store = testStore();
+    snapshot(store, [card('RB-1', 'todo')], undefined, undefined, undefined, mockState());
+    renderApp(store);
+    const windows = document.querySelectorAll('.state-panel__window');
+    expect(windows.length).toBe(1);
+    expect(windows[0]).not.toHaveTextContent('K117 landed.');
+  });
+
+  it('collapsed hides the window too', () => {
+    const store = testStore();
+    snapshot(store, [card('RB-1', 'todo')], undefined, undefined, undefined, mockState());
+    renderApp(store);
+    fireEvent.click(screen.getByRole('button', { name: /^STATE/ }));
+    expect(screen.queryByTestId('state-panel-live')).toBeNull();
+  });
+
+  // jsdom does not compute layout, so the fixed height is asserted from the CSS source itself.
+  it('the .state-panel__window rule fixes a 160px height with its own scroll', () => {
+    const css = readFileSync(STYLES_PATH, 'utf8');
+    const rule = css.match(/\.state-panel__window\s*\{[^}]*\}/);
+    expect(rule).not.toBeNull();
+    // A bare `height`, not `max-height` (which `toContain` would also match): a max lets the
+    // box shrink and the panel reflow — the thing this card exists to stop.
+    expect(rule?.[0]).toMatch(/[^-]height: 160px;/);
+    expect(rule?.[0]).not.toMatch(/max-height/);
+    expect(rule?.[0]).toContain('overflow-y: auto');
+  });
+
+  // Pinned width: a grid item's automatic minimum is its min-content width, so a wide table in
+  // LIVE (the fpj board has one) would widen the section past its track and the window's opaque
+  // background would cover the other three sections. `min-width: 0` on the section is the pin.
+  it('the .state-panel__section rule pins the section to its grid track (min-width: 0)', () => {
+    const css = readFileSync(STYLES_PATH, 'utf8');
+    const rule = css.match(/\.state-panel__section\s*\{[^}]*\}/);
+    expect(rule).not.toBeNull();
+    expect(rule?.[0]).toMatch(/min-width:\s*0;/);
   });
 });

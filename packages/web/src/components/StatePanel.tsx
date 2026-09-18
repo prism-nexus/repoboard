@@ -48,15 +48,40 @@ interface Props {
   onGoToDecide: (columnId: string) => void;
 }
 
-function Section({ title, body }: { title: string; body: string }) {
+/**
+ * RCB-45: `locked` window-locks the prose in a fixed-height, self-scrolling box (see
+ * `.state-panel__window` in styles.css) so the section reads like a status board and does not
+ * reflow the panel as its content grows. The heading stays outside the scrolling box. `testId`
+ * is put on the window div (the element the test — and the fixed height — actually applies to).
+ */
+function Section({
+  title,
+  body,
+  locked,
+  testId,
+}: {
+  title: string;
+  body: string;
+  locked?: boolean;
+  testId?: string;
+}) {
+  const prose = (
+    <div
+      className="state-panel__prose"
+      // biome-ignore lint/security/noDangerouslySetInnerHtml: sanitized by renderMarkdown (DOMPurify)
+      dangerouslySetInnerHTML={{ __html: renderMarkdown(body) }}
+    />
+  );
   return (
     <section className="state-panel__section">
       <h3 className="state-panel__heading">{title}</h3>
-      <div
-        className="state-panel__prose"
-        // biome-ignore lint/security/noDangerouslySetInnerHtml: sanitized by renderMarkdown (DOMPurify)
-        dangerouslySetInnerHTML={{ __html: renderMarkdown(body) }}
-      />
+      {locked ? (
+        <div className="state-panel__window" data-testid={testId}>
+          {prose}
+        </div>
+      ) : (
+        prose
+      )}
     </section>
   );
 }
@@ -98,7 +123,7 @@ export function StatePanel({ state, cards, decideColumnId, onGoToDecide }: Props
       </button>
       {!collapsed && state?.sections ? (
         <div className="state-panel__body">
-          <Section title="Live" body={state.sections.live} />
+          <Section title="Live" body={state.sections.live} locked testId="state-panel-live" />
           <Section title="Last landings" body={state.sections.lastLandings} />
           <section className="state-panel__section">
             <h3 className="state-panel__heading">Owner queue</h3>

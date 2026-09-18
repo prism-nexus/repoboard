@@ -170,6 +170,92 @@ describe('HTTP routes', () => {
     expect('name' in noNameBody.config).toBe(false);
   });
 
+  it('RCB-42: GET /api/board carries the merged siblings list next to config, not inside it', async () => {
+    const repo = await makeTempRepoboard({});
+    cleanups.push(repo.cleanup);
+    await writeFile(
+      join(repo.root, '.repoboard', 'board.yml'),
+      serializeBoard({
+        ...defaultBoardConfig(),
+        siblings: [
+          { name: 'fpj', url: 'http://localhost:4243' },
+          { name: 'stable', url: 'http://localhost:4244' },
+        ],
+      }),
+    );
+    const store = await openStore(repo.root, { watch: false, now: () => NOW });
+    cleanups.push(() => store.close());
+    const server = await startServer({
+      store,
+      port: 0,
+      scan: false,
+      siblingsFlag: [
+        { name: 'fpj', url: 'http://localhost:9999' }, // collision: the flag wins
+        { name: 'newcomer', url: 'http://localhost:5001' },
+      ],
+    });
+    cleanups.push(() => server.close());
+    const url = server.url.replace(/\/$/, '');
+
+    const body = (await json(await fetch(`${url}/api/board`))) as {
+      config: { siblings?: { name: string; url: string }[] };
+      siblings: { name: string; url: string }[];
+    };
+    // `config.siblings` is the file's own (unmerged) list — config stays honest about the file,
+    // the same as `store.config` verbatim. The MERGED list is the top-level `siblings` key.
+    expect(body.config.siblings).toEqual([
+      { name: 'fpj', url: 'http://localhost:4243' },
+      { name: 'stable', url: 'http://localhost:4244' },
+    ]);
+    expect(body.siblings).toEqual([
+      { name: 'fpj', url: 'http://localhost:9999' },
+      { name: 'stable', url: 'http://localhost:4244' },
+      { name: 'newcomer', url: 'http://localhost:5001' },
+    ]);
+  });
+
+  it('RCB-42: no board.yml siblings and no --sibling flags is an empty list, not absent', async () => {
+    const r = await rig({});
+    const body = (await json(await fetch(`${r.url}/api/board`))) as { siblings: unknown };
+    expect(body.siblings).toEqual([]);
+  });
+
+  it('RCB-42: a live board.yml edit’s config broadcast carries the updated merged siblings', async () => {
+    const repo = await makeTempRepoboard({});
+    cleanups.push(repo.cleanup);
+    const store = await openStore(repo.root, { watch: true, now: () => NOW });
+    cleanups.push(() => store.close());
+    const server = await startServer({
+      store,
+      port: 0,
+      scan: false,
+      siblingsFlag: [{ name: 'flagOnly', url: 'http://localhost:6000' }],
+    });
+    cleanups.push(() => server.close());
+    const url = server.url.replace(/\/$/, '');
+
+    const ws = await connect(url);
+    cleanups.push(async () => ws.close());
+    await nextMessage(ws, (m) => m.type === 'snapshot');
+
+    const configMsg = nextMessage<{ type: string; siblings: { name: string; url: string }[] }>(
+      ws,
+      (m) => m.type === 'config',
+    );
+    await writeFile(
+      join(repo.root, '.repoboard', 'board.yml'),
+      serializeBoard({
+        ...defaultBoardConfig(),
+        siblings: [{ name: 'fpj', url: 'http://localhost:4243' }],
+      }),
+    );
+    const msg = await configMsg;
+    expect(msg.siblings).toEqual([
+      { name: 'fpj', url: 'http://localhost:4243' },
+      { name: 'flagOnly', url: 'http://localhost:6000' },
+    ]);
+  });
+
   it('POST /api/cards creates via core; bad input is 400', async () => {
     const r = await rig({ 'RB-1.md': cardText('RB-1', 'todo') });
     const res = await fetch(`${r.url}/api/cards`, {

@@ -7,7 +7,10 @@ export {
   ColumnSchema,
   defaultBoardConfig,
   findColumn,
+  isSiblingUrl,
+  mergeSiblings,
   parseBoard,
+  SiblingSchema,
   serializeBoard,
 } from './board.js';
 export type { CardParseResult } from './card.js';
@@ -148,5 +151,6 @@ export type {
   LeasesDoc,
   Priority,
   RepoSnapshot,
+  Sibling,
   Window,
 } from './types.js';

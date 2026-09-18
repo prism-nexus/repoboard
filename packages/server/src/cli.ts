@@ -21,12 +21,14 @@ import {
   formatCostTable,
   formatLogBlock,
   initialStateText,
+  isSiblingUrl,
   needsDecision,
   type Priority,
   parseBoard,
   renderState,
   resolveOlderThan,
   resolveTimeSpec,
+  type Sibling,
   type StateSectionName,
   serializeBoard,
   serializeCard,
@@ -152,6 +154,7 @@ Usage:
                                         --dry-run prints what it would do and writes nothing —
                                         the only mode to run against a repo you do not own.
   repoboard serve [--root <dir>] [--port 4242] [--open] [--no-fun] [--watch-cap 20000]
+                  [--sibling <name>=<url>]...
                                         start the dashboard (binds 127.0.0.1); --root serves that
                                         directory as given — a directory with no .repoboard/ opens
                                         map-only, and nothing is ever written into it. The repo
@@ -159,7 +162,11 @@ Usage:
                                         still exceeds --watch-cap (default 20000 paths), or it hits
                                         EMFILE/ENFILE, it turns itself off and logs one warning —
                                         the map keeps working from the last scan, rescans only on
-                                        request
+                                        request. --sibling (repeatable; RCB-42) adds a top-bar
+                                        link to another running board — an http(s) URL only; it is
+                                        merged with board.yml's own siblings: list for this process
+                                        only (never written to the file), and on a name collision
+                                        the flag wins
   repoboard mcp [--root <dir>]                MCP server over stdio (for Claude Code etc.)
   repoboard --help | --version
 
@@ -1079,6 +1086,25 @@ async function cmdSyncIssues(args: string[], io: CliIO): Promise<number> {
   return applied.errors.length > 0 ? 1 : 0;
 }
 
+/**
+ * RCB-42: `--sibling <name>=<url>` — split on the FIRST `=` (a URL can contain `=` itself, e.g. a
+ * query string; a name cannot, by this rule, so the first one is unambiguous). Both halves
+ * trimmed and required; the url must pass the same `isSiblingUrl` rule `SiblingSchema` enforces
+ * on board.yml's own `siblings:` list, so the two entry points can never disagree.
+ */
+function parseSiblingFlag(raw: string): Sibling {
+  const i = raw.indexOf('=');
+  const name = (i === -1 ? raw : raw.slice(0, i)).trim();
+  const url = (i === -1 ? '' : raw.slice(i + 1)).trim();
+  if (!name || !url) {
+    throw new UserError(`--sibling must be "<name>=<url>" (got "${raw}")`);
+  }
+  if (!isSiblingUrl(url)) {
+    throw new UserError(`--sibling url must be an http(s) URL (got "${raw}")`);
+  }
+  return { name, url };
+}
+
 function openInBrowser(url: string): void {
   const [cmd, args] =
     process.platform === 'darwin'
@@ -1102,7 +1128,9 @@ async function cmdServe(args: string[], io: CliIO): Promise<number> {
     open: { type: 'boolean', default: false },
     'no-fun': { type: 'boolean', default: false },
     'watch-cap': { type: 'string' },
+    sibling: { type: 'string', multiple: true },
   });
+  const siblingsFlag = (values.sibling ?? []).map(parseSiblingFlag);
   const port = Number.parseInt(values.port ?? '', 10);
   if (!Number.isInteger(port) || port < 0 || port > 65535) {
     throw new UserError(`--port must be 0–65535 (got "${values.port}")`);
@@ -1127,6 +1155,7 @@ async function cmdServe(args: string[], io: CliIO): Promise<number> {
       port,
       fun: !values['no-fun'],
       ...(watchCap !== undefined ? { watchCap } : {}),
+      siblingsFlag,
       warn: (m) => err.write(`warning: ${m}\n`),
     });
   } catch (e) {

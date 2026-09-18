@@ -1,8 +1,16 @@
-import { type BoardConfig, boardDisplayName, type RepoSnapshot } from '@repoboard/core';
+import {
+  type BoardConfig,
+  boardDisplayName,
+  type RepoSnapshot,
+  type Sibling,
+} from '@repoboard/core';
 import type { Theme, View } from '../store.js';
 
 interface Props {
   config: BoardConfig | null;
+  /** RCB-42: the server's already-merged list (board.yml + `--sibling` flags). Zero renders
+   * nothing — no empty container, no separator. */
+  siblings: Sibling[];
   repo: RepoSnapshot | null;
   connected: boolean;
   fun: boolean;
@@ -15,6 +23,7 @@ interface Props {
 
 export function TopBar({
   config,
+  siblings,
   repo,
   connected,
   fun,
@@ -42,6 +51,15 @@ export function TopBar({
         ) : (
           <span className="muted">waiting for board…</span>
         )}
+        {siblings.length > 0 ? (
+          <span className="topbar__siblings">
+            {siblings.map((s) => (
+              <a key={s.name} href={s.url} target="_blank" rel="noopener noreferrer">
+                {s.name}
+              </a>
+            ))}
+          </span>
+        ) : null}
       </div>
       <nav className="tabs" aria-label="View">
         <button

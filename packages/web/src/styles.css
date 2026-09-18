@@ -139,6 +139,19 @@ button {
 .topbar__head {
   color: var(--muted);
 }
+.topbar__siblings {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+.topbar__siblings a {
+  color: var(--muted);
+  font-size: 12px;
+}
+.topbar__siblings a:hover {
+  color: var(--ink);
+  text-decoration: underline;
+}
 .tabs {
   display: flex;
   gap: 2px;

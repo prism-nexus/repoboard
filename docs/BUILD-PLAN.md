@@ -50,6 +50,7 @@ Name: **repoboard** (Remember · Connect · Build) — decided 2026-09-03, §11 
 ### `.repoboard/board.yml`
 ```yaml
 name: My Project        # optional (RCB-41); absent = the served folder's name
+siblings: []            # optional (RCB-42); [{name, url}], merged with `serve --sibling` (flag wins ties)
 prefix: RB
 activeWindowMinutes: 30
 claudeMdBudgetBytes: 8192  # optional (P8.4); a `repoboard cost --budget` flag wins over this
@@ -195,7 +196,8 @@ one commit carrying verification output.
 
 ### P2 Server
 - **P2.1** CLI `repoboard init` writes `.repoboard/board.yml` and a first card; `repoboard card add|move|list|show`;
-  `repoboard serve [--port] [--open] [--no-fun] [--watch-cap]` (K12). Uses core for every mutation.
+  `repoboard serve [--port] [--open] [--no-fun] [--watch-cap] [--sibling <name>=<url>]` (K12, RCB-42).
+  Uses core for every mutation.
 - **P2.2** Card store: reads `.repoboard/cards/*.md`, chokidar watcher, atomic writes (temp + rename),
   event log append. Tests write to a temp dir, never the repo.
 - **P2.3** HTTP + WS per §3. Binds `127.0.0.1` only.

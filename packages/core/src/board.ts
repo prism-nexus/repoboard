@@ -1,6 +1,6 @@
 import * as YAML from 'yaml';
 import { z } from 'zod';
-import type { BoardConfig, Column } from './types.js';
+import type { BoardConfig, Column, Sibling } from './types.js';
 
 export const ColumnSchema = z.looseObject({
   id: z.string().min(1),
@@ -30,6 +30,26 @@ export function defaultBoardConfig(): BoardConfig {
   };
 }
 
+/**
+ * RCB-42: `siblings:` entries in `board.yml` and `serve --sibling <name>=<url>` flags share this
+ * one rule — a top-bar link is a click target, so only `http:`/`https:` is allowed. Refusing
+ * everything else (in particular `javascript:` and `file:`) here means neither entry point can
+ * produce a link the schema itself would call unsafe.
+ */
+export function isSiblingUrl(url: string): boolean {
+  try {
+    const protocol = new URL(url).protocol;
+    return protocol === 'http:' || protocol === 'https:';
+  } catch {
+    return false;
+  }
+}
+
+export const SiblingSchema = z.looseObject({
+  name: z.string().trim().min(1, 'must not be empty'),
+  url: z.string().refine(isSiblingUrl, 'must be an http(s) URL'),
+});
+
 export const BoardConfigSchema = z
   .looseObject({
     /**
@@ -39,6 +59,11 @@ export const BoardConfigSchema = z
      * rejected the same as empty.
      */
     name: z.string().trim().min(1, 'must not be empty').optional(),
+    /**
+     * RCB-42: other running boards, shown as plain top-bar links. Optional; an explicit empty
+     * list is allowed and means none — unlike `columns`, there is no "at least one" rule here.
+     */
+    siblings: z.array(SiblingSchema).optional(),
     prefix: z
       .string()
       .regex(/^[A-Za-z][A-Za-z0-9_]*$/, 'must start with a letter and contain only [A-Za-z0-9_]')
@@ -95,6 +120,7 @@ export function parseBoard(text: string): BoardParseResult {
 
 const CONFIG_ORDER = [
   'name',
+  'siblings',
   'prefix',
   'activeWindowMinutes',
   'claudeMdBudgetBytes',
@@ -141,4 +167,27 @@ export function boardDisplayName(config: BoardConfig | null, root: string): stri
   const name = config?.name?.trim();
   if (name) return name;
   return root.split(/[\\/]/).filter(Boolean).pop() ?? root;
+}
+
+/**
+ * RCB-42: the ONE merge of `board.yml`'s durable `siblings:` list and `serve --sibling` flags
+ * (per-process, additive) — done once here so the server computes it once and the web never
+ * merges anything itself. On a name collision the FLAG wins (it overrides board.yml for this
+ * running process only; the file is never touched). Order: `fromFile` entries first, in file
+ * order (a colliding name keeps its file position but the flag's url); then any flag-only names,
+ * in the order they were given on the command line.
+ */
+export function mergeSiblings(fromFile: Sibling[], fromFlags: Sibling[]): Sibling[] {
+  const flagByName = new Map(fromFlags.map((s) => [s.name, s]));
+  const seen = new Set<string>();
+  const merged = fromFile.map((s) => {
+    seen.add(s.name);
+    return flagByName.get(s.name) ?? s;
+  });
+  for (const s of fromFlags) {
+    if (seen.has(s.name)) continue;
+    seen.add(s.name);
+    merged.push(s);
+  }
+  return merged;
 }

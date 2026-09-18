@@ -6,7 +6,7 @@
  * `RepoSnapshot` alongside the config.
  */
 import { defaultBoardConfig, type RepoSnapshot } from '@repoboard/core';
-import { screen } from '@testing-library/react';
+import { act, screen } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
 import { card, renderApp, testStore } from './helpers.jsx';
 
@@ -93,5 +93,61 @@ describe('document.title (RCB-41)', () => {
     store.dispatch({ type: 'config', config: { ...defaultBoardConfig(), name: 'Renamed Board' } });
     expect(document.title).toBe('Renamed Board · repoboard');
     expect(store.getState().config?.name).toBe('Renamed Board');
+  });
+});
+
+describe('TopBar siblings (RCB-42)', () => {
+  it('renders nothing when there are no siblings — no empty container, no separator', () => {
+    const store = testStore();
+    store.dispatch({
+      type: 'snapshot',
+      board: { config: defaultBoardConfig(), cards: [] },
+      repo: repo('/repos/freshpickedjobs'),
+    });
+    const { container } = renderApp(store);
+    expect(container.querySelector('.topbar__siblings')).toBeNull();
+  });
+
+  it('renders two links with the given names, hrefs, target=_blank, and rel containing noopener', () => {
+    const store = testStore();
+    store.dispatch({
+      type: 'snapshot',
+      board: {
+        config: defaultBoardConfig(),
+        cards: [],
+        siblings: [
+          { name: 'fpj', url: 'http://localhost:4243' },
+          { name: 'stable', url: 'http://localhost:4244' },
+        ],
+      },
+      repo: repo('/repos/freshpickedjobs'),
+    });
+    renderApp(store);
+    const fpj = screen.getByRole('link', { name: 'fpj' });
+    const stable = screen.getByRole('link', { name: 'stable' });
+    expect(fpj.getAttribute('href')).toBe('http://localhost:4243');
+    expect(fpj.getAttribute('target')).toBe('_blank');
+    expect(fpj.getAttribute('rel')).toContain('noopener');
+    expect(stable.getAttribute('href')).toBe('http://localhost:4244');
+  });
+
+  it('updates on a later `config` message (a live board.yml edit), without a reconnect', () => {
+    const store = testStore();
+    store.dispatch({
+      type: 'snapshot',
+      board: { config: defaultBoardConfig(), cards: [] },
+      repo: repo('/repos/freshpickedjobs'),
+    });
+    const { container } = renderApp(store);
+    expect(container.querySelector('.topbar__siblings')).toBeNull();
+
+    act(() =>
+      store.dispatch({
+        type: 'config',
+        config: defaultBoardConfig(),
+        siblings: [{ name: 'fpj', url: 'http://localhost:4243' }],
+      }),
+    );
+    expect(screen.getByRole('link', { name: 'fpj' })).toBeTruthy();
   });
 });

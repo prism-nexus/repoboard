@@ -2,6 +2,10 @@
   "extends": "../../tsconfig.base.json",
   "compilerOptions": {
     "types": [],
+    // RCB-42: `URL` (used by `isSiblingUrl`) is a standard platform type, not a Node-only one —
+    // "DOM" adds its declaration without adding "node" back (no fs/process/etc. types come with
+    // it, so §0.5's purity rule stays enforced by the import-scanning test, not by this).
+    "lib": ["ES2022", "DOM"],
     "outDir": "dist",
     "rootDir": "src",
     "declaration": true,

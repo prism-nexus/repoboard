@@ -3,6 +3,7 @@ import {
   boardDisplayName,
   defaultBoardConfig,
   findColumn,
+  mergeSiblings,
   parseBoard,
   serializeBoard,
 } from '../src/board.js';
@@ -124,6 +125,58 @@ describe('parseBoard', () => {
       if (!r.ok) expect(r.error, text).toMatch(/name/);
     }
   });
+
+  it('RCB-42: accepts a siblings list', () => {
+    const r = parseBoard(
+      'siblings:\n  - name: fpj\n    url: http://localhost:4243\ncolumns:\n  - id: a\n',
+    );
+    expect(r).toEqual({
+      ok: true,
+      config: {
+        siblings: [{ name: 'fpj', url: 'http://localhost:4243' }],
+        prefix: 'RB',
+        activeWindowMinutes: 30,
+        columns: [{ id: 'a' }],
+      },
+    });
+  });
+
+  it('RCB-42: an explicit empty siblings list is allowed (means none)', () => {
+    const r = parseBoard('siblings: []\ncolumns:\n  - id: a\n');
+    expect(r.ok).toBe(true);
+    if (r.ok) expect(r.config.siblings).toEqual([]);
+  });
+
+  it('RCB-42: an absent siblings list stays absent', () => {
+    const r = parseBoard('columns:\n  - id: a\n');
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect('siblings' in r.config).toBe(false);
+  });
+
+  it('RCB-42: rejects an empty sibling name', () => {
+    const r = parseBoard(
+      'siblings:\n  - name: ""\n    url: http://localhost:4243\ncolumns:\n  - id: a\n',
+    );
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.error).toMatch(/siblings\.0\.name/);
+  });
+
+  it('RCB-42: rejects a javascript: sibling url', () => {
+    const r = parseBoard(
+      'siblings:\n  - name: evil\n    url: "javascript:alert(1)"\ncolumns:\n  - id: a\n',
+    );
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.error).toMatch(/siblings\.0\.url/);
+  });
+
+  it('RCB-42: rejects a file: sibling url', () => {
+    const r = parseBoard(
+      'siblings:\n  - name: local\n    url: "file:///etc/passwd"\ncolumns:\n  - id: a\n',
+    );
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.error).toMatch(/siblings\.0\.url/);
+  });
 });
 
 describe('serializeBoard', () => {
@@ -148,6 +201,22 @@ describe('serializeBoard', () => {
     if (!r.ok) return;
     const text = serializeBoard(r.config);
     expect(text.startsWith('name: Fresh Picked Jobs\nprefix: RB\n')).toBe(true);
+    expect(parseBoard(text)).toEqual(r);
+  });
+
+  it('RCB-42: serializes `siblings` after `name`, before `prefix`, and round-trips', () => {
+    const r = parseBoard(
+      'prefix: RB\nname: Fresh Picked Jobs\nsiblings:\n  - name: fpj\n' +
+        '    url: http://localhost:4243\ncolumns:\n  - id: a\n',
+    );
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    const text = serializeBoard(r.config);
+    expect(
+      text.startsWith(
+        'name: Fresh Picked Jobs\nsiblings:\n  - name: fpj\n    url: http://localhost:4243\nprefix: RB\n',
+      ),
+    ).toBe(true);
     expect(parseBoard(text)).toEqual(r);
   });
 });
@@ -177,5 +246,51 @@ describe('boardDisplayName (RCB-41)', () => {
     expect(boardDisplayName(null, '/repos/some-folder/')).toBe('some-folder');
     expect(boardDisplayName(null, 'C:\\repos\\some-folder')).toBe('some-folder');
     expect(boardDisplayName(null, 'C:\\repos\\some-folder\\')).toBe('some-folder');
+  });
+});
+
+describe('mergeSiblings (RCB-42)', () => {
+  it('no file siblings and no flags is empty', () => {
+    expect(mergeSiblings([], [])).toEqual([]);
+  });
+
+  it('a flag-only sibling passes through untouched', () => {
+    expect(mergeSiblings([], [{ name: 'fpj', url: 'http://localhost:4243' }])).toEqual([
+      { name: 'fpj', url: 'http://localhost:4243' },
+    ]);
+  });
+
+  it('a file-only sibling passes through untouched', () => {
+    expect(mergeSiblings([{ name: 'fpj', url: 'http://localhost:4243' }], [])).toEqual([
+      { name: 'fpj', url: 'http://localhost:4243' },
+    ]);
+  });
+
+  it('the flag wins on a name collision, keeping the file entry\u2019s position', () => {
+    const file = [
+      { name: 'a', url: 'http://localhost:1' },
+      { name: 'fpj', url: 'http://localhost:4243' },
+    ];
+    const flags = [{ name: 'fpj', url: 'http://localhost:9999' }];
+    expect(mergeSiblings(file, flags)).toEqual([
+      { name: 'a', url: 'http://localhost:1' },
+      { name: 'fpj', url: 'http://localhost:9999' },
+    ]);
+  });
+
+  it('orders file entries first, then new flag-only names in flag order', () => {
+    const file = [
+      { name: 'a', url: 'http://localhost:1' },
+      { name: 'b', url: 'http://localhost:2' },
+    ];
+    const flags = [
+      { name: 'c', url: 'http://localhost:3' },
+      { name: 'b', url: 'http://localhost:22' },
+    ];
+    expect(mergeSiblings(file, flags)).toEqual([
+      { name: 'a', url: 'http://localhost:1' },
+      { name: 'b', url: 'http://localhost:22' },
+      { name: 'c', url: 'http://localhost:3' },
+    ]);
   });
 });

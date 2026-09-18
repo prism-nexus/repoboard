@@ -2,6 +2,7 @@ import { execFile } from 'node:child_process';
 import { mkdir, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { basename, dirname, join } from 'node:path';
 import { promisify } from 'node:util';
+import { defaultBoardConfig, serializeBoard } from '@repoboard/core';
 import { afterEach, describe, expect, it } from 'vitest';
 import { findRoot, formatTable, run } from '../src/cli.js';
 import { cardText, makeTempDir, makeTempRepoboard, makeTempRepoNoBoard, NOW } from './helpers.js';
@@ -416,6 +417,99 @@ describe('repoboard serve --root (P7.1)', () => {
     expect(res.code).toBe(1);
     expect(res.err).toContain('no .repoboard directory found');
     expect(res.err).toContain('repoboard serve --root <dir>');
+  });
+});
+
+interface SiblingBoardBody {
+  siblings: { name: string; url: string }[];
+  hasBoard: boolean;
+}
+
+describe('repoboard serve --sibling (RCB-42)', () => {
+  it('rejects a --sibling with no "=", naming the flag', async () => {
+    const root = await freshRepo();
+    const res = await repoboard(root, 'serve', '--sibling', 'nourl');
+    expect(res.code).toBe(1);
+    expect(res.err).toMatch(/--sibling/);
+  });
+
+  it('rejects a --sibling whose url is not http(s), naming the flag', async () => {
+    const root = await freshRepo();
+    const res = await repoboard(root, 'serve', '--sibling', 'evil=javascript:alert(1)');
+    expect(res.code).toBe(1);
+    expect(res.err).toMatch(/--sibling/);
+  });
+
+  it('parses repeatable --sibling flags and carries them on /api/board with no board.yml siblings', async () => {
+    const root = await freshRepo();
+    const s = await serve(
+      root,
+      '--sibling',
+      'fpj=http://localhost:4243',
+      '--sibling',
+      'other=http://localhost:5000',
+    );
+    try {
+      const board = await getJson<SiblingBoardBody>(`${s.url}api/board`);
+      expect(board.siblings).toEqual([
+        { name: 'fpj', url: 'http://localhost:4243' },
+        { name: 'other', url: 'http://localhost:5000' },
+      ]);
+    } finally {
+      expect(await s.stop()).toBe(0);
+    }
+  });
+
+  it('merges board.yml siblings with --sibling flags; the flag wins on a name collision', async () => {
+    const fixture = await makeTempRepoboard();
+    dirs.push(fixture.root);
+    await writeFile(
+      join(fixture.root, '.repoboard', 'board.yml'),
+      serializeBoard({
+        ...defaultBoardConfig(),
+        siblings: [
+          { name: 'fpj', url: 'http://localhost:4243' },
+          { name: 'stable', url: 'http://localhost:4244' },
+        ],
+      }),
+    );
+    const s = await serve(
+      fixture.root,
+      '--sibling',
+      'fpj=http://localhost:9999',
+      '--sibling',
+      'newcomer=http://localhost:5001',
+    );
+    try {
+      const board = await getJson<SiblingBoardBody>(`${s.url}api/board`);
+      // Collision (fpj): the flag wins. Order: file order (fpj, stable) then the new flag name.
+      expect(board.siblings).toEqual([
+        { name: 'fpj', url: 'http://localhost:9999' },
+        { name: 'stable', url: 'http://localhost:4244' },
+        { name: 'newcomer', url: 'http://localhost:5001' },
+      ]);
+    } finally {
+      expect(await s.stop()).toBe(0);
+    }
+  });
+
+  it('map-only root: a --sibling flag still carries, with an empty board.yml side', async () => {
+    const fixture = await makeTempRepoNoBoard({ 'a.ts': 'export const a = 1;\n' });
+    dirs.push(fixture.root);
+    const s = await serve(
+      fixture.root,
+      '--root',
+      fixture.root,
+      '--sibling',
+      'fpj=http://localhost:4243',
+    );
+    try {
+      const board = await getJson<SiblingBoardBody>(`${s.url}api/board`);
+      expect(board.hasBoard).toBe(false);
+      expect(board.siblings).toEqual([{ name: 'fpj', url: 'http://localhost:4243' }]);
+    } finally {
+      expect(await s.stop()).toBe(0);
+    }
   });
 });
 

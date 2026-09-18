@@ -52,6 +52,7 @@ function Shell() {
     <div className="app">
       <TopBar
         config={state.config}
+        siblings={state.siblings}
         repo={state.repo}
         connected={state.connected}
         fun={state.fun}

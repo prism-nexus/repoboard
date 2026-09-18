@@ -10,6 +10,10 @@ same core code, so whichever you use, the others see it within a second. There i
 no registration step: a card is on the board when its file exists, and it is in a column when its
 `status:` says so. `board.yml` may also carry an optional `name:` (RCB-41) — the repo's display
 name in the top bar and browser tab title; absent means the served folder's name (`docs/BUILD-PLAN.md` §2).
+It may also carry an optional `siblings: [{name, url}]` (RCB-42) — other running boards, shown as
+plain top-bar links (each opens in a new tab; zero siblings shows nothing). `serve --sibling
+<name>=<url>` (repeatable) adds more for that process only, on top of board.yml's own list; **on a
+name collision the flag wins.** Both require an `http:`/`https:` url — nothing else is a valid link.
 
 Use the surfaces in the order below. Per-operation costs measured 2026-09-03, standing costs
 re-measured 2026-09-07 (bytes on the wire, ≈4 bytes per token): the CLI costs ~40 B in and 33 B
@@ -36,7 +40,7 @@ published). It finds `.repoboard/` by walking up from the current directory.
 | `repoboard log --as <seat> [--title t] (<text>\|--stdin)` / `log show [--date d] [--seat s]` | `repoboard log --as claude/ops "armed the fires"` (section 10) |
 | `repoboard check [--json] [--strict]` | `repoboard check` — exit 0 `ok`, or 1 with findings (section 10) |
 | `repoboard cost [--root <dir>] [--budget <bytes>] [--json]` | `repoboard cost --root /path/to/other/repo` — "cold context" bytes/≈tokens, exit 1 if CLAUDE.md is OVER budget (section 11) |
-| `repoboard serve [--root <dir>] [--port 4242] [--open] [--no-fun] [--watch-cap 20000]` | `repoboard serve --open` — the dashboard on 127.0.0.1 |
+| `repoboard serve [--root <dir>] [--port 4242] [--open] [--no-fun] [--watch-cap 20000] [--sibling <name>=<url>]...` | `repoboard serve --open` — the dashboard on 127.0.0.1 |
 | `repoboard mcp [--root <dir>]` | `repoboard mcp` — the MCP server on stdio (section 3) |
 
 **`serve`'s repo watcher (K12).** The chokidar watcher over `--root` shares the scanner's own idea

@@ -7,6 +7,7 @@ import type {
   Event,
   Lease,
   RepoSnapshot,
+  Sibling,
   StateSections,
   Window,
 } from '@repoboard/core';
@@ -59,7 +60,14 @@ export interface LogPayload {
 export type ServerMessage =
   | {
       type: 'snapshot';
-      board: { config: BoardConfig; cards: Card[]; hasBoard?: boolean };
+      board: {
+        config: BoardConfig;
+        cards: Card[];
+        hasBoard?: boolean;
+        /** RCB-42: the merged (board.yml + `--sibling` flags) list. Optional the same way
+         * `hasBoard` is — absent means "no siblings", never a crash on an older payload. */
+        siblings?: Sibling[];
+      };
       repo: RepoSnapshot | null;
       leases?: LeasesPayload;
       state?: StatePayload;
@@ -74,8 +82,12 @@ export type ServerMessage =
    * `loadConfig`/`emit('config', …)`, broadcast in `http.ts`'s `onConfig`) — this type was never
    * declared on the wire contract, so the web silently dropped it. Declaring it here is what lets
    * the store pick up a live rename (or any other config change) without waiting for a reconnect.
+   *
+   * RCB-42: `siblings` rides along on the same broadcast — a live board.yml edit can change the
+   * file's own `siblings:` list, and the merge (with this process's `--sibling` flags) is
+   * recomputed server-side every time, never by the web.
    */
-  | { type: 'config'; config: BoardConfig }
+  | { type: 'config'; config: BoardConfig; siblings?: Sibling[] }
   | { type: 'leases'; leases: LeasesPayload }
   | { type: 'state'; state: StatePayload }
   | { type: 'log'; date: string; text: string };

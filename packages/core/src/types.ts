@@ -92,6 +92,16 @@ export interface LeasesDoc {
   [key: string]: unknown;
 }
 
+/**
+ * RCB-42: one entry in the top bar's "other running boards" link group — a repo's display name
+ * and the URL to open it in a new tab. `url` must be http(s) (enforced by `SiblingSchema` /
+ * `isSiblingUrl`, which `serve --sibling` re-uses so the two entry points agree on the rule).
+ */
+export interface Sibling {
+  name: string;
+  url: string;
+}
+
 export interface Column {
   id: string;
   title?: string;
@@ -110,6 +120,10 @@ export interface BoardConfig {
   /** RCB-41: optional display name for the top bar / tab title. Absent means "the folder name"
    * — resolved by `boardDisplayName`, never defaulted here. */
   name?: string;
+  /** RCB-42: other running boards, shown as plain links in the top bar. Optional; absent or
+   * empty means none. Merged server-side with any `serve --sibling` flags (core
+   * `mergeSiblings`) — the web never merges, it only renders what the server sends. */
+  siblings?: Sibling[];
   prefix: string;
   activeWindowMinutes: number;
   /** P8.4: `repoboard cost`'s budget for the root `CLAUDE.md`, in bytes. A CLI `--budget` flag

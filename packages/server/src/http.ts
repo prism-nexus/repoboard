@@ -15,10 +15,12 @@ import {
   type CardPatch,
   type CreateCardInput,
   type DecisionOption,
+  mergeSiblings,
   needsDecision,
   type Priority,
   renderState,
   resolveOlderThan,
+  type Sibling,
   type StateSectionName,
   staleLeases,
   toIso,
@@ -56,6 +58,13 @@ export interface ServerOptions {
   watchCap?: number;
   /** One-line warnings (repo watcher capped or closed by an EMFILE/ENFILE). Default a no-op. */
   warn?: (message: string) => void;
+  /**
+   * RCB-42: `serve --sibling <name>=<url>` flags, already parsed and validated by the CLI.
+   * Per-process, additive on top of `board.yml`'s `siblings:` list — merged here (`mergeSiblings`)
+   * into the one list the web renders, so the merge happens exactly once and the web never does
+   * it. Default `[]`.
+   */
+  siblingsFlag?: Sibling[];
 }
 
 /** K12 default for `ServerOptions.watchCap`. */
@@ -646,8 +655,13 @@ export async function startServer(opts: ServerOptions): Promise<RunningServer> {
   const debounceMs = opts.rescanDebounceMs ?? 2000;
   const watchCap = opts.watchCap ?? DEFAULT_WATCH_CAP;
   const warn = opts.warn ?? ((): void => undefined);
+  const siblingsFlag = opts.siblingsFlag ?? [];
   const root = store.root;
   const webDir = await findWebDir(opts.webDir);
+
+  // RCB-42: recomputed on every call, never cached — `store.config.siblings` can change on a
+  // live board.yml edit, `siblingsFlag` cannot (it is fixed for the life of this process).
+  const mergedSiblings = (): Sibling[] => mergeSiblings(store.config.siblings ?? [], siblingsFlag);
 
   let repo: ScanResult | null = null;
   let repoFingerprint = '';
@@ -656,11 +670,16 @@ export async function startServer(opts: ServerOptions): Promise<RunningServer> {
 
   // §3: one payload for `GET /api/board` and the `board` half of the WS snapshot, so `hasBoard`
   // cannot be true on one and absent on the other.
+  // RCB-42: `siblings` sits NEXT TO `config`, not inside it — `config` is board.yml's own
+  // content (plus the existing `fun` precedent already living inside it), and a `--sibling` flag
+  // is not in the file. Keeping it a sibling key here is what keeps `config` honest about what
+  // the file actually says.
   const boardPayload = () => ({
     config: { ...store.config, fun },
     cards: store.list(),
     invalid: store.invalid,
     hasBoard: store.hasBoard,
+    siblings: mergedSiblings(),
   });
 
   // P8.2: one payload for `GET /api/leases` and the `leases` half of the WS snapshot — same
@@ -801,7 +820,8 @@ export async function startServer(opts: ServerOptions): Promise<RunningServer> {
   const onCard = (card: Card) => broadcast({ type: 'card', card });
   const onRemoved = (id: string) => broadcast({ type: 'card:removed', id });
   const onEvent = (event: unknown) => broadcast({ type: 'event', event });
-  const onConfig = () => broadcast({ type: 'config', config: { ...store.config, fun } });
+  const onConfig = () =>
+    broadcast({ type: 'config', config: { ...store.config, fun }, siblings: mergedSiblings() });
   const onInvalid = (invalid: unknown) => broadcast({ type: 'invalid', invalid });
   const onLeases = () => broadcast({ type: 'leases', leases: leasesPayload() });
   const onState = () => broadcast({ type: 'state', state: statePayload() });

@@ -10,6 +10,7 @@ import {
   type CardPatch,
   type Event,
   type RepoSnapshot,
+  type Sibling,
 } from '@repoboard/core';
 import type {
   ClientMessage,
@@ -38,6 +39,9 @@ export interface State {
    */
   hasBoard: boolean;
   cards: Card[];
+  /** RCB-42: the merged list of other running boards (board.yml's `siblings:` + this process's
+   * `--sibling` flags) — the server already merged it; the store only stores what it is given. */
+  siblings: Sibling[];
   repo: RepoSnapshot | null;
   /** P8.2: `.repoboard/leases.yml`, or null before the first snapshot (the Now strip's quiet line). */
   leases: LeasesPayload | null;
@@ -124,6 +128,7 @@ export function createStore(factory: TransportFactory, opts: StoreOptions = {}):
     config: null,
     hasBoard: true,
     cards: [],
+    siblings: [],
     repo: null,
     leases: null,
     state: null,
@@ -209,6 +214,7 @@ export function createStore(factory: TransportFactory, opts: StoreOptions = {}):
             config,
             hasBoard,
             cards: msg.board.cards,
+            siblings: msg.board.siblings ?? [],
             repo: msg.repo,
             leases: msg.leases ?? null,
             state: msg.state ?? null,
@@ -223,7 +229,7 @@ export function createStore(factory: TransportFactory, opts: StoreOptions = {}):
           break;
         }
         case 'config':
-          set({ config: msg.config });
+          set({ config: msg.config, siblings: msg.siblings ?? state.siblings });
           applyDocumentTitle(msg.config, state.repo);
           break;
         case 'card':

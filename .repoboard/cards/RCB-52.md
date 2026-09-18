@@ -1,11 +1,11 @@
 ---
 id: RCB-52
 title: "Owner lane = ONE queue: the Needs-decision column holds owner WORK items as well as letters (a card can carry an `owner:` task instead of a decision; same column, same OWNER QUEUE line, no new lane; `card ask` today is the workaround) (owner 2026-09-18)"
-status: doing
+status: done
 assignee: builder
 priority: medium
 created: 2026-09-18T19:52:32Z
-updated: 2026-09-18T20:32:48Z
+updated: 2026-09-18T20:55:35Z
 ---
 
 **Shape (builder 2026-09-18 20:4xZ, coordinator concurred):** the owner's words were about ONE
@@ -18,3 +18,4 @@ it. Brief: `docs/RCB-52-OWNER-TASK-BRIEF.md`.
 ## Log
 - 2026-09-18T20:32:48Z builder — moved todo → doing
 - 2026-09-18T20:32:48Z builder — updated assignee
+- 2026-09-18T20:55:35Z coordinator — moved doing → done

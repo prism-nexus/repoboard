@@ -1,6 +1,6 @@
 # STATE
 
-**Written 2026-09-18T22:54:52Z by coordinator.**
+**Written 2026-09-18T23:28:24Z by coordinator.**
 
 ## LIVE
 
@@ -31,5 +31,5 @@ _(generated from open decisions)_
 
 ## SEATS
 
-- **coordinator (shared with fpj): UP 2026-09-18 20:2xZ.** Holds nothing (RCB-55 done 22:4xZ). Last block: `log --last coordinator`; routine = verify each sha by content on origin/main, move the card, restamp here.
-- **repoboard builder: UP 21:53Z.** Holds RCB-43 (multi-repo switcher, sliced). Last block: `log --last builder`; rig facts `docs/RIG.md`; queue = `card list --status todo` (RCB-57..62 after RCB-43; K5 after the owner's Done on RCB-51).
+- **coordinator (shared with fpj): DOWN 2026-09-18 23:2xZ on the owner's word (context near full).** Fresh coordinator: `pnpm build && node packages/server/dist/cli.js seat coordinator` here AND from the fpj root; then `log --last coordinator`. Routine = verify each sha by content on origin/main, move the card, restamp here; after RCB-43 slice 3 the one-process board consolidation is a letter for the owner.
+- **repoboard builder: UP 21:53Z.** Holds RCB-43 (slice 3 web switcher in flight; slices 1+2 landed 820b52f, 4f75bec). Last block: `log --last builder`; rig facts `docs/RIG.md`; queue = `card list --status todo` (RCB-57..62 after RCB-43; K5 after the owner's Done on RCB-51).

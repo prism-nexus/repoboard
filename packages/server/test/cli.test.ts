@@ -426,6 +426,57 @@ describe('repoboard serve --root (P7.1)', () => {
   });
 });
 
+interface ReposBody {
+  primary: string;
+  repos: { key: string; root: string }[];
+}
+
+describe('repoboard serve --root (repeatable, RCB-43 slice 1)', () => {
+  it('serve --root a --root b parses to two roots, a primary, in order', async () => {
+    const a = await makeTempRepoboard({ 'A-1.md': cardText('A-1', 'todo') });
+    const b = await makeTempRepoboard({ 'B-1.md': cardText('B-1', 'todo') });
+    dirs.push(a.root, b.root);
+    const s = await serve(a.root, '--root', a.root, '--root', b.root);
+    try {
+      const repos = await getJson<ReposBody>(`${s.url}api/repos`);
+      expect(repos.repos.map((r) => r.root)).toEqual([a.root, b.root]);
+      expect(repos.primary).toBe(repos.repos[0]?.key);
+      // The primary is the one actually serving /api/board.
+      const board = await getJson<BoardBody>(`${s.url}api/board`);
+      expect(board.cards.map((c) => c.id)).toEqual(['A-1']);
+    } finally {
+      expect(await s.stop()).toBe(0);
+    }
+  });
+
+  it('one --root (unchanged): a single repo, primary', async () => {
+    const fixture = await makeTempRepoboard({ 'ONE-1.md': cardText('ONE-1', 'todo') });
+    dirs.push(fixture.root);
+    const s = await serve(fixture.root, '--root', fixture.root);
+    try {
+      const repos = await getJson<ReposBody>(`${s.url}api/repos`);
+      expect(repos.repos.length).toBe(1);
+      expect(repos.primary).toBe(repos.repos[0]?.key);
+      expect(repos.repos[0]?.root).toBe(fixture.root);
+    } finally {
+      expect(await s.stop()).toBe(0);
+    }
+  });
+
+  it('zero --root (unchanged): climbs from the cwd to a single repo, primary', async () => {
+    const root = await freshRepo({ 'Z-1.md': cardText('Z-1', 'todo') });
+    const s = await serve(root);
+    try {
+      const repos = await getJson<ReposBody>(`${s.url}api/repos`);
+      expect(repos.repos.length).toBe(1);
+      expect(repos.primary).toBe(repos.repos[0]?.key);
+      expect(repos.repos[0]?.root).toBe(root);
+    } finally {
+      expect(await s.stop()).toBe(0);
+    }
+  });
+});
+
 interface SiblingBoardBody {
   siblings: { name: string; url: string }[];
   hasBoard: boolean;

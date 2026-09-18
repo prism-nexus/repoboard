@@ -44,7 +44,7 @@ published). It finds `.repoboard/` by walking up from the current directory.
 | `repoboard seat <name> [--json]` | `repoboard seat claude/builder` — the cold-start bundle: SEATS line, own last block, the coordinator's, next todo card, open decisions (section 10) |
 | `repoboard check [--json] [--strict]` | `repoboard check` — exit 0 `ok`, or 1 with findings (section 10) |
 | `repoboard cost [--root <dir>] [--budget <bytes>] [--json]` | `repoboard cost --root /path/to/other/repo` — "cold context" bytes/≈tokens, exit 1 if CLAUDE.md is OVER budget (section 11) |
-| `repoboard serve [--root <dir>] [--port 4242] [--open] [--no-fun] [--watch-cap 20000] [--sibling <name>=<url>]...` | `repoboard serve --open` — the dashboard on 127.0.0.1 |
+| `repoboard serve [--root <dir>]... [--port 4242] [--open] [--no-fun] [--watch-cap 20000] [--sibling <name>=<url>]...` | `repoboard serve --open` — the dashboard on 127.0.0.1; `--root` repeats (RCB-43): the first is primary and opens immediately, later ones open lazily on first request, and `GET /api/repos` lists all of them |
 | `repoboard mcp [--root <dir>]` | `repoboard mcp` — the MCP server on stdio (section 3) |
 
 **`serve`'s repo watcher (K12).** The chokidar watcher over `--root` shares the scanner's own idea

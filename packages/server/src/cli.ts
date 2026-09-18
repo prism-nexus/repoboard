@@ -50,6 +50,7 @@ import {
   type WindowRow,
 } from './mcp.js';
 import { formatResolvedRefs, resolveCardRefs } from './refs.js';
+import { assignRepoKeys, hasBoardDir } from './repo-context.js';
 import { openStore } from './store.js';
 import { VERSION } from './version.js';
 
@@ -165,20 +166,25 @@ Usage:
                                         the done column. Idempotent by ref; NEVER writes <path>.
                                         --dry-run prints what it would do and writes nothing —
                                         the only mode to run against a repo you do not own.
-  repoboard serve [--root <dir>] [--port 4242] [--open] [--no-fun] [--watch-cap 20000]
+  repoboard serve [--root <dir>]... [--port 4242] [--open] [--no-fun] [--watch-cap 20000]
                   [--sibling <name>=<url>]...
                                         start the dashboard (binds 127.0.0.1); --root serves that
                                         directory as given — a directory with no .repoboard/ opens
-                                        map-only, and nothing is ever written into it. The repo
-                                        watcher honours .gitignore (K12); if what it would watch
-                                        still exceeds --watch-cap (default 20000 paths), or it hits
-                                        EMFILE/ENFILE, it turns itself off and logs one warning —
-                                        the map keeps working from the last scan, rescans only on
-                                        request. --sibling (repeatable; RCB-42) adds a top-bar
-                                        link to another running board — an http(s) URL only; it is
-                                        merged with board.yml's own siblings: list for this process
-                                        only (never written to the file), and on a name collision
-                                        the flag wins
+                                        map-only, and nothing is ever written into it. --root is
+                                        repeatable (RCB-43): the first is the primary and is opened
+                                        (and scanned, if enabled) immediately; every later --root is
+                                        just registered — its board opens on first request (map on
+                                        demand, K12) — and is listed by GET /api/repos. With no
+                                        --root the one root is found by climbing from the cwd, as
+                                        before. The repo watcher honours .gitignore (K12); if what
+                                        it would watch still exceeds --watch-cap (default 20000
+                                        paths), or it hits EMFILE/ENFILE, it turns itself off and
+                                        logs one warning — the map keeps working from the last scan,
+                                        rescans only on request. --sibling (repeatable; RCB-42) adds
+                                        a top-bar link to another running board — an http(s) URL
+                                        only; it is merged with board.yml's own siblings: list for
+                                        this process only (never written to the file), and on a name
+                                        collision the flag wins
   repoboard mcp [--root <dir>]                MCP server over stdio (for Claude Code etc.)
   repoboard --help | --version
 
@@ -1187,7 +1193,7 @@ function openInBrowser(url: string): void {
 
 async function cmdServe(args: string[], io: CliIO): Promise<number> {
   const { values } = parse(args, {
-    root: { type: 'string' },
+    root: { type: 'string', multiple: true },
     port: { type: 'string', default: '4242' },
     open: { type: 'boolean', default: false },
     'no-fun': { type: 'boolean', default: false },
@@ -1208,9 +1214,17 @@ async function cmdServe(args: string[], io: CliIO): Promise<number> {
       throw new UserError(`--watch-cap must be a positive integer (got "${values['watch-cap']}")`);
     }
   }
-  const root = await serveRoot(values.root, io);
+  // RCB-43 slice 1: `--root` is repeatable, in order; zero `--root` keeps today's climb-from-cwd
+  // (`serveRoot(undefined, io)`). Each given `--root` goes through the same directory check as
+  // before — `serveRoot` never searches upward for a `--root` it was actually given.
+  const rootFlags = values.root ?? [];
+  const roots =
+    rootFlags.length > 0
+      ? await Promise.all(rootFlags.map((r) => serveRoot(r, io)))
+      : [await serveRoot(undefined, io)];
+  const primaryRoot = roots[0] as string;
   const err = io.stderr ?? io.stdout;
-  const store = await openStore(root, { watch: true, now: io.now });
+  const store = await openStore(primaryRoot, { watch: true, now: io.now });
   store.on('warning', (m) => err.write(`warning: ${m}\n`));
   let server: RunningServer;
   try {
@@ -1221,6 +1235,8 @@ async function cmdServe(args: string[], io: CliIO): Promise<number> {
       ...(watchCap !== undefined ? { watchCap } : {}),
       siblingsFlag,
       warn: (m) => err.write(`warning: ${m}\n`),
+      roots,
+      now: io.now,
     });
   } catch (e) {
     await store.close();
@@ -1228,7 +1244,14 @@ async function cmdServe(args: string[], io: CliIO): Promise<number> {
     if (code === 'EADDRINUSE') throw new UserError(`port ${port} is already in use`);
     throw e;
   }
-  io.stdout.write(`repoboard: serving ${root}\n  ${server.url}\n`);
+  io.stdout.write(`repoboard: serving ${primaryRoot}\n  ${server.url}\n`);
+  // RCB-43 slice 1: one line per `--root`, primary first and marked — the same key
+  // `GET /api/repos` uses, so a line here and an entry there always agree.
+  for (const { key, root: r } of assignRepoKeys(roots)) {
+    const isPrimary = r === primaryRoot;
+    const board = (isPrimary ? store.hasBoard : hasBoardDir(r)) ? 'board' : 'map-only';
+    io.stdout.write(`  ${key}  ${r}  (${board})${isPrimary ? '  primary' : ''}\n`);
+  }
   io.stdout.write(`  repo watcher: ${server.watchedPaths().length} paths\n`);
   if (!store.hasBoard) {
     io.stdout.write('  (no .repoboard/ here: map-only, and nothing will be written)\n');

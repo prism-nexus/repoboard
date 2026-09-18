@@ -110,6 +110,8 @@ export {
   lastBlockFor,
   parseLogBlocks,
 } from './repolog.js';
+export type { NextCardReason, SeatBundle, SeatBundleInput } from './seat.js';
+export { findSeatLine, renderSeatBundle, seatBundle } from './seat.js';
 export type {
   CheckInput,
   Finding,

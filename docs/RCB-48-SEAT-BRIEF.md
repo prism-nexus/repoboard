@@ -3,7 +3,7 @@
 One agent. The builder seat verifies, gates, commits, pushes. Dispatched AFTER RCB-52 agent A lands
 (shared files); may run alongside RCB-52 agent B (web only — do not touch `packages/web`).
 
-Baseline on `main` after RCB-52-A (the builder fills this in at dispatch): tests ___, typecheck 0,
+Baseline on `main` @ 552fb2e, measured 2026-09-18 by the builder: 664 passed | 2 skipped (666) ×2, typecheck 0,
 lint 0, build 0.
 
 ## What the owner asked (log 18:1xZ) and what exists
@@ -68,6 +68,11 @@ export function renderSeatBundle(b: SeatBundle, now: Date): string
   name). `builder` matches `- **repoboard builder (its own terminal…)**`; `coordinator` matches the
   coordinator bullet; `ordinator` matches nothing (whole word). Returns the bullet's text with
   continuation lines, trimmed. Null when nothing matches or the section is a placeholder.
+  **Two-pass, added after the RCB-48 dogfood (2026-09-18 21:07Z) found `seat builder` returning
+  this repo's own coordinator bullet — its prose genuinely says "the builder's card" and "each
+  builder sha" ahead of the real builder bullet: pass 1 matches on the bullet's LABEL (the leading
+  `**…**` span, else up to the first `:`) so a bullet's own name wins over another bullet's prose
+  mention of it, and pass 2 (the rule above) is the fallback only when no label matches at all.**
 - `nextCard`: the first `todo` card whose `assignee` equals `name` (case-insensitive), else the
   first `todo` card in list order (`store.list()` is id-sorted). Null when none. Report which rule
   picked it via a `nextCardReason: 'assigned' | 'first-todo' | null` field on the bundle.

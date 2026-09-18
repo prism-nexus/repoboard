@@ -26,6 +26,7 @@ import {
   needsDecision,
   type Priority,
   parseBoard,
+  renderSeatBundle,
   renderState,
   resolveOlderThan,
   resolveTimeSpec,
@@ -129,6 +130,9 @@ Usage:
                                         print a day's log (default today), optionally one seat's blocks
   repoboard log --last <seat>           print that seat's newest block, searching back across days
                                         (cold-start: your own seat's last block, then the coordinator's)
+  repoboard seat <name> [--json]       the cold-start bundle for one seat: its SEATS line, its last
+                                        log block, the coordinator's, its next todo card, the open
+                                        decisions — one command instead of the three-file ritual
   repoboard check [--json] [--strict]  exit 0 "ok" / 1 with one line per finding: stale-state
                                         (also reads board.yml's logDir, P8.6 — an extra daily-log
                                         directory alongside .repoboard/log/, read-only),
@@ -961,6 +965,27 @@ async function cmdLogLast(args: string[], io: CliIO): Promise<number> {
   return 0;
 }
 
+/**
+ * RCB-48: `repoboard seat <name>` — the cold-start bundle, one command in place of the
+ * three-file ritual (STATE.md → your own last block → the coordinator's → todo cards → open
+ * decisions). Exit 0 on any successful read, even when every part is a placeholder — a cold seat
+ * on a fresh board is the normal case, not an error.
+ */
+async function cmdSeat(args: string[], io: CliIO): Promise<number> {
+  const { values, positionals } = parse(args, { json: { type: 'boolean', default: false } });
+  const [name] = positionals;
+  if (!name) throw new UserError('usage: repoboard seat <name> [--json]');
+  const root = await requireRoot(io);
+  const store = await openStore(root, { watch: false, now: io.now });
+  const bundle = await store.seatBundle(name);
+  if (values.json) {
+    io.stdout.write(`${JSON.stringify(bundle, null, 2)}\n`);
+    return 0;
+  }
+  io.stdout.write(renderSeatBundle(bundle, store.clock));
+  return 0;
+}
+
 async function cmdCheck(args: string[], io: CliIO): Promise<number> {
   const { values } = parse(args, {
     json: { type: 'boolean', default: false },
@@ -1294,6 +1319,7 @@ export async function run(argv: string[], io: CliIO): Promise<number> {
       if (sub === '--last') return await cmdLogLast(rest, io);
       return await cmdLogAppend(argv.slice(1), io);
     }
+    if (cmd === 'seat') return await cmdSeat(argv.slice(1), io);
     if (cmd === 'check') return await cmdCheck(argv.slice(1), io);
     if (cmd === 'cost') return await cmdCost(argv.slice(1), io);
     if (cmd === 'archive') return await cmdArchive(argv.slice(1), io);

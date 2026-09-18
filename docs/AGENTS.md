@@ -38,6 +38,7 @@ published). It finds `.repoboard/` by walking up from the current directory.
 | `repoboard card show <id> [--resolve]` | `repoboard card show RB-12` — prints the card file; `--resolve` appends each `refs:` target's live lines (section 4) |
 | `repoboard state [--set-section s (<text>\|--stdin)]` | `repoboard state` — prints the rendered STATE.md (section 10) |
 | `repoboard log --as <seat> [--title t] (<text>\|--stdin)` / `log show [--date d] [--seat s]` / `log --last <seat>` | `repoboard log --as claude/ops "armed the fires"` (section 10) |
+| `repoboard seat <name> [--json]` | `repoboard seat claude/builder` — the cold-start bundle: SEATS line, own last block, the coordinator's, next todo card, open decisions (section 10) |
 | `repoboard check [--json] [--strict]` | `repoboard check` — exit 0 `ok`, or 1 with findings (section 10) |
 | `repoboard cost [--root <dir>] [--budget <bytes>] [--json]` | `repoboard cost --root /path/to/other/repo` — "cold context" bytes/≈tokens, exit 1 if CLAUDE.md is OVER budget (section 11) |
 | `repoboard serve [--root <dir>] [--port 4242] [--open] [--no-fun] [--watch-cap 20000] [--sibling <name>=<url>]...` | `repoboard serve --open` — the dashboard on 127.0.0.1 |
@@ -461,6 +462,7 @@ every other section byte-identical.
 | `repoboard log --as <seat> [--title "…"] (<text> \| --stdin)` | `repoboard log --as claude/ops --title "armed the fires" "Five waiters set."` → `logged 2026-09-17 claude/ops` — creates today's file if this is the first entry |
 | `repoboard log show [--date YYYY-MM-DD] [--seat s]` | prints a day's log (default today); `--seat` filters to that seat's own blocks |
 | `repoboard log --last <seat>` | `repoboard log --last claude/builder` — prints that seat's newest block, searching back across every day in `.repoboard/log/` (not just today); a cold seat with no history prints `(no log block for <seat>)`, exit 0 |
+| `repoboard seat <name> [--json]` | `repoboard seat claude/builder` — the RCB-48 cold-start bundle in one command: the SEATS bullet mentioning `<name>` (whole word), its own last log block, the coordinator's (omitted when `<name>` IS the coordinator), its next todo card (assigned to it, else the first todo card in list order — the render says which), and the cards with an open decision. Fixed `## ` headings; a missing part prints a one-line placeholder, never an empty section. Exit 0 on any successful read, even an entirely cold seat. `--json` prints the bundle object |
 | `repoboard check [--json] [--strict]` | exit 0 `ok` with no findings, else exit 1 (or 0 if every finding is warning-grade and `--strict` is absent) with one line per finding |
 | `repoboard init --practices` | scaffolds `STATE.md`, today's log, `leases.yml`, and a root `NEXT-AGENT-PROMPT.md` — **never overwrites an existing file**, printing `kept <path>` for each; works whether or not `.repoboard/` already existed |
 
@@ -468,9 +470,10 @@ A log block is `##### <SEAT-UPPERCASED> <ISO>: <title or first line>`, a blank l
 verbatim — append-only, so a hand `sed` can add to it but core exposes no rewrite. `--as` on `log`
 uses the same actor chain as everywhere else (`$REPOBOARD_ACTOR`, then `$USER`, then `cli`).
 
-**Cold-start rule (RCB-47):** a seat coming up reads STATE.md, then its own seat's last block
-(`repoboard log --last <seat>`), then the coordinator's (`repoboard log --last coordinator`), then
-`card list --status todo`. Three commands replace reading the whole day's log.
+**Cold-start rule (RCB-47/RCB-48):** a seat coming up runs `repoboard seat <name>` — one command
+prints its SEATS line, its own last log block, the coordinator's, its next todo card and the open
+decisions, in that order. The underlying reads stay available one at a time: `repoboard state`,
+`log --last <seat>`, `card list --status todo`, `card list --needs-decision`.
 
 ### `repoboard check`'s findings
 

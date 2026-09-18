@@ -48,8 +48,10 @@ import {
   pruneWindows,
   type ReleaseLeaseInput,
   releaseLease,
+  type SeatBundle,
   type StateDoc,
   type StateSectionName,
+  seatBundle as seatBundleCore,
   selectArchivable as selectArchivableCore,
   serializeCard,
   serializeLeases,
@@ -610,6 +612,28 @@ export class CardStore extends EventEmitter<StoreEvents> {
   async lastRepoLogBlock(seat: string): Promise<{ date: string; block: LogBlock } | null> {
     const infos = await this.loadLogInfoFrom(this.logDir);
     return lastBlockFor(seat, infos);
+  }
+
+  /**
+   * RCB-48: `repoboard seat <name>` — the cold-start bundle, packaging the RCB-47 rule (STATE.md
+   * → your own last block → the coordinator's → `card list --status todo` → open decisions) as
+   * one read. Read-only: nothing is written, no event, works with no STATE.md (`seatsSection`
+   * `null`). The coordinator's own block is fetched unconditionally — core's `seatBundle` is what
+   * forces it `null` when `name` IS the coordinator, same as everywhere else that guarantee lives.
+   */
+  async seatBundle(name: string): Promise<SeatBundle> {
+    const [ownBlock, coordinatorBlock] = await Promise.all([
+      this.lastRepoLogBlock(name),
+      this.lastRepoLogBlock('coordinator'),
+    ]);
+    return seatBundleCore({
+      name,
+      now: this.now(),
+      seatsSection: this.stateDoc?.sections.seats ?? null,
+      ownBlock,
+      coordinatorBlock,
+      cards: this.list(),
+    });
   }
 
   /**

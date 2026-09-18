@@ -1541,6 +1541,89 @@ describe('repoboard log', () => {
   });
 });
 
+describe('repoboard seat', () => {
+  it(
+    "prints only this seat's SEATS bullet, its own last block, the coordinator's, its " +
+      'assigned card, and the open-decision queue line',
+    async () => {
+      const root = await freshRepo({});
+      // C3 fixture: `rebuilder` sits BEFORE `builder` and is a substring of it — a plain substring
+      // match would pick `rebuilder`'s bullet (or match `builder` inside it) instead of the real one.
+      await repoboardStdin(
+        root,
+        '- **ops**: watching\n- **rebuilder**: x\n- **builder (own terminal)**: on RCB-1',
+        'state',
+        '--set-section',
+        'SEATS',
+        '--stdin',
+      );
+      await repoboard(root, 'log', '--as', 'ops', 'ops block');
+      await repoboard(root, 'log', '--as', 'builder', 'builder block');
+      await repoboard(root, 'log', '--as', 'coordinator', 'coordinator block');
+      // Kept in `todo` — the next-card assertion below needs a card that is STILL `todo`.
+      await repoboard(root, 'card', 'add', 'x', '--status', 'todo', '--assignee', 'builder');
+      // A second card, moved out of `todo` by `card ask` (the default board's `decide` column) —
+      // its open decision must still show up in the queue.
+      await repoboard(root, 'card', 'add', 'y', '--status', 'todo');
+      const list = await repoboard(root, 'card', 'list', '--json');
+      const cards = JSON.parse(list.out) as Array<{ id: string; title: string }>;
+      const cardX = cards.find((c) => c.title === 'x');
+      const cardY = cards.find((c) => c.title === 'y');
+      if (!cardX || !cardY) throw new Error('missing card id');
+      await repoboard(root, 'card', 'ask', cardY.id, 'ship now?');
+
+      const res = await repoboard(root, 'seat', 'builder');
+      expect(res.code).toBe(0);
+      expect(res.out).toContain('- **builder (own terminal)**: on RCB-1');
+      expect(res.out).not.toContain('- **ops**: watching');
+      expect(res.out).not.toContain('rebuilder');
+      expect(res.out).toContain('builder block');
+      expect(res.out).toContain('## Last block — COORDINATOR');
+      expect(res.out).toContain('coordinator block');
+      expect(res.out).toContain(`${cardX.id}  todo  x`);
+      expect(res.out).toContain('(assigned to builder)');
+      expect(res.out).toContain(`${cardY.id} · ship now?`);
+    },
+  );
+
+  it("--json parses and carries the bundle's keys", async () => {
+    const root = await freshRepo({});
+    const res = await repoboard(root, 'seat', 'builder', '--json');
+    expect(res.code).toBe(0);
+    const parsed = JSON.parse(res.out) as Record<string, unknown>;
+    expect(Object.keys(parsed).sort()).toEqual(
+      [
+        'coordinatorBlock',
+        'name',
+        'nextCard',
+        'nextCardReason',
+        'openDecisions',
+        'ownBlock',
+        'seatsLine',
+      ].sort(),
+    );
+    expect(parsed.name).toBe('builder');
+  });
+
+  it('no STATE.md, no log, no cards: exit 0 with a placeholder for every section', async () => {
+    const root = await freshRepo({});
+    const res = await repoboard(root, 'seat', 'builder');
+    expect(res.code).toBe(0);
+    expect(res.out).toContain('(no SEATS line mentions builder)');
+    expect(res.out).toContain('(no log block for builder)');
+    expect(res.out).toContain('(no log block for coordinator)');
+    expect(res.out).toContain('(no todo card)');
+    expect(res.out).toContain('(none)');
+  });
+
+  it('no name is a user error', async () => {
+    const root = await freshRepo({});
+    const res = await repoboard(root, 'seat');
+    expect(res.code).toBe(1);
+    expect(res.err).toMatch(/usage/);
+  });
+});
+
 describe('repoboard check', () => {
   it('exit 0 "ok" on a clean fixture', async () => {
     const root = await freshRepo({});

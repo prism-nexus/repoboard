@@ -6,13 +6,13 @@ and this file says which place. If you need a number, get it from the section na
 measure it.
 
 `docs/BUILD-PLAN.md` is **the authority** — decisions in §1, file and wire contracts in §2–§4,
-tasks in §5, owner-only decisions in §11. `docs/HANDOFF.md` is the running record; its §12.0x
-subsections are append-only and the highest letter is current.
+tasks in §5, owner-only decisions in §11. `docs/HANDOFF.md` is frozen history (§12 closed
+2026-09-18); the running record is `.repoboard/`.
 
-**Picking this up cold as orchestrator:** `docs/NEXT-AGENT-PROMPT.md` (check its date against the
-highest HANDOFF §12.0x letter), then plan §11, then `git log`. Briefs live in `docs/*-BRIEF.md`
-— phase briefs `P*`, known-issue briefs like `K7-REFS-BRIEF.md` and `K-CLEANUP-BRIEF.md`; the
-most recent is the pattern. Lessons that cost time are HANDOFF §7, numbered.
+**Cold, any seat:** `pnpm build && node packages/server/dist/cli.js seat <name>` — your SEATS
+line, last log block, next card, open decisions. Then that card; the newest `docs/*-BRIEF.md` is
+the brief pattern; plan §11 only if the card points at a decision. A builder reads the plan or
+HANDOFF §1 only when a card sends it there. Rig facts (lock, ports, seat names): `docs/RIG.md`.
 - Unfinished work: `README.md` §"Known issues", a numbered list `K1` upward. A commit that closes
   one says `Closes K<n>` and edits that list in the same commit.
 

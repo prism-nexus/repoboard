@@ -478,6 +478,16 @@ prints its SEATS line, its own last log block, the coordinator's, its next todo 
 decisions, in that order. The underlying reads stay available one at a time: `repoboard state`,
 `log --last <seat>`, `card list --status todo`, `card list --needs-decision`.
 
+Rig facts — the vitest lock protocol, the port map, the restart rule, seat names and `--as`
+values, subagent policy, the per-landing gate — live in one place, written once: `docs/RIG.md`
+(RCB-55 A4). SEATS bullets point at it rather than restating it.
+
+STATE shape rules (RCB-55 A3 + A5, owner's letter A, 2026-09-18): **LIVE holds slow-changing facts
+only** — ports and what each serves, the remote, the owner lane, the sibling — never a queue or a
+per-landing status (the queue is the board, landings are LAST LANDINGS, seat status is SEATS).
+**A SEATS bullet is ≤ 3 lines**: `UP/DOWN <stamp>`, what the seat holds (lease + card), where its
+last block is. Anything else goes in the seat's log block.
+
 ### `repoboard check`'s findings
 
 | Kind | Level | Fires when | Blocks by default? |

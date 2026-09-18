@@ -23,7 +23,7 @@ options is refused: `a task has no options`); the owner closes it with `decide` 
 **neither a letter nor words** (a plain "done"), words optional and kept verbatim. `kind` is
 absent for a question — never written as `kind: question` — so no existing card's bytes change.
 
-Baseline on `main` after RCB-47 (the builder fills this in when dispatching): tests ___ ,
+Baseline on `main` @ 00aae0a, measured 2026-09-18 by the builder: 639 passed | 2 skipped (641) ×2,
 typecheck 0, lint 0, build 0.
 
 ## Rules (CLAUDE.md; HANDOFF §7) — both agents
@@ -113,8 +113,9 @@ status `decide`, `card list --needs-decision` shows `!`; `card ask … --task --
 `card decide RCB-x --as owner` → exit 0 `done RCB-x`, status back to `returnTo`; HTTP `POST
 /ask {question, kind:'task'}` 200 and `{kind:'nope'}` 400; `GET /api/state` ownerQueue item carries
 `kind: 'task'`; MCP `ask_owner` with `kind: 'task'` then `record_decision` with only `id` succeeds
-(**control C3**: in `store.decide`, drop the pass-through of `kind`… no — `kind` lives on the card;
-instead perturb `decide` in core to require words for tasks → the MCP/CLI "nothing" test fails).
+(**control C3**: in `store.ask`, drop the `kind` pass-through to `askDecision` → the card is
+written as a plain question, so the CLI test asserting `kind: task` in the card file AND the
+"decide with nothing" test both fail; paste both assertions).
 
 ### Docs
 

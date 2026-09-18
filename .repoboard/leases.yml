@@ -1,6 +1,6 @@
 leases:
-  - resource: RCB-47
+  - resource: RCB-52
     holder: builder
-    since: 2026-09-18T20:21:30Z
-    note: RCB-47 log --last reader
+    since: 2026-09-18T20:32:48Z
+    note: RCB-52 owner tasks in the decide queue
 windows: []

@@ -1,4 +1,4 @@
-# freshpickedjobs — routing anchor
+# sample-app — routing anchor
 
 **This file routes; it does not restate.** No counts, hashes or status live here — they move, and a
 stale router is worse than none. Every fact lives in one place and this file says which.
@@ -50,7 +50,7 @@ commit per task carrying its verification output · the README K-entry closed in
 | If you are… | Read |
 |---|---|
 | **Any seat, cold** | `docs/STATE.md` → `docs/log/<today>.md` → `docs/OWNER-DECISIONS.md`. First useful sentence in ≤3 tool calls. |
-| **The SEARCH seat** (owner's live search through the `freshpickedjobs` MCP; never his Chrome) | `docs/SEARCH-SEAT-HANDOFF-2026-09-14.md` highest-numbered section, then `docs/DRAFT-REVIEW-NOTES-2026-09-11.md` §2 (S1–S11). The app is the record: cards, notes, kit. The seat writes decisions and kit changes only. `save_application`/`skip_jobs` on the owner's word. |
+| **The SEARCH seat** (owner's live workflow through the `sample-app` MCP; never his Chrome) | `docs/SEARCH-SEAT-HANDOFF-2026-09-14.md` highest-numbered section, then `docs/DRAFT-REVIEW-NOTES-2026-09-11.md` §2 (the numbered sub-sections). The app is the record: cards, notes, kit. The seat writes decisions and kit changes only. `save_application`/`skip_jobs` on the owner's word. |
 | **The BUILDER** | README §Known issues top to bottom; brief from the pattern in `docs/ROUTER.md`; species list in every brief header. |
 | **OPS (a live run day)** | `docs/log/<yesterday>.md` ops block, `docs/WORKDAY-UNPARK-RUNBOOK.md`, the lane scripts' README. Publish gate windows to `docs/STATE.md` before arming. |
 | **Writing a brief** | `docs/ROUTER.md` "Writing a brief for a subagent" — the pattern, the newest examples, the control rule. |

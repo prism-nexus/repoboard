@@ -592,7 +592,7 @@ Both measured with the built CLI (`pnpm build` first). The freshpickedjobs run i
 
 `CLAUDE.md 5,563 of budget 8,192` — **OK**.
 
-**freshpickedjobs** (`repoboard cost --root /Users/hometown/Projects/Repos/freshpickedjobs`, its
+**freshpickedjobs** (`repoboard cost --root ~/Projects/Repos/freshpickedjobs`, its
 own default budget — it has no `board.yml`):
 
 | File | Bytes | ≈tok | Why |
@@ -718,7 +718,7 @@ non-map-only board (nothing about the write path is reachable from the dry-run b
 ### Measured on freshpickedjobs (read-only — `git status --short` and `.repoboard/` presence both
 unchanged before and after every call)
 
-`sync-issues README.md#Known issues --dry-run --root /Users/hometown/Projects/Repos/freshpickedjobs`,
+`sync-issues README.md#Known issues --dry-run --root ~/Projects/Repos/freshpickedjobs`,
 measured three times as the target repo moved under this task:
 
 | freshpickedjobs HEAD | create | close | malformed | Why it changed |

@@ -20,9 +20,9 @@ most recent is the pattern. Lessons that cost time are HANDOFF §7, numbered.
 
 ## Non-negotiables — these apply to every task
 
-1. **NEVER write to `~/Projects/Repos/Job Seeker/job-seeker-stable`** or `job-seeker-pipeline`.
-   The first is the owner's live job search. Read-only, always, from any repo on this machine.
-   Never `require` its `database.js`; importing it runs a migration chain as a side effect.
+1. **NEVER write to any repo on this machine other than this one** — in particular the owner's
+   other live projects. Read-only, always. Never `require` another repo's `database.js`;
+   importing it runs a migration chain as a side effect.
 2. **Serialize test runs.** Two agents running the suite at once against a shared local resource
    produce failures indistinguishable from real regressions. Any count produced during overlap is
    worthless. Only one holder of the dev server at a time.

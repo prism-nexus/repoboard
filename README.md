@@ -284,7 +284,7 @@ that call is the owner's. No GitHub repo until after v1 (O2).
   Measure both before fixing; the P7.2 read-only guarantee held throughout (`git status` clean,
   `.repoboard/` absent). Filed by the orchestrator; the process was killed to free the box.~~
   Closed 2026-09-17 (measured by the coordinator, then built): the cost was the **repo watcher**,
-  not the scan. `serve --root /Users/hometown/Projects/Repos/freshpickedjobs --port 4243` hit
+  not the scan. `serve --root ~/Projects/Repos/freshpickedjobs --port 4243` hit
   `warning: watcher: EMFILE: too many open files, scandir …/.repoboard/log` at 27 s (RSS 1.46 GB →
   1.61 GB by 36 s, 47 % CPU, `/api/board` never answered), because the chokidar watcher over the
   root skipped only `.git` (mostly), `.repoboard`, and `node_modules`/`dist` segments — it did NOT

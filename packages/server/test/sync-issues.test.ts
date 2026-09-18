@@ -6,6 +6,7 @@
  */
 import { execFile } from 'node:child_process';
 import { createHash } from 'node:crypto';
+import { existsSync } from 'node:fs';
 import { readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
@@ -21,6 +22,11 @@ import { openStore } from '../src/store.js';
 import { makeTempRepoboard, NOW } from './helpers.js';
 
 const execFileAsync = promisify(execFile);
+
+// RCB-46: the read-only proof below needs a real sibling repo, which a public CI box does not
+// have — point $REPOBOARD_SIBLING_ROOT at one to run it (no default); unset or missing, it skips.
+const siblingRoot = process.env.REPOBOARD_SIBLING_ROOT ?? '';
+const hasSiblingRoot = siblingRoot !== '' && existsSync(siblingRoot);
 const dirs: string[] = [];
 const cleanups: Array<() => Promise<void>> = [];
 afterEach(async () => {
@@ -227,23 +233,26 @@ describe('CLI: repoboard sync-issues', () => {
     expect(res.err).toMatch(/not allowed/);
   });
 
-  it('the read-only proof: a real (dry-run) call against freshpickedjobs leaves its git status unchanged', async () => {
-    const fpjRoot = '/Users/hometown/Projects/Repos/freshpickedjobs';
-    const before = await execFileAsync('git', ['-C', fpjRoot, 'status', '--short']);
-    const res = await repoboard(
-      await fixture(),
-      'sync-issues',
-      'README.md#Known issues',
-      '--dry-run',
-      '--root',
-      fpjRoot,
-    );
-    expect(res.code).toBe(0);
-    expect(res.out).toMatch(/would create \d+, close \d+, malformed \d+, unchanged \d+/);
-    const after = await execFileAsync('git', ['-C', fpjRoot, 'status', '--short']);
-    expect(after.stdout).toBe(before.stdout);
-    expect(after.stdout).toBe('');
-  });
+  it.skipIf(!hasSiblingRoot)(
+    'the read-only proof: a real (dry-run) call against freshpickedjobs leaves its git status unchanged',
+    async () => {
+      const fpjRoot = siblingRoot;
+      const before = await execFileAsync('git', ['-C', fpjRoot, 'status', '--short']);
+      const res = await repoboard(
+        await fixture(),
+        'sync-issues',
+        'README.md#Known issues',
+        '--dry-run',
+        '--root',
+        fpjRoot,
+      );
+      expect(res.code).toBe(0);
+      expect(res.out).toMatch(/would create \d+, close \d+, malformed \d+, unchanged \d+/);
+      const after = await execFileAsync('git', ['-C', fpjRoot, 'status', '--short']);
+      expect(after.stdout).toBe(before.stdout);
+      expect(after.stdout).toBe('');
+    },
+  );
 });
 
 describe('HTTP: POST /api/sync-issues', () => {

@@ -1,4 +1,5 @@
 import { execFile } from 'node:child_process';
+import { existsSync } from 'node:fs';
 import { mkdir, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { basename, dirname, join } from 'node:path';
 import { promisify } from 'node:util';
@@ -8,6 +9,11 @@ import { findRoot, formatTable, run } from '../src/cli.js';
 import { cardText, makeTempDir, makeTempRepoboard, makeTempRepoNoBoard, NOW } from './helpers.js';
 
 const execFileAsync = promisify(execFile);
+
+// RCB-46: the read-only proof below needs a real sibling repo, which a public CI box does not
+// have — point $REPOBOARD_SIBLING_ROOT at one to run it (no default); unset or missing, it skips.
+const siblingRoot = process.env.REPOBOARD_SIBLING_ROOT ?? '';
+const hasSiblingRoot = siblingRoot !== '' && existsSync(siblingRoot);
 
 const dirs: string[] = [];
 afterEach(async () => {
@@ -1546,13 +1552,16 @@ describe('repoboard cost', () => {
     expect((await repoboard(root, 'cost', '--budget', 'nope')).code).toBe(1);
   });
 
-  it('the read-only proof: a real run against freshpickedjobs leaves its git status unchanged', async () => {
-    const fpjRoot = '/Users/hometown/Projects/Repos/freshpickedjobs';
-    const before = await execFileAsync('git', ['-C', fpjRoot, 'status', '--short']);
-    const res = await repoboard(await makeTempDir(), 'cost', '--root', fpjRoot);
-    expect(res.code).toBe(0);
-    const after = await execFileAsync('git', ['-C', fpjRoot, 'status', '--short']);
-    expect(after.stdout).toBe(before.stdout);
-    expect(after.stdout).toBe('');
-  });
+  it.skipIf(!hasSiblingRoot)(
+    'the read-only proof: a real run against freshpickedjobs leaves its git status unchanged',
+    async () => {
+      const fpjRoot = siblingRoot;
+      const before = await execFileAsync('git', ['-C', fpjRoot, 'status', '--short']);
+      const res = await repoboard(await makeTempDir(), 'cost', '--root', fpjRoot);
+      expect(res.code).toBe(0);
+      const after = await execFileAsync('git', ['-C', fpjRoot, 'status', '--short']);
+      expect(after.stdout).toBe(before.stdout);
+      expect(after.stdout).toBe('');
+    },
+  );
 });

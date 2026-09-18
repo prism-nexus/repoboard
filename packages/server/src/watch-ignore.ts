@@ -8,7 +8,7 @@
  * all of it anyway: two different definitions of "the repo", and the watcher's was the wrong one.
  *
  * Measured cause (coordinator, 2026-09-17 ~23:5xZ, `serve --root
- * /Users/hometown/Projects/Repos/freshpickedjobs --port 4243`): at 27s the log said `warning:
+ * ~/Projects/Repos/freshpickedjobs --port 4243`): at 27s the log said `warning:
  * watcher: EMFILE: too many open files, scandir …/.repoboard/log` (the store's own watcher
  * starved too); RSS 1.46 GB at 27s → 1.61 GB at 36s, 47% CPU, `/api/board` never answered. The
  * gitignored tree on that root was `packages/db/backups` (19 GB of pg dumps), `apps/web/.wrangler`

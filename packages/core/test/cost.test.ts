@@ -1,8 +1,8 @@
 /**
  * P8.4 (plan §5 P8.4, §11 O9): `extractLinkedPaths` (the backtick rule), `summarizeCost` (the
- * arithmetic and the OVER rule), `formatCostTable`. The fpj fixture is a COPY of
- * freshpickedjobs' own CLAUDE.md (read-only source, non-negotiable 1), copied once into this
- * fixture rather than referenced, so this test never touches that repo.
+ * arithmetic and the OVER rule), `formatCostTable`. RCB-46: the sample fixture is shaped like a
+ * real routing CLAUDE.md, names genericised 2026-09-18, copied once into this fixture rather than
+ * referenced, so this test never touches a real repo.
  */
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -17,7 +17,7 @@ import {
   summarizeCost,
 } from '../src/cost.js';
 
-const FPJ_CLAUDE_MD = fileURLToPath(new URL('./fixtures/fpj-claude.md', import.meta.url));
+const SAMPLE_CLAUDE_MD = fileURLToPath(new URL('./fixtures/sample-claude.md', import.meta.url));
 
 /**
  * Written BY HAND from freshpickedjobs' real CLAUDE.md (2026-09-17, 4,996 B, read-only source),
@@ -26,7 +26,7 @@ const FPJ_CLAUDE_MD = fileURLToPath(new URL('./fixtures/fpj-claude.md', import.m
  * to trusting an expectation only after writing it independently). In order of first appearance;
  * every other backticked span in the file is excluded for a reason recorded below.
  */
-const FPJ_EXPECTED_LINKED_PATHS = [
+const SAMPLE_EXPECTED_LINKED_PATHS = [
   'docs/STATE.md',
   'docs/OWNER-DECISIONS.md',
   'README.md',
@@ -40,10 +40,10 @@ const FPJ_EXPECTED_LINKED_PATHS = [
   'docs/archive/CLAUDE-2026-09-17.md',
 ] as const;
 
-describe('extractLinkedPaths — the fpj CLAUDE.md fixture', () => {
+describe('extractLinkedPaths — the sample CLAUDE.md fixture', () => {
   it('extracts exactly the hand-written list, in order, deduplicated', () => {
-    const text = readFileSync(FPJ_CLAUDE_MD, 'utf8');
-    expect(extractLinkedPaths(text)).toEqual([...FPJ_EXPECTED_LINKED_PATHS]);
+    const text = readFileSync(SAMPLE_CLAUDE_MD, 'utf8');
+    expect(extractLinkedPaths(text)).toEqual([...SAMPLE_EXPECTED_LINKED_PATHS]);
   });
 
   it('excludes every other backticked span in the fixture, and says why', () => {
@@ -69,7 +69,7 @@ describe('extractLinkedPaths — the fpj CLAUDE.md fixture', () => {
       'pnpm dev': 'contains a space',
       'pnpm typecheck': 'no slash, no extension',
     };
-    const text = readFileSync(FPJ_CLAUDE_MD, 'utf8');
+    const text = readFileSync(SAMPLE_CLAUDE_MD, 'utf8');
     const extracted = new Set(extractLinkedPaths(text));
     for (const [span, reason] of Object.entries(excludedWithReason)) {
       expect(extracted.has(span), `${JSON.stringify(span)} should be excluded: ${reason}`).toBe(

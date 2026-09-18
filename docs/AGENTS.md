@@ -60,6 +60,19 @@ degrading silently under load. Measured on freshpickedjobs (K12, README): before
 watcher walked 6.36M gitignored files and hit EMFILE at 27 s with RSS climbing past 1.6 GB and
 `/api/board` never answering; after, `/api/board` answered in 4 ms with RSS flat at ~169 MB.
 
+**Repo-scoped routes (RCB-43 slice 2).** With more than one `--root`, every route documented in
+this file also exists under `/api/repos/<key>/…` — `/api/repos/<key>/board`,
+`/api/repos/<key>/cards`, `/api/repos/<key>/repo`, and so on, one for one with the unprefixed
+`/api/…` route, which keeps meaning the primary (so the existing web keeps working without
+change). The server strips the `/api/repos/<key>` prefix once and hands the rest to that root's
+own handler unchanged. `GET /api/repos/<key>` alone (no further path) answers with that one
+root's `GET /api/repos` list entry, without opening it; `GET /api/repos/<key>/repo` is the one
+route that opens and scans a lazily-opened root on first request (K12 "map on demand"). The WS is
+per root too: `/ws` is always the primary, `/api/repos/<key>/ws` is that root's own socket — a
+`card:move` sent on one never touches another root's files or clients. An unknown key is a 404
+naming every known key. `repos` is a reserved key (a root whose folder is literally `repos`
+becomes `repos-2`, as if it had already collided) so it can never be confused with the list route.
+
 `card list` prints a table by default. `--json` prints one compact row per line, without the body:
 `{id, title, status, assignee, priority, labels, files, updated}`, absent scalars as `null`;
 `--json --full` adds `body` and the rest of the frontmatter. On this repo's 31 cards, measured

@@ -144,3 +144,86 @@ board survives reload; the sibling links (RCB-42) stay for boards served by OTHE
 Dogfood: the builder starts one process on a third port with `--root <this repo> --root
 <fpj>` and looks at both boards in the browser; :4242/:4243 keep running until the coordinator
 says otherwise.
+
+---
+
+## Slice 2 — detailed brief (written after slice 1 landed 820b52f)
+
+Baseline on `main` @ 820b52f: 723 passed | 2 skipped (725), 45 files; typecheck 0; lint 129 clean.
+
+### What exists after slice 1
+`startServer` (`http.ts`) routes: `/api/repos` → `reposPayload(registry)`; every other `/api/*`
+→ `primary.handleApi(method, url, req, res)`; `upgrade` → `primary.handleUpgrade(...)`, which
+accepts only `pathname === '/ws'`. `handleApi` computes `const path = url.pathname` once
+(`repo-context.ts:819`) and matches against `/api/...` literals below it. `RepoRegistry.openRepo(key)`
+opens lazily; `RepoContext.ensureScanned()` is the map-on-demand trigger; nothing calls it for a
+non-primary root yet.
+
+### Design
+**1. Prefix strip, once, in the router — not in `handleApi`.** In `startServer`'s `createServer`
+callback: if `url.pathname` matches `^/api/repos/([^/]+)(/.*)?$`:
+- key = decodeURIComponent(m[1]); rest = m[2] ?? '' — `rest` must start with `/` or be empty.
+- `rest === ''` or `rest === '/'` → **`GET /api/repos/<key>`**: one repo's entry from
+  `reposPayload` (same shape as a list item), 404 for an unknown key. Does NOT open the repo.
+- otherwise: `registry.openRepo(key)` (404 on unknown key — message lists the known keys), then
+  call `ctx.handleApi(method, scopedUrl, req, res)` where `scopedUrl` is a NEW `URL` whose
+  pathname is `'/api' + rest` and whose search is the original's. `handleApi` itself is **not
+  edited** — it keeps matching `/api/...` literals; the router presents it a URL it already
+  understands. (This is the "one prefix strip, one registry lookup, then the same handleApi" the
+  slice-2 outline promised.)
+- `rest === '/repo'` (and `GET /api/repos/<key>/repo` only): `await ctx.ensureScanned()` BEFORE
+  delegating, so the first map request scans (K12 map on demand). The primary's `/api/repo` is
+  unchanged (already scanned at start when `scan` is true).
+- Everything unprefixed keeps meaning the primary. `GET /api/repos` (list, exact match) is tried
+  before the prefixed form. A root whose folder is literally `repos` would still be addressable
+  as `/api/repos/repos/...`, but to keep keys unambiguous `assignRepoKeys` treats `repos` as
+  reserved: such a root gets `repos-2` as if it had collided. One line, one test.
+
+**2. Per-root WS.** `upgrade`: `pathname === '/ws'` → primary (unchanged). `pathname` matching
+`^/api/repos/([^/]+)/ws$` → `registry.openRepo(key)` then `ctx.handleUpgrade` — but `handleUpgrade`
+checks `pathname !== '/ws'`; give `RepoContext.handleUpgrade` an already-parsed decision instead:
+change its signature to `handleUpgrade(req, socket, head)` → `acceptUpgrade(req, socket, head)` that
+does NOT re-check the path (the router already did), and keep the old `/ws`-checking behaviour in
+the router for the primary. On WS connection for a non-primary root, `ensureScanned()` is kicked
+(not awaited — the snapshot goes out as today, the `repo` message follows when the scan lands,
+exactly like the primary's initial-scan → broadcast path). Unknown key or a promise rejection →
+`socket.destroy()`.
+
+**3. `reposPayload` gains nothing new**; `open`/`scanned` already flip as slice 2 exercises them.
+
+**4. Static files** unchanged: a request for `/api/repos/<key>/…` that is not an API route (e.g.
+`/api/repos/x/index.html`) is a 404 from `handleApi`, not a static hit — say so in a test.
+
+### Owns (slice 2)
+`packages/server/src/http.ts`, `packages/server/src/repo-context.ts` (only `handleUpgrade` →
+`acceptUpgrade`, the doc comment on `handleApi` saying it may be reached via a scoped URL, and
+the reserved-key line in `assignRepoKeys`), `packages/server/test/multiroot.test.ts`,
+`packages/server/test/http.test.ts` (only if a helper is needed), `docs/AGENTS.md` (§3 or wherever
+HTTP routes are listed per topic: one paragraph "repo-scoped routes"), `README.md` (one sentence
+next to the slice-1 sentence).
+
+### Tests (slice 2), `multiroot.test.ts`
+1. Two roots a (board) + b (board): the scoped path is `/api/repos/<b>/board` (rest `/board` →
+   `/api/board` inside handleApi). Assert it returns b's cards, not a's; `GET /api/board` still
+   returns a's.
+2. Scoped write: `POST /api/repos/<b>/cards` creates a card in b's `.repoboard/cards/` and NOT
+   in a's; b's `events.jsonl` gets the line, a's does not.
+3. Unknown key → 404 whose message contains every known key. `GET /api/repos/<b>` (no rest) →
+   the one entry, and `repos()` shows b still unopened afterwards.
+4. Map on demand over HTTP: after `GET /api/repos/<b>/board`, b `scanCount()===0`; after
+   `GET /api/repos/<b>/repo`, `scanCount()===1` and the response has `files`.
+5. Per-root WS: connect to `/api/repos/<b>/ws`, receive a snapshot whose `board.cards` are b's;
+   a `card:move` sent on that socket moves b's card (file on disk) and a's file is untouched;
+   a client on `/ws` receives NO message for it, a client on b's WS receives `card`.
+6. Reserved key: a root whose folder is `repos` gets key `repos-2`; `GET /api/repos` still lists.
+7. Boardless b: `POST /api/repos/<b>/cards` → 409, `b/.repoboard` still absent (O7 held through
+   the scoped path).
+Control: drop the `ensureScanned()` await on `/repo` → test 4 fails (paste); restore. Second
+control: route the scoped request to `primary.handleApi` instead of `ctx.handleApi` → test 1
+fails with a's cards; restore.
+
+### Rules
+As every slice (no commit; no `pnpm test`; targeted `vitest run test/multiroot.test.ts
+test/http.test.ts test/repo-watch.test.ts`; typecheck 0 per save; no `any`; biome from root;
+stay in Owns; ports 0 only; never touch :4242/:4243/:5173/:8787; controls the CLAUDE.md way;
+`packages/web` untouched — slice 3 is the web).

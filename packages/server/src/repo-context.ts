@@ -544,8 +544,19 @@ export interface RepoContext {
   readonly store: CardStore;
   /** THIS root's clients only. */
   readonly wss: WebSocketServer;
+  /**
+   * RCB-43 slice 2: reached two ways now — unprefixed (`/api/...`), only for the primary; or via
+   * `startServer`'s router stripping `/api/repos/<key>` once and handing this the same shape of
+   * URL (`/api/...`) it always understood. This function does not know which happened and does
+   * not need to — its route matching is unchanged.
+   */
   handleApi(method: string, url: URL, req: IncomingMessage, res: ServerResponse): Promise<void>;
-  handleUpgrade(req: IncomingMessage, socket: Duplex, head: Buffer): void;
+  /**
+   * RCB-43 slice 2: accepts a WS upgrade unconditionally — the caller (`startServer`'s `upgrade`
+   * handler) has already decided this request belongs to THIS context (`/ws` for the primary,
+   * `/api/repos/<key>/ws` for any other root) and does not re-check the path here.
+   */
+  acceptUpgrade(req: IncomingMessage, socket: Duplex, head: Buffer): void;
   repo(): ScanResult | null;
   rescan(): Promise<void>;
   /** K12 test surface, unchanged in meaning from the old `RunningServer.watchedPaths()`. */
@@ -1044,12 +1055,7 @@ export async function openRepoContext(key: string, opts: RepoContextOptions): Pr
     throw new HttpError(404, `no route for ${method} ${path}`);
   }
 
-  function handleUpgrade(req: IncomingMessage, socket: Duplex, head: Buffer): void {
-    const url = new URL(req.url ?? '/', 'http://localhost');
-    if (url.pathname !== '/ws') {
-      socket.destroy();
-      return;
-    }
+  function acceptUpgrade(req: IncomingMessage, socket: Duplex, head: Buffer): void {
     wss.handleUpgrade(req, socket, head, (ws) => wss.emit('connection', ws, req));
   }
 
@@ -1060,7 +1066,7 @@ export async function openRepoContext(key: string, opts: RepoContextOptions): Pr
     store,
     wss,
     handleApi,
-    handleUpgrade,
+    acceptUpgrade,
     repo: () => repo,
     rescan,
     watchedPaths: () => (repoWatcher ? flattenWatchedPaths(repoWatcher, root) : []),
@@ -1098,6 +1104,10 @@ export interface RootEntry {
  */
 export function assignRepoKeys(roots: string[]): RootEntry[] {
   const counts = new Map<string, number>();
+  // RCB-43 slice 2: `repos` is reserved — `GET /api/repos` is the list route, so a root whose
+  // folder is literally `repos` must not collide with it. Seeding the count as if one `repos`
+  // already exists makes the first real one `repos-2`, same as any other name collision.
+  counts.set('repos', 1);
   return roots.map((root) => {
     const base = basename(root).toLowerCase();
     const n = (counts.get(base) ?? 0) + 1;

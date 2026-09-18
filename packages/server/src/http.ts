@@ -12,7 +12,7 @@
 
 import { createReadStream } from 'node:fs';
 import { stat } from 'node:fs/promises';
-import { createServer, type Server, type ServerResponse } from 'node:http';
+import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { dirname, extname, join, normalize, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -215,38 +215,83 @@ async function serveStatic(
   createReadStream(target).pipe(res);
 }
 
+interface RepoEntry {
+  key: string;
+  root: string;
+  name: string;
+  hasBoard: boolean;
+  open: boolean;
+  scanned: boolean;
+}
+
+/** One entry of `GET /api/repos`, shared with the single-repo lookup (`GET /api/repos/<key>`,
+ * slice 2) so the two never drift: unopened, `config`/`name` come from `null` (the folder name
+ * is the honest answer, per `boardDisplayName`) and `hasBoard` from a stat (`hasBoardDir`),
+ * never an open. */
+function repoEntry(registry: RepoRegistry, key: string, root: string): RepoEntry {
+  const ctx = registry.context(key);
+  const config = ctx ? ctx.store.config : null;
+  return {
+    key,
+    root,
+    name: boardDisplayName(config, root),
+    hasBoard: ctx ? ctx.store.hasBoard : hasBoardDir(root),
+    open: ctx !== undefined,
+    scanned: ctx ? ctx.scanCount() > 0 : false,
+  };
+}
+
 /**
- * RCB-43 slice 1: `GET /api/repos` — the only new route this slice. Lists every `--root`, in
- * order, without opening any of them: `config`/`name` for an unopened root come from `null` (the
- * folder name is the honest answer, per `boardDisplayName`) and `hasBoard` from a stat
- * (`hasBoardDir`), never an open.
+ * RCB-43 slice 1: `GET /api/repos` — lists every `--root`, in order, without opening any of them.
  */
-function reposPayload(registry: RepoRegistry): {
-  primary: string;
-  repos: Array<{
-    key: string;
-    root: string;
-    name: string;
-    hasBoard: boolean;
-    open: boolean;
-    scanned: boolean;
-  }>;
-} {
+function reposPayload(registry: RepoRegistry): { primary: string; repos: RepoEntry[] } {
   return {
     primary: registry.primaryKey,
-    repos: registry.roots.map(({ key, root }) => {
-      const ctx = registry.context(key);
-      const config = ctx ? ctx.store.config : null;
-      return {
-        key,
-        root,
-        name: boardDisplayName(config, root),
-        hasBoard: ctx ? ctx.store.hasBoard : hasBoardDir(root),
-        open: ctx !== undefined,
-        scanned: ctx ? ctx.scanCount() > 0 : false,
-      };
-    }),
+    repos: registry.roots.map(({ key, root }) => repoEntry(registry, key, root)),
   };
+}
+
+/** RCB-43 slice 2: `GET /api/repos/<key>(/…)?` — one path segment for the key, the rest (`''` for
+ * an exact or trailing-slash match) forwarded to that root's own `handleApi` after a rewrite to
+ * `/api<rest>`. `handleApi` is never edited to know about this prefix. */
+const REPOS_SCOPED = /^\/api\/repos\/([^/]+)(\/.*)?$/;
+
+/** RCB-43 slice 2: the per-root WS, `/api/repos/<key>/ws` — matched only in the `upgrade`
+ * handler, never by `REPOS_SCOPED` (a WS request never reaches `createServer`'s callback). */
+const REPOS_WS = /^\/api\/repos\/([^/]+)\/ws$/;
+
+function unknownKeyError(registry: RepoRegistry, key: string): HttpError {
+  const known = registry.roots.map((r) => r.key).join(', ');
+  return new HttpError(404, `unknown repo key "${key}" (known: ${known})`);
+}
+
+/**
+ * RCB-43 slice 2: the one prefix strip, one registry lookup, then the same `handleApi` — see
+ * this file's header and `docs/RCB-43-MULTIROOT-BRIEF.md` §Slice 2. `rest === ''` or `'/'` on a
+ * `GET` answers from `reposPayload`'s per-entry shape WITHOUT opening the root (mirrors
+ * `GET /api/repos` itself); anything else opens the root (404 on an unknown key, naming every
+ * known key) and delegates. `GET .../repo` awaits `ensureScanned()` first — map on demand.
+ */
+async function handleScopedApi(
+  registry: RepoRegistry,
+  method: string,
+  url: URL,
+  req: IncomingMessage,
+  res: ServerResponse,
+  key: string,
+  rest: string,
+): Promise<void> {
+  if (method === 'GET' && (rest === '' || rest === '/')) {
+    const entry = registry.roots.find((r) => r.key === key);
+    if (!entry) throw unknownKeyError(registry, key);
+    return sendJson(res, 200, repoEntry(registry, entry.key, entry.root));
+  }
+  if (!registry.roots.some((r) => r.key === key)) throw unknownKeyError(registry, key);
+  const ctx = await registry.openRepo(key);
+  if (method === 'GET' && rest === '/repo') await ctx.ensureScanned();
+  const scopedUrl = new URL(`/api${rest}`, 'http://localhost');
+  scopedUrl.search = url.search;
+  return ctx.handleApi(method, scopedUrl, req, res);
 }
 
 export async function startServer(opts: ServerOptions): Promise<RunningServer> {
@@ -298,13 +343,25 @@ export async function startServer(opts: ServerOptions): Promise<RunningServer> {
   const server: Server = createServer((req, res) => {
     const method = req.method ?? 'GET';
     const url = new URL(req.url ?? '/', 'http://localhost');
-    const work = url.pathname.startsWith('/api/')
-      ? method === 'GET' && url.pathname === '/api/repos'
+    const scopedMatch = REPOS_SCOPED.exec(url.pathname);
+    const work =
+      method === 'GET' && url.pathname === '/api/repos'
         ? Promise.resolve(sendJson(res, 200, reposPayload(registry)))
-        : primary.handleApi(method, url, req, res)
-      : method === 'GET' || method === 'HEAD'
-        ? serveStatic(webDir, url.pathname, res, method === 'HEAD')
-        : Promise.reject(new HttpError(405, 'method not allowed'));
+        : scopedMatch
+          ? handleScopedApi(
+              registry,
+              method,
+              url,
+              req,
+              res,
+              decodeURIComponent(scopedMatch[1] ?? ''),
+              scopedMatch[2] ?? '',
+            )
+          : url.pathname.startsWith('/api/')
+            ? primary.handleApi(method, url, req, res)
+            : method === 'GET' || method === 'HEAD'
+              ? serveStatic(webDir, url.pathname, res, method === 'HEAD')
+              : Promise.reject(new HttpError(405, 'method not allowed'));
     work.catch((e: unknown) => {
       if (res.headersSent) {
         res.destroy();
@@ -316,8 +373,29 @@ export async function startServer(opts: ServerOptions): Promise<RunningServer> {
   });
 
   server.on('upgrade', (req, socket, head) => {
-    // RCB-43 slice 1: only the primary's `wss` — a request for another root's WS is slice 2.
-    primary.handleUpgrade(req, socket, head);
+    const url = new URL(req.url ?? '/', 'http://localhost');
+    // Unprefixed `/ws` always means the primary — unchanged from slice 1. `RepoContext.
+    // acceptUpgrade` no longer checks the path itself (slice 2): this router is the one place
+    // that decides which context a WS upgrade belongs to.
+    if (url.pathname === '/ws') {
+      primary.acceptUpgrade(req, socket, head);
+      return;
+    }
+    const wsMatch = REPOS_WS.exec(url.pathname);
+    const key = wsMatch ? decodeURIComponent(wsMatch[1] ?? '') : null;
+    if (!key || !registry.roots.some((r) => r.key === key)) {
+      socket.destroy();
+      return;
+    }
+    registry.openRepo(key).then(
+      (ctx) => {
+        ctx.acceptUpgrade(req, socket, head);
+        // K12 map on demand: kicked, not awaited — the snapshot goes out immediately (repo:
+        // null until the scan lands, exactly the primary's own initial-scan → broadcast path).
+        void ctx.ensureScanned();
+      },
+      () => socket.destroy(),
+    );
   });
 
   await new Promise<void>((res, rej) => {

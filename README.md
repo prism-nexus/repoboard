@@ -145,7 +145,8 @@ name instead. `siblings` (RCB-42) is optional too — other running boards, show
 links; `serve --sibling <name>=<url>` (repeatable) adds more for that process only, and on a name
 collision the flag wins. `serve --root <dir>` is repeatable too (RCB-43) — the first is the
 primary and opens immediately, every later one is just registered and opens lazily, on first
-request. `logDir` (P8.6) is optional too — a repo-root-relative path to an
+request. Every route also exists per root, at `/api/repos/<key>/…` — unprefixed paths still mean
+the primary, so nothing already served changes. `logDir` (P8.6) is optional too — a repo-root-relative path to an
 additional directory of daily `<YYYY-MM-DD>.md` files (e.g. `docs/log`) that `repoboard check`
 reads alongside `.repoboard/log/`; `repoboard log` never writes there, and an absent or
 nonexistent `logDir` behaves exactly like today. `columns` (RCB-34/P7.3, plan §11 O6) is also

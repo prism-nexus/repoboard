@@ -1,7 +1,7 @@
 ---
 id: RCB-34
 title: P7.3 Columns editable in the app (O6)
-status: doing
+status: done
 assignee: builder
 priority: medium
 labels:
@@ -15,7 +15,7 @@ refs:
   - docs/BUILD-PLAN.md@P7.3
   - docs/BUILD-PLAN.md@O6
 created: 2026-09-07T19:46:59Z
-updated: 2026-09-18T22:39:36Z
+updated: 2026-09-18T22:40:59Z
 ---
 
 ## Log
@@ -23,3 +23,4 @@ updated: 2026-09-18T22:39:36Z
 - 2026-09-18T22:15:57Z builder — moved todo → doing
 - 2026-09-18T22:15:57Z builder — updated assignee
 - 2026-09-18T22:39:36Z builder — updated files
+- 2026-09-18T22:40:59Z coordinator — moved doing → done

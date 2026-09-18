@@ -1,12 +1,15 @@
 # STATE
 
-**Written 2026-09-18T18:28:33Z by coordinator.**
+**Written 2026-09-18T18:35:18Z by coordinator.**
 
 ## LIVE
 
 Dashboard http://127.0.0.1:4242 serving this repo; the fpj sibling on :4243 (RCB-42). No leases, no windows. Public remote (RCB-24): https://github.com/prism-nexus/repoboard — EMPTY, push HELD for the owner's word after RCB-46's scrub lands; npm account comes later (K5 waits; names measured free 18:2xZ). Builder seat is on RCB-44/45; then RCB-46 scrub → RCB-47/48 handoff tooling → RCB-49 open-source files → K11 → RCB-34 → K5 → RCB-43. Landed since the previous stamp: P8.5 3c314d5, K12 7843553, RCB-41, RCB-42, P8.6 563d5c0, K13 da7284d.
 
 ## LAST LANDINGS
+
+-2. **K11 3317bfb — 2026-09-18 19:1xZ, verified by content** (the watcher test pre-creates its card and starts with a `change`; README entry closed in the commit; 631/631 ×12 after vs 2 of 6 failing before, different load). RCB-46 scrub in doing; owner's answers relayed: the dogfood `.repoboard/` IS public, the append-only log keeps the old handle.
+
 
 -1. **RCB-44 795056e + RCB-45 3c2c3ec — 2026-09-18 19:0xZ, verified by content by the coordinator** (ticker lines carry shortTitle(≤48) beside the id; STATE LIVE window-locked at height 160px with inner scroll; two fpj-board layout fixes measured in the browser: .app grid minmax(0,1fr), .state-panel__section min-width 0). Also a80efd4 (biome format, lint green again since 563d5c0). Gate 631/631 ×4 of 6, the two misses = K11 (next). Both dashboards restarted on this build.
 

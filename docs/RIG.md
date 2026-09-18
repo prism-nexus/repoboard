@@ -51,6 +51,13 @@ Sonnet, dispatched from a written brief at `docs/<CARD>-…-BRIEF.md`. A subagen
 stays inside its brief's named file list, and never runs `pnpm test` (the orchestrating seat
 holds the vitest lock and runs the suite).
 
+## Shared checkout — staging
+
+Two seats commit in this one checkout. **Stage by named path, never `git commit -a` or `git add -A`**
+— a builder agent's half-done files may be sitting in the tree (or even STAGED, if it ran `git rm`/`git add`).
+A subagent does not stage anything; if one hands back with files staged, unstage them first
+(`git restore --staged <path>`). Pull `--ff-only` before every commit; the other seat may have moved HEAD.
+
 ## Gate per landing
 
 - Targeted vitest on the touched files while building.

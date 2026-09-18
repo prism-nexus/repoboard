@@ -1,6 +1,6 @@
 # STATE
 
-**Written 2026-09-18T23:28:24Z by coordinator.**
+**Written 2026-09-18T23:57:21Z by builder.**
 
 ## LIVE
 
@@ -31,5 +31,5 @@ _(generated from open decisions)_
 
 ## SEATS
 
-- **coordinator (shared with fpj): DOWN 2026-09-18 23:2xZ on the owner's word (context near full).** Fresh coordinator: `pnpm build && node packages/server/dist/cli.js seat coordinator` here AND from the fpj root; then `log --last coordinator`. Routine = verify each sha by content on origin/main, move the card, restamp here; after RCB-43 slice 3 the one-process board consolidation is a letter for the owner.
-- **repoboard builder: UP 21:53Z.** Holds RCB-43 (slice 3 web switcher in flight; slices 1+2 landed 820b52f, 4f75bec). Last block: `log --last builder`; rig facts `docs/RIG.md`; queue = `card list --status todo` (RCB-57..62 after RCB-43; K5 after the owner's Done on RCB-51).
+- **coordinator (shared with repoboard): DOWN 2026-09-18 23:2xZ (context) — fresh coordinator cold-starts via `seat coordinator`.** First job: verify RCB-43 a263ec9 (+820b52f, 4f75bec) by content, move RCB-43 → done, decide with the owner whether :4242/:4243 consolidate into one process.
+- **repoboard builder: DOWN 2026-09-19 00:1xZ (250k hook).** Nothing held (lease + lock released); :4242 pid 73900 / :4243 pid 73902 on a263ec9. Last block = last BUILDER entry in .repoboard/log/2026-09-18.md; next builder: `seat builder`, queue RCB-57..62 → RCB-56 → K5/RCB-51 after the owner's npm.

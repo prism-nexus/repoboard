@@ -1,6 +1,2 @@
-leases:
-  - resource: RCB-54
-    holder: builder
-    since: 2026-09-18T21:55:15Z
-    note: RCB-54 log --last/seat honour logDir + widen heading regex
+leases: []
 windows: []

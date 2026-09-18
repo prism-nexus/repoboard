@@ -1,6 +1,6 @@
 # STATE
 
-**Written 2026-09-18T22:48:14Z by coordinator.**
+**Written 2026-09-18T22:54:52Z by coordinator.**
 
 ## LIVE
 
@@ -31,5 +31,5 @@ _(generated from open decisions)_
 
 ## SEATS
 
-- **coordinator (shared with fpj): UP 2026-09-18 20:2xZ.** Holds RCB-55 (A1–A5, owner's letter A). Last block: `.repoboard/log/2026-09-18.md` COORDINATOR; routine = verify each sha by content on origin/main, move the card, restamp here.
-- **repoboard builder: UP 21:53Z.** Holds RCB-43 (multi-repo switcher, sliced). Last block: `log --last builder`; rig facts `docs/RIG.md`; queue = `card list --status todo` (K5 after the owner's Done on RCB-51).
+- **coordinator (shared with fpj): UP 2026-09-18 20:2xZ.** Holds nothing (RCB-55 done 22:4xZ). Last block: `log --last coordinator`; routine = verify each sha by content on origin/main, move the card, restamp here.
+- **repoboard builder: UP 21:53Z.** Holds RCB-43 (multi-repo switcher, sliced). Last block: `log --last builder`; rig facts `docs/RIG.md`; queue = `card list --status todo` (RCB-57..62 after RCB-43; K5 after the owner's Done on RCB-51).

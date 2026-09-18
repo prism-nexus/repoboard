@@ -1,2 +1,6 @@
-leases: []
+leases:
+  - resource: RCB-47
+    holder: builder
+    since: 2026-09-18T20:21:30Z
+    note: RCB-47 log --last reader
 windows: []

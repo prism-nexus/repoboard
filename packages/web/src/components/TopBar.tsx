@@ -1,7 +1,8 @@
-import type { RepoSnapshot } from '@repoboard/core';
+import { type BoardConfig, boardDisplayName, type RepoSnapshot } from '@repoboard/core';
 import type { Theme, View } from '../store.js';
 
 interface Props {
+  config: BoardConfig | null;
   repo: RepoSnapshot | null;
   connected: boolean;
   fun: boolean;
@@ -12,18 +13,24 @@ interface Props {
   onTheme: (t: Theme) => void;
 }
 
-function repoName(root: string): string {
-  return root.split(/[\\/]/).filter(Boolean).pop() ?? root;
-}
-
-export function TopBar({ repo, connected, fun, theme, view, onView, onFun, onTheme }: Props) {
+export function TopBar({
+  config,
+  repo,
+  connected,
+  fun,
+  theme,
+  view,
+  onView,
+  onFun,
+  onTheme,
+}: Props) {
   return (
     <header className="topbar">
       <div className="topbar__repo">
         <span className="topbar__mark">repoboard</span>
         {repo ? (
           <>
-            <span className="topbar__name">{repoName(repo.root)}</span>
+            <span className="topbar__name">{boardDisplayName(config, repo.root)}</span>
             {repo.head ? (
               <span className="mono topbar__head" title={repo.head.sha}>
                 {repo.head.branch} <span className="muted">{repo.head.sha.slice(0, 7)}</span>

@@ -1,6 +1,6 @@
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import type { Card } from '@repoboard/core';
+import { type Card, defaultBoardConfig, serializeBoard } from '@repoboard/core';
 import { afterEach, describe, expect, it } from 'vitest';
 import { WebSocket } from 'ws';
 import { type RunningServer, startServer } from '../src/http.js';
@@ -138,6 +138,36 @@ describe('HTTP routes', () => {
     const r = await rig({}, { fun: false });
     const body = (await json(await fetch(`${r.url}/api/board`))) as { config: { fun: boolean } };
     expect(body.config.fun).toBe(false);
+  });
+
+  it('RCB-41: GET /api/board carries config.name when board.yml sets one, and omits it otherwise', async () => {
+    const repo = await makeTempRepoboard({});
+    cleanups.push(repo.cleanup);
+    await writeFile(
+      join(repo.root, '.repoboard', 'board.yml'),
+      serializeBoard({ ...defaultBoardConfig(), name: 'Fresh Picked Jobs' }),
+    );
+    const store = await openStore(repo.root, { watch: false, now: () => NOW });
+    cleanups.push(() => store.close());
+    const server = await startServer({ store, port: 0, scan: false });
+    cleanups.push(() => server.close());
+    const url = server.url.replace(/\/$/, '');
+
+    const body = (await json(await fetch(`${url}/api/board`))) as { config: { name?: string } };
+    expect(body.config.name).toBe('Fresh Picked Jobs');
+
+    // No name at all: a plain default board — omitted, not null or empty.
+    const noNameRepo = await makeTempRepoboard({});
+    cleanups.push(noNameRepo.cleanup);
+    const noNameStore = await openStore(noNameRepo.root, { watch: false, now: () => NOW });
+    cleanups.push(() => noNameStore.close());
+    const noNameServer = await startServer({ store: noNameStore, port: 0, scan: false });
+    cleanups.push(() => noNameServer.close());
+    const noNameUrl = noNameServer.url.replace(/\/$/, '');
+    const noNameBody = (await json(await fetch(`${noNameUrl}/api/board`))) as {
+      config: { name?: string };
+    };
+    expect('name' in noNameBody.config).toBe(false);
   });
 
   it('POST /api/cards creates via core; bad input is 400', async () => {

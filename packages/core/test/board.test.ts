@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { defaultBoardConfig, findColumn, parseBoard, serializeBoard } from '../src/board.js';
+import {
+  boardDisplayName,
+  defaultBoardConfig,
+  findColumn,
+  parseBoard,
+  serializeBoard,
+} from '../src/board.js';
 
 const SPEC_BOARD = `prefix: RB
 activeWindowMinutes: 30
@@ -89,6 +95,35 @@ describe('parseBoard', () => {
       if (!r.ok) expect(r.error, text).toMatch(re);
     }
   });
+
+  it('RCB-41: accepts an explicit name, trimmed', () => {
+    const r = parseBoard('name: "  Fresh Picked Jobs  "\ncolumns:\n  - id: a\n');
+    expect(r).toEqual({
+      ok: true,
+      config: {
+        name: 'Fresh Picked Jobs',
+        prefix: 'RB',
+        activeWindowMinutes: 30,
+        columns: [{ id: 'a' }],
+      },
+    });
+  });
+
+  it('RCB-41: an absent name stays absent (not defaulted to the folder name in the schema)', () => {
+    const r = parseBoard('columns:\n  - id: a\n');
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect('name' in r.config).toBe(false);
+    expect(r.config.name).toBeUndefined();
+  });
+
+  it('RCB-41: rejects an empty or whitespace-only name', () => {
+    for (const text of ['name: ""\ncolumns:\n  - id: a\n', 'name: "   "\ncolumns:\n  - id: a\n']) {
+      const r = parseBoard(text);
+      expect(r.ok, text).toBe(false);
+      if (!r.ok) expect(r.error, text).toMatch(/name/);
+    }
+  });
 });
 
 describe('serializeBoard', () => {
@@ -106,11 +141,41 @@ describe('serializeBoard', () => {
     );
     expect(parseBoard(text)).toEqual(r);
   });
+
+  it('RCB-41: serializes `name` first, before `prefix`, and round-trips', () => {
+    const r = parseBoard('prefix: RB\nname: Fresh Picked Jobs\ncolumns:\n  - id: a\n');
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    const text = serializeBoard(r.config);
+    expect(text.startsWith('name: Fresh Picked Jobs\nprefix: RB\n')).toBe(true);
+    expect(parseBoard(text)).toEqual(r);
+  });
 });
 
 describe('findColumn', () => {
   it('finds by id or returns undefined', () => {
     expect(findColumn(defaultBoardConfig(), 'doing')?.wip).toBe(3);
     expect(findColumn(defaultBoardConfig(), 'nope')).toBeUndefined();
+  });
+});
+
+describe('boardDisplayName (RCB-41)', () => {
+  it('uses the explicit trimmed name when set', () => {
+    const config = { ...defaultBoardConfig(), name: '  Fresh Picked Jobs  ' };
+    expect(boardDisplayName(config, '/repos/some-folder')).toBe('Fresh Picked Jobs');
+  });
+
+  it('falls back to the last path segment of root when config has no name', () => {
+    expect(boardDisplayName(defaultBoardConfig(), '/repos/some-folder')).toBe('some-folder');
+  });
+
+  it('falls back to the folder name when config is null (before any snapshot)', () => {
+    expect(boardDisplayName(null, '/repos/some-folder')).toBe('some-folder');
+  });
+
+  it('handles a trailing slash and Windows separators', () => {
+    expect(boardDisplayName(null, '/repos/some-folder/')).toBe('some-folder');
+    expect(boardDisplayName(null, 'C:\\repos\\some-folder')).toBe('some-folder');
+    expect(boardDisplayName(null, 'C:\\repos\\some-folder\\')).toBe('some-folder');
   });
 });

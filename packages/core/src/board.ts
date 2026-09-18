@@ -32,6 +32,13 @@ export function defaultBoardConfig(): BoardConfig {
 
 export const BoardConfigSchema = z
   .looseObject({
+    /**
+     * RCB-41: the repo's display name — shown in the top bar and the browser tab title.
+     * Optional; absent means "the folder name" (resolved by `boardDisplayName`, not defaulted
+     * here, so the file stays honest about what it actually says). Trimmed; whitespace-only is
+     * rejected the same as empty.
+     */
+    name: z.string().trim().min(1, 'must not be empty').optional(),
     prefix: z
       .string()
       .regex(/^[A-Za-z][A-Za-z0-9_]*$/, 'must start with a letter and contain only [A-Za-z0-9_]')
@@ -86,7 +93,13 @@ export function parseBoard(text: string): BoardParseResult {
   return { ok: true, config: result.data };
 }
 
-const CONFIG_ORDER = ['prefix', 'activeWindowMinutes', 'claudeMdBudgetBytes', 'columns'] as const;
+const CONFIG_ORDER = [
+  'name',
+  'prefix',
+  'activeWindowMinutes',
+  'claudeMdBudgetBytes',
+  'columns',
+] as const;
 const COLUMN_ORDER = ['id', 'title', 'active', 'wip', 'done', 'decision'] as const;
 
 function orderKeys(
@@ -113,4 +126,19 @@ export function serializeBoard(config: BoardConfig): string {
 /** Find a column by id, or undefined. */
 export function findColumn(config: BoardConfig, id: string): Column | undefined {
   return config.columns.find((c) => c.id === id);
+}
+
+/**
+ * RCB-41: the ONE rule for "what do we call this repo" — the top bar and the browser tab title
+ * both call this instead of keeping their own copy. `config?.name` (trimmed, non-empty) wins;
+ * otherwise the last path segment of `root`, handling a trailing slash and Windows separators.
+ * `config === null` covers a repo served before any snapshot has arrived; a map-only repo (no
+ * `.repoboard/`) still carries a config object (the server's default, standing in for one that
+ * does not exist — P7.2), which has no `name` either, so it falls through to the folder name the
+ * same way.
+ */
+export function boardDisplayName(config: BoardConfig | null, root: string): string {
+  const name = config?.name?.trim();
+  if (name) return name;
+  return root.split(/[\\/]/).filter(Boolean).pop() ?? root;
 }

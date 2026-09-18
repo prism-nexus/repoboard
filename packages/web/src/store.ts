@@ -3,7 +3,14 @@
  * Holds what the wire gives us (config, cards, repo, events, connected) plus UI state.
  * Optimistic moves/updates snap back if the server's `card` echo does not arrive in time.
  */
-import type { BoardConfig, Card, CardPatch, Event, RepoSnapshot } from '@repoboard/core';
+import {
+  type BoardConfig,
+  boardDisplayName,
+  type Card,
+  type CardPatch,
+  type Event,
+  type RepoSnapshot,
+} from '@repoboard/core';
 import type {
   ClientMessage,
   LeasesPayload,
@@ -212,8 +219,13 @@ export function createStore(factory: TransportFactory, opts: StoreOptions = {}):
             // reconnect must not yank the user off a tab they chose themselves.
             view: !hasBoard && !state.everConnected ? 'map' : state.view,
           });
+          applyDocumentTitle(config, msg.repo);
           break;
         }
+        case 'config':
+          set({ config: msg.config });
+          applyDocumentTitle(msg.config, state.repo);
+          break;
         case 'card':
           settle(msg.card.id);
           set({ cards: replaceCard(msg.card) });
@@ -351,6 +363,22 @@ function safeLocalStorage(): Storage | null {
     return typeof localStorage === 'undefined' ? null : localStorage;
   } catch {
     return null;
+  }
+}
+
+/**
+ * RCB-41: `<name> · repoboard` in the browser tab, once a repo is known. Before any snapshot the
+ * title stays `index.html`'s constant (`repoboard`) — this is only ever called from `dispatch`,
+ * which only runs after a message has arrived. `repo` is null only in a test dispatching a
+ * `config` message with no prior snapshot, which does not happen over the real wire.
+ */
+function applyDocumentTitle(config: BoardConfig | null, repo: RepoSnapshot | null): void {
+  if (!repo) return;
+  try {
+    if (typeof document === 'undefined') return;
+    document.title = `${boardDisplayName(config, repo.root)} · repoboard`;
+  } catch {
+    // Same defensiveness as safeLocalStorage: a hostile or unusual `document` must not crash dispatch.
   }
 }
 

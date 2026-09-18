@@ -5,7 +5,7 @@ status: doing
 labels:
   - practices
 created: 2026-09-17T23:32:23Z
-updated: 2026-09-17T23:51:27Z
+updated: 2026-09-18T00:06:42Z
 ---
 
 ## Body
@@ -17,3 +17,4 @@ Build: optional `name:` in `board.yml` (default: folder name, as today); top bar
 
 ## Log
 - 2026-09-17T23:51:27Z claude/builder — moved todo → doing
+- 2026-09-18T00:06:42Z claude/rcb-41 — verified: core parseBoard/serializeBoard/boardDisplayName; server GET /api/board carries config.name (present/absent); web TopBar + Map crumb use boardDisplayName; document.title = "<name> · repoboard" on connect and on a live config message. pnpm test x2: 577/577 both (one interleaved run hit the pre-existing K11 watcher flake in store.test.ts, re-ran clean). typecheck/lint/build all exit 0. Controls C1 (boardDisplayName ignoring config.name) and C2 (dropping the document.title assignment) both watched to fail, then restored byte-identical.

@@ -49,6 +49,7 @@ Name: **repoboard** (Remember · Connect · Build) — decided 2026-09-03, §11 
 
 ### `.repoboard/board.yml`
 ```yaml
+name: My Project        # optional (RCB-41); absent = the served folder's name
 prefix: RB
 activeWindowMinutes: 30
 claudeMdBudgetBytes: 8192  # optional (P8.4); a `repoboard cost --budget` flag wins over this

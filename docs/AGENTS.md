@@ -8,7 +8,8 @@
 CLI, the `repoboard mcp` server, and editing the file directly — writes the same files through the
 same core code, so whichever you use, the others see it within a second. There is no database and
 no registration step: a card is on the board when its file exists, and it is in a column when its
-`status:` says so.
+`status:` says so. `board.yml` may also carry an optional `name:` (RCB-41) — the repo's display
+name in the top bar and browser tab title; absent means the served folder's name (`docs/BUILD-PLAN.md` §2).
 
 Use the surfaces in the order below. Per-operation costs measured 2026-09-03, standing costs
 re-measured 2026-09-07 (bytes on the wire, ≈4 bytes per token): the CLI costs ~40 B in and 33 B

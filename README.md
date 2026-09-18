@@ -112,6 +112,7 @@ page an agent needs, including a paragraph to paste into a `CLAUDE.md`.
 `.repoboard/board.yml` (plan §2; `init` writes this):
 
 ```yaml
+name: My Project
 prefix: RB
 activeWindowMinutes: 30
 columns:
@@ -133,6 +134,8 @@ columns:
 
 `status:` on a card is a column `id`. `active: true` marks the columns whose cards count as
 "in progress" for the map; `wip` is a soft limit — a move past it warns and still moves.
+`name` (RCB-41) is optional — absent means the top bar and tab title show the served folder's
+name instead.
 
 ## Develop
 

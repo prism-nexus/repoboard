@@ -3,6 +3,7 @@ export { resolveOlderThan, selectArchivable } from './archive.js';
 export type { BoardParseResult } from './board.js';
 export {
   BoardConfigSchema,
+  boardDisplayName,
   ColumnSchema,
   defaultBoardConfig,
   findColumn,

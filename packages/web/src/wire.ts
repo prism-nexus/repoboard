@@ -69,6 +69,13 @@ export type ServerMessage =
   | { type: 'card:removed'; id: string }
   | { type: 'repo'; repo: RepoSnapshot }
   | { type: 'event'; event: Event }
+  /**
+   * RCB-41: the server already emits this on a live `board.yml` edit (`store.ts`'s
+   * `loadConfig`/`emit('config', …)`, broadcast in `http.ts`'s `onConfig`) — this type was never
+   * declared on the wire contract, so the web silently dropped it. Declaring it here is what lets
+   * the store pick up a live rename (or any other config change) without waiting for a reconnect.
+   */
+  | { type: 'config'; config: BoardConfig }
   | { type: 'leases'; leases: LeasesPayload }
   | { type: 'state'; state: StatePayload }
   | { type: 'log'; date: string; text: string };

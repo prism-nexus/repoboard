@@ -2,7 +2,7 @@
  * P4 map shell: layer toggle (treemap | graph), heat modes, breadcrumb, legend, the canvas, and
  * the rail ("who is where" + the file panel). All model work lives in ../map/model.ts.
  */
-import { avatarFor, type Card, findColumn } from '@repoboard/core';
+import { avatarFor, boardDisplayName, type Card, findColumn } from '@repoboard/core';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Avatar } from '../components/Avatar.jsx';
 import { CostPanel, CostTile } from '../components/CostTile.jsx';
@@ -144,7 +144,7 @@ export function MapView() {
                 className={`crumbs__item ${crumbs.length === 0 ? 'crumbs__item--here' : ''}`}
                 onClick={() => setZoomPath('')}
               >
-                {repoName(repo.root)}
+                {boardDisplayName(config, repo.root)}
               </button>
               {crumbs.map((seg, i) => {
                 const path = crumbs.slice(0, i + 1).join('/');
@@ -302,10 +302,6 @@ export function MapView() {
       {costOpen ? <CostPanel onClose={() => setCostOpen(false)} /> : null}
     </div>
   );
-}
-
-function repoName(root: string): string {
-  return root.split(/[\\/]/).filter(Boolean).pop() ?? root;
 }
 
 function Legend({

@@ -107,6 +107,9 @@ export interface Column {
 }
 
 export interface BoardConfig {
+  /** RCB-41: optional display name for the top bar / tab title. Absent means "the folder name"
+   * — resolved by `boardDisplayName`, never defaulted here. */
+  name?: string;
   prefix: string;
   activeWindowMinutes: number;
   /** P8.4: `repoboard cost`'s budget for the root `CLAUDE.md`, in bytes. A CLI `--budget` flag

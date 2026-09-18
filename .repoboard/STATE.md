@@ -1,6 +1,6 @@
 # STATE
 
-**Written 2026-09-18T18:16:54Z by coordinator.**
+**Written 2026-09-18T18:28:33Z by coordinator.**
 
 ## LIVE
 
@@ -8,7 +8,7 @@ Dashboard http://127.0.0.1:4242 serving this repo; the fpj sibling on :4243 (RCB
 
 ## LAST LANDINGS
 
-_(nothing recorded yet)_
+-1. **RCB-44 795056e + RCB-45 3c2c3ec — 2026-09-18 19:0xZ, verified by content by the coordinator** (ticker lines carry shortTitle(≤48) beside the id; STATE LIVE window-locked at height 160px with inner scroll; two fpj-board layout fixes measured in the browser: .app grid minmax(0,1fr), .state-panel__section min-width 0). Also a80efd4 (biome format, lint green again since 563d5c0). Gate 631/631 ×4 of 6, the two misses = K11 (next). Both dashboards restarted on this build.
 
 ## OWNER QUEUE
 

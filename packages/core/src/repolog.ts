@@ -74,3 +74,32 @@ export function parseLogBlocks(fileText: string): LogBlock[] {
   }
   return blocks;
 }
+
+/** RCB-47: one day's parsed blocks, as `lastBlockFor` needs them (a subset of `LogFileInfo`). */
+export interface DatedLogBlocks {
+  date: string;
+  blocks: readonly LogBlock[];
+}
+
+/**
+ * RCB-47: the newest block written by `seat` (case-insensitive) across `days`, or `null` when
+ * none exists. Days are sorted by `date` descending here — caller order is not trusted, since
+ * `readdir` order is filesystem-defined — and within a day the LAST matching block (file order)
+ * wins, matching the file's own newest-last invariant. A seat name that is empty after trim is
+ * an unconfigured rule and stays inert: `null`, never a match.
+ */
+export function lastBlockFor(
+  seat: string,
+  days: readonly DatedLogBlocks[],
+): { date: string; block: LogBlock } | null {
+  const wanted = seat.trim().toUpperCase();
+  if (wanted.length === 0) return null;
+  const sorted = [...days].sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : 0));
+  for (const day of sorted) {
+    for (let i = day.blocks.length - 1; i >= 0; i--) {
+      const block = day.blocks[i];
+      if (block && block.seat === wanted) return { date: day.date, block };
+    }
+  }
+  return null;
+}

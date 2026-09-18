@@ -3,7 +3,15 @@
  * per call, newest last. `appendLogBlock` is the only writer core exposes; there is no rewrite.
  */
 import { describe, expect, it } from 'vitest';
-import { appendLogBlock, dailyLogHeader, formatLogBlock, parseLogBlocks } from '../src/repolog.js';
+import {
+  appendLogBlock,
+  type DatedLogBlocks,
+  dailyLogHeader,
+  formatLogBlock,
+  type LogBlock,
+  lastBlockFor,
+  parseLogBlocks,
+} from '../src/repolog.js';
 
 describe('dailyLogHeader', () => {
   it('is the line 1 shape', () => {
@@ -156,5 +164,68 @@ describe('parseLogBlocks', () => {
         text: 'Multi\nline\ntext.',
       },
     ]);
+  });
+});
+
+describe('lastBlockFor', () => {
+  function block(seat: string, ts: string, text = seat): LogBlock {
+    return { seat: seat.toUpperCase(), ts, title: text, text };
+  }
+
+  it('finds the target seat on the middle day, its LAST block that day, not the first', () => {
+    const days: DatedLogBlocks[] = [
+      { date: '2026-09-15', blocks: [block('BUILDER', '2026-09-15T10:00:00Z', 'oldest day')] },
+      {
+        date: '2026-09-16',
+        blocks: [
+          block('BUILDER', '2026-09-16T10:00:00Z', 'middle first'),
+          block('OPS', '2026-09-16T11:00:00Z', 'not builder'),
+          block('BUILDER', '2026-09-16T12:00:00Z', 'middle last'),
+        ],
+      },
+      { date: '2026-09-14', blocks: [block('OPS', '2026-09-14T10:00:00Z', 'no builder here')] },
+    ];
+    const res = lastBlockFor('BUILDER', days);
+    expect(res?.date).toBe('2026-09-16');
+    expect(res?.block.text).toBe('middle last');
+  });
+
+  it("C1: days passed in ASCENDING order still return the newest day's block", () => {
+    const days: DatedLogBlocks[] = [
+      { date: '2026-09-14', blocks: [block('BUILDER', '2026-09-14T10:00:00Z', 'oldest')] },
+      { date: '2026-09-15', blocks: [block('BUILDER', '2026-09-15T10:00:00Z', 'middle')] },
+      { date: '2026-09-16', blocks: [block('BUILDER', '2026-09-16T10:00:00Z', 'newest')] },
+    ];
+    const res = lastBlockFor('BUILDER', days);
+    expect(res?.date).toBe('2026-09-16');
+    expect(res?.block.text).toBe('newest');
+  });
+
+  it('seat match is case-insensitive: "builder" finds BUILDER', () => {
+    const days: DatedLogBlocks[] = [
+      { date: '2026-09-16', blocks: [block('BUILDER', '2026-09-16T10:00:00Z')] },
+    ];
+    expect(lastBlockFor('builder', days)?.block.seat).toBe('BUILDER');
+  });
+
+  it('no match across any day returns null', () => {
+    const days: DatedLogBlocks[] = [
+      { date: '2026-09-16', blocks: [block('OPS', '2026-09-16T10:00:00Z')] },
+    ];
+    expect(lastBlockFor('builder', days)).toBeNull();
+  });
+
+  it('a seat that is a prefix of another does not match ("OPS" vs "OPS-2")', () => {
+    const days: DatedLogBlocks[] = [
+      { date: '2026-09-16', blocks: [block('OPS-2', '2026-09-16T10:00:00Z')] },
+    ];
+    expect(lastBlockFor('OPS', days)).toBeNull();
+  });
+
+  it('an empty (after trim) seat name is inert: null, never a match', () => {
+    const days: DatedLogBlocks[] = [
+      { date: '2026-09-16', blocks: [block('OPS', '2026-09-16T10:00:00Z')] },
+    ];
+    expect(lastBlockFor('   ', days)).toBeNull();
   });
 });

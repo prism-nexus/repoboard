@@ -38,6 +38,7 @@ import {
   type LeasesDoc,
   type LogBlock,
   type LogFileInfo,
+  lastBlockFor,
   moveCard,
   parseBoard,
   parseCard,
@@ -595,6 +596,17 @@ export class CardStore extends EventEmitter<StoreEvents> {
       return null;
     }
     return { date: day, text, blocks: parseLogBlocks(text) };
+  }
+
+  /**
+   * RCB-47: the newest block `seat` wrote, searching back across every day in `.repoboard/log/`
+   * (OWN dir only — not `cfg.logDir`, which `check` reads as an additional read-only source; a
+   * seat's own last block is by definition one it wrote with `repoboard log`, which only ever
+   * writes `.repoboard/log/`). Fresh from disk each call, never cached, like `log()`.
+   */
+  async lastRepoLogBlock(seat: string): Promise<{ date: string; block: LogBlock } | null> {
+    const infos = await this.loadLogInfoFrom(this.logDir);
+    return lastBlockFor(seat, infos);
   }
 
   /**

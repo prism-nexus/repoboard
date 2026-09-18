@@ -1401,6 +1401,53 @@ describe('repoboard log', () => {
     const res = await repoboard(root, 'log', '--as', 'ops');
     expect(res.code).toBe(1);
   });
+
+  it('--last prints the SECOND builder block, not the first, and not an ops block after it', async () => {
+    const root = await freshRepo({});
+    await repoboard(root, 'log', '--as', 'builder', 'first builder entry');
+    await repoboard(root, 'log', '--as', 'builder', 'second builder entry');
+    await repoboard(root, 'log', '--as', 'ops', 'ops entry after both');
+    const res = await repoboard(root, 'log', '--last', 'builder');
+    expect(res.code).toBe(0);
+    expect(res.out.startsWith('##### BUILDER 2026-09-02T22:41:10Z: ')).toBe(true);
+    expect(res.out).toContain('second builder entry');
+    expect(res.out).not.toContain('first builder entry');
+    expect(res.out).not.toContain('ops entry after both');
+  });
+
+  it('C2: --last searches back across days — finds yesterday when today has none for that seat', async () => {
+    const root = await freshRepo({});
+    const yesterday = [
+      '# Log — 2026-09-01',
+      '',
+      '##### BUILDER 2026-09-01T10:00:00Z: yesterday',
+      '',
+      'yesterday',
+      '',
+    ].join('\n');
+    await mkdir(join(root, '.repoboard', 'log'), { recursive: true });
+    await writeFile(join(root, '.repoboard', 'log', '2026-09-01.md'), yesterday, 'utf8');
+    // Today has an entry, but not from builder, so the fixture day alone would miss.
+    await repoboard(root, 'log', '--as', 'ops', 'today entry, not builder');
+    const res = await repoboard(root, 'log', '--last', 'builder');
+    expect(res.code).toBe(0);
+    expect(res.out).toContain('##### BUILDER 2026-09-01T10:00:00Z: yesterday');
+    expect(res.out).toContain('yesterday');
+  });
+
+  it('--last on a seat with no history at all is a miss, exit 0', async () => {
+    const root = await freshRepo({});
+    const res = await repoboard(root, 'log', '--last', 'nobody');
+    expect(res.code).toBe(0);
+    expect(res.out).toBe('(no log block for nobody)\n');
+  });
+
+  it('--last with no seat name is a user error', async () => {
+    const root = await freshRepo({});
+    const res = await repoboard(root, 'log', '--last');
+    expect(res.code).toBe(1);
+    expect(res.err).toMatch(/usage/);
+  });
 });
 
 describe('repoboard check', () => {

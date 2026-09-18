@@ -123,6 +123,8 @@ Usage:
                                         append one block to today's .repoboard/log/<date>.md
   repoboard log show [--date YYYY-MM-DD] [--seat s]
                                         print a day's log (default today), optionally one seat's blocks
+  repoboard log --last <seat>           print that seat's newest block, searching back across days
+                                        (cold-start: your own seat's last block, then the coordinator's)
   repoboard check [--json] [--strict]  exit 0 "ok" / 1 with one line per finding: stale-state
                                         (also reads board.yml's logDir, P8.6 — an extra daily-log
                                         directory alongside .repoboard/log/, read-only),
@@ -924,6 +926,27 @@ async function cmdLogShow(args: string[], io: CliIO): Promise<number> {
   return 0;
 }
 
+/**
+ * RCB-47: `repoboard log --last <seat>` — the cold-start read. Searches back across every
+ * `.repoboard/log/*.md` day (not just today), so a seat that stood down yesterday is found with
+ * no `--date`. A cold seat with no history is normal, not an error: miss is exit 0.
+ */
+async function cmdLogLast(args: string[], io: CliIO): Promise<number> {
+  const seat = args[0];
+  if (seat === undefined || seat.trim().length === 0) {
+    throw new UserError('usage: repoboard log --last <seat>');
+  }
+  const root = await requireRoot(io);
+  const store = await openStore(root, { watch: false, now: io.now });
+  const res = await store.lastRepoLogBlock(seat);
+  if (!res) {
+    io.stdout.write(`(no log block for ${seat})\n`);
+    return 0;
+  }
+  io.stdout.write(`${formatLogBlock(res.block)}\n`);
+  return 0;
+}
+
 async function cmdCheck(args: string[], io: CliIO): Promise<number> {
   const { values } = parse(args, {
     json: { type: 'boolean', default: false },
@@ -1254,6 +1277,7 @@ export async function run(argv: string[], io: CliIO): Promise<number> {
     if (cmd === 'state') return await cmdState(argv.slice(1), io);
     if (cmd === 'log') {
       if (sub === 'show') return await cmdLogShow(rest, io);
+      if (sub === '--last') return await cmdLogLast(rest, io);
       return await cmdLogAppend(argv.slice(1), io);
     }
     if (cmd === 'check') return await cmdCheck(argv.slice(1), io);

@@ -102,8 +102,14 @@ export {
   resolveRefText,
   splitLines,
 } from './refs.js';
-export type { LogBlock, LogBlockInput } from './repolog.js';
-export { appendLogBlock, dailyLogHeader, formatLogBlock, parseLogBlocks } from './repolog.js';
+export type { DatedLogBlocks, LogBlock, LogBlockInput } from './repolog.js';
+export {
+  appendLogBlock,
+  dailyLogHeader,
+  formatLogBlock,
+  lastBlockFor,
+  parseLogBlocks,
+} from './repolog.js';
 export type {
   CheckInput,
   Finding,

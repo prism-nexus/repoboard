@@ -146,7 +146,11 @@ links; `serve --sibling <name>=<url>` (repeatable) adds more for that process on
 collision the flag wins. `logDir` (P8.6) is optional too — a repo-root-relative path to an
 additional directory of daily `<YYYY-MM-DD>.md` files (e.g. `docs/log`) that `repoboard check`
 reads alongside `.repoboard/log/`; `repoboard log` never writes there, and an absent or
-nonexistent `logDir` behaves exactly like today.
+nonexistent `logDir` behaves exactly like today. `columns` (RCB-34/P7.3, plan §11 O6) is also
+editable from the app itself (`PATCH /api/board`) — saving there rewrites this whole file through
+the same serializer `init` uses, so every other key survives but hand-written YAML comments do
+not; cards already on disk are never touched, and one in a column you remove still shows, marked
+"not in board.yml".
 
 ## Develop
 

@@ -8,6 +8,7 @@ import {
   boardDisplayName,
   type Card,
   type CardPatch,
+  type Column,
   type Event,
   type RepoSnapshot,
   type Sibling,
@@ -100,6 +101,15 @@ export interface Store {
    * toasts the count.
    */
   archiveDone(): Promise<void>;
+  /**
+   * RCB-34/P7.3: `PATCH /api/board` with the WHOLE new column list (a replace, like every list
+   * in `CardPatch`). Modelled on `archiveDone`: toasts on failure, and on success does NOT set
+   * `config` from the response — the WS `config` broadcast the write triggers is the only thing
+   * that updates the board, so the UI shows what the server actually has. Returns whether the
+   * request succeeded, so the caller (the column editor) knows whether to close the panel; it
+   * never resolves to a rejection.
+   */
+  saveColumns(columns: Column[]): Promise<boolean>;
   select(id: string | null): void;
   setView(view: View): void;
   togglePin(id: string): void;
@@ -328,6 +338,30 @@ export function createStore(factory: TransportFactory, opts: StoreOptions = {}):
       const data = (await res.json()) as { archived: string[] };
       const n = data.archived.length;
       toast(n === 0 ? 'Nothing to archive' : `Archived ${n} card${n === 1 ? '' : 's'}`);
+    },
+    async saveColumns(columns) {
+      if (typeof fetch !== 'function') return false;
+      let res: Response;
+      try {
+        res = await fetch('/api/board', {
+          method: 'PATCH',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ columns, actor: 'web' }),
+        });
+      } catch (e) {
+        toast(`Save columns failed: ${e instanceof Error ? e.message : String(e)}`);
+        return false;
+      }
+      if (!res.ok) {
+        const body: unknown = await res.json().catch(() => ({}));
+        const message =
+          body && typeof body === 'object' && 'error' in body ? String(body.error) : res.status;
+        toast(`Save columns failed: ${message}`);
+        return false;
+      }
+      // Success: the write's `config` broadcast will arrive over the WS and update the store —
+      // deliberately not read or applied here (see the interface doc comment).
+      return true;
     },
     select: (selectedId) => set({ selectedId }),
     setView: (view) => set({ view }),

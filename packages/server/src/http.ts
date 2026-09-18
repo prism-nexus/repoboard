@@ -13,6 +13,7 @@ import { fileURLToPath } from 'node:url';
 import {
   type Card,
   type CardPatch,
+  type Column,
   type CreateCardInput,
   type DecisionOption,
   isOwnerTask,
@@ -139,6 +140,8 @@ const ADD_WINDOW_FIELDS: ReadonlySet<string> = new Set([
   'actor',
 ]);
 const SET_STATE_FIELDS: ReadonlySet<string> = new Set(['section', 'body', 'actor']);
+/** RCB-34/P7.3: `PATCH /api/board` — `columns` is the WHOLE new list (a replace), like PATCH_FIELDS. */
+const SET_COLUMNS_FIELDS: ReadonlySet<string> = new Set(['columns', 'actor']);
 const APPEND_LOG_FIELDS: ReadonlySet<string> = new Set(['seat', 'title', 'text']);
 const ARCHIVE_FIELDS: ReadonlySet<string> = new Set(['olderThan', 'dryRun', 'actor']);
 const SYNC_ISSUES_FIELDS: ReadonlySet<string> = new Set([
@@ -392,6 +395,22 @@ function toSetStateInput(body: Json): SetStateHttpInput {
   const key = SECTION_KEY_OF[section];
   if (!key) throw new HttpError(400, 'section must be one of LIVE, LAST-LANDINGS, SEATS');
   return { section: key, body: text };
+}
+
+/**
+ * RCB-34/P7.3: shape-check only — is `columns` an array of plain objects at all? The real
+ * validation (≥1 column, unique ids, `id`/`wip` types, etc.) is `store.setColumns`'s
+ * `parseBoard(serializeBoard(next))` round trip, the same schema a hand edit of `board.yml`
+ * would get. This just keeps a malformed body (not an array, or an array of non-objects) from
+ * reaching `serializeBoard` and throwing instead of producing a clean 400.
+ */
+function toSetColumnsInput(body: Json): Column[] {
+  rejectUnknown(body, SET_COLUMNS_FIELDS);
+  const columns = body.columns;
+  if (!Array.isArray(columns) || !columns.every(isPlainObject)) {
+    throw new HttpError(400, 'columns must be an array of objects');
+  }
+  return columns as Column[];
 }
 
 interface AppendLogHttpInput {
@@ -913,6 +932,18 @@ export async function startServer(opts: ServerOptions): Promise<RunningServer> {
   ): Promise<void> {
     const path = url.pathname;
     if (method === 'GET' && path === '/api/board') return sendJson(res, 200, boardPayload());
+    // RCB-34/P7.3: the column set, editable from the app (plan §11 O6). `columns` replaces the
+    // WHOLE list, like every list in `CardPatch`. Success emits `config` from inside
+    // `store.setColumns` itself (see its doc comment) — the WS `{type:'config'}` broadcast
+    // already wired at `store.on('config', ...)` below reaches every client from that one emit.
+    if (method === 'PATCH' && path === '/api/board') {
+      const body = await readBody(req);
+      const actor = optString(body, 'actor') ?? 'web';
+      const columns = toSetColumnsInput(body);
+      const outcome = await store.setColumns(columns, actor);
+      if (!outcome.ok) throw new HttpError(failureStatus(outcome), outcome.error);
+      return sendJson(res, 200, boardPayload());
+    }
     // P8.2: leases/windows. `check` is a pure read (never 400/409 for "blocked" — that is what
     // `clear:false` means), so it stays 200 either way; the others follow the ask/decide shape.
     if (method === 'GET' && path === '/api/leases') return sendJson(res, 200, leasesPayload());

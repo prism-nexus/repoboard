@@ -18,6 +18,7 @@ import {
   type Card,
   type CardPatch,
   type CheckResourceResult,
+  type Column,
   type CostReport,
   type CreateCardInput,
   checkFindings,
@@ -53,6 +54,7 @@ import {
   type StateSectionName,
   seatBundle as seatBundleCore,
   selectArchivable as selectArchivableCore,
+  serializeBoard,
   serializeCard,
   serializeLeases,
   setStateSection as setStateSectionCore,
@@ -156,6 +158,15 @@ export type SetStateOutcome =
   | { ok: true; doc: StateDoc; text: string }
   | { ok: false; error: string; readOnly?: boolean };
 
+/**
+ * RCB-34/P7.3: `setColumns` outcome. `config` is the board config exactly as re-parsed from the
+ * file just written (`parseBoard(serializeBoard(next))`'s result), the same object `GET /api/board`
+ * would now return — not merely the request's columns echoed back.
+ */
+export type SetColumnsOutcome =
+  | { ok: true; config: BoardConfig }
+  | { ok: false; error: string; readOnly?: boolean };
+
 /** P8.3: `appendRepoLog` outcome. */
 export type AppendRepoLogOutcome =
   | { ok: true; date: string; text: string; block: LogBlock }
@@ -227,6 +238,14 @@ export class CardStore extends EventEmitter<StoreEvents> {
   /** Per file: the card id it currently holds (null when invalid) and the content hash. */
   private readonly byPath = new Map<string, { id: string | null; hash: string }>();
   private readonly invalidByPath = new Map<string, InvalidCard>();
+  /**
+   * RCB-34/P7.3: the content hash of `board.yml` as last read or written, the same idea as
+   * `byPath` for cards — lets `loadConfig` tell "our own write echoing back through the watcher"
+   * (hash unchanged) from a real external edit (hash changed), so `setColumns` emits `config`
+   * exactly once per write instead of once directly and again when the watcher notices the
+   * rename.
+   */
+  private boardHash: string | null = null;
   private eventLog: Event[] = [];
   private eventsBytes = 0;
   private watcher: FSWatcher | null = null;
@@ -776,6 +795,43 @@ export class CardStore extends EventEmitter<StoreEvents> {
     });
   }
 
+  /**
+   * RCB-34/P7.3: replace the WHOLE column set in `board.yml` (a replace, like every list in
+   * `CardPatch`) — the plan §11 O6 mechanism for a per-user column set. `next` keeps every other
+   * top-level key of the current config untouched, then one validated round trip through the
+   * only two functions that define the file, `parseBoard(serializeBoard(next))` — the exact
+   * check a hand edit of `board.yml` would get, so a duplicate id or an empty list is refused
+   * with the schema's own message and nothing is written. YAML COMMENTS ARE LOST on a successful
+   * write: `serializeBoard` cannot round-trip them (this repo's own `board.yml` has none).
+   *
+   * The write and the guard are inline here, not delegated to a private `writeXxx` (unlike
+   * `writeCard`/`writeLeases`/`writeState`/`writeLog`): this is the one mutation whose only
+   * caller is this method, so `this.refuseWriteWithoutBoard()` on the line below is the entire
+   * difference between "readOnly" and a `.repoboard/board.yml` materialising on a map-only root
+   * — store.test.ts's K10 control removes exactly this line to prove it.
+   */
+  // RCB-34/P7.3 wire contract: no event this round (`Event`'s type union is fixed and not
+  // widened for this task); `actor` is accepted for parity with every other mutation so a later
+  // event needs no signature change.
+  // biome-ignore lint/correctness/noUnusedFunctionParameters: see above — kept for parity, unused today
+  setColumns(columns: Column[], actor: string): Promise<SetColumnsOutcome> {
+    return this.mutate(async () => {
+      this.refuseWriteWithoutBoard();
+      const next: BoardConfig = { ...this.cfg, columns };
+      const parsed = parseBoard(serializeBoard(next));
+      if (!parsed.ok) return { ok: false as const, error: parsed.error };
+      const text = serializeBoard(parsed.config);
+      await mkdir(this.repoboardDir, { recursive: true });
+      const tmp = `${this.boardPath}.tmp`;
+      await writeFile(tmp, text, 'utf8');
+      await rename(tmp, this.boardPath);
+      this.cfg = parsed.config;
+      this.boardHash = sha1(text);
+      this.emit('config', this.cfg);
+      return { ok: true as const, config: parsed.config };
+    });
+  }
+
   // ---- internals ----------------------------------------------------------------------
 
   private enqueue<T>(fn: () => Promise<T>): Promise<T> {
@@ -967,15 +1023,25 @@ export class CardStore extends EventEmitter<StoreEvents> {
     }
   }
 
-  private async loadConfig(): Promise<void> {
+  /**
+   * Read `board.yml`. Returns `changed: false` — and touches neither `cfg` nor `boardHash` —
+   * when the bytes on disk are exactly the hash already recorded (RCB-34: `setColumns` records
+   * its own write's hash before the watcher ever sees the rename, so that echo is a no-op here).
+   * The caller decides whether to emit `'config'` from `changed`.
+   */
+  private async loadConfig(): Promise<{ changed: boolean }> {
     let text: string;
     try {
       text = await readFile(this.boardPath, 'utf8');
     } catch (e) {
       if ((e as NodeJS.ErrnoException).code !== 'ENOENT') throw e;
       this.cfg = defaultBoardConfig();
-      return;
+      this.boardHash = null;
+      return { changed: true };
     }
+    const hash = sha1(text);
+    if (hash === this.boardHash) return { changed: false };
+    this.boardHash = hash;
     const res = parseBoard(text);
     if (res.ok) {
       this.cfg = res.config;
@@ -983,6 +1049,7 @@ export class CardStore extends EventEmitter<StoreEvents> {
       // Keep the last good config rather than turning the board into nothing.
       this.emit('warning', `${relative(this.root, this.boardPath)}: ${res.error}`);
     }
+    return { changed: true };
   }
 
   /**
@@ -1108,9 +1175,11 @@ export class CardStore extends EventEmitter<StoreEvents> {
       const rel = relative(this.repoboardDir, path).split(sep).join('/');
       const task = (): Promise<void> => {
         if (rel === 'board.yml') {
-          return this.loadConfig()
-            .then(() => this.emit('config', this.cfg))
-            .then(() => undefined);
+          // RCB-34: `setColumns` already emitted `config` synchronously; skip the echo (see
+          // `loadConfig`'s hash check) so one `setColumns` call produces exactly one emit.
+          return this.loadConfig().then(({ changed }) => {
+            if (changed) this.emit('config', this.cfg);
+          });
         }
         if (rel === 'events.jsonl') return this.loadEvents();
         if (rel === 'leases.yml') {

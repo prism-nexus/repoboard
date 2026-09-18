@@ -3,7 +3,7 @@ import { mkdir, readFile, rm, stat, utimes, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { BoardConfig, Card } from '@repoboard/core';
-import { defaultBoardConfig, parseCard, serializeBoard } from '@repoboard/core';
+import { defaultBoardConfig, parseBoard, parseCard, serializeBoard } from '@repoboard/core';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
   type CardStore,
@@ -558,6 +558,112 @@ describe('state and log (P8.3)', () => {
   });
 });
 
+// ---- RCB-34/P7.3: the column set is editable from the app (plan §11 O6) ---------------------
+describe('setColumns (RCB-34/P7.3)', () => {
+  const NEXT_COLUMNS = [
+    { id: 'backlog', title: 'Backlog' },
+    { id: 'doing', title: 'Doing', active: true, wip: 2 },
+  ];
+
+  async function boardWithExtras() {
+    const repo = await repoWith({});
+    const config: BoardConfig = {
+      ...defaultBoardConfig(),
+      name: 'MyBoard',
+      logDir: 'docs/log',
+      prefix: 'ZZ',
+      extraKey: 1,
+    };
+    await writeFile(join(repo.root, '.repoboard', 'board.yml'), serializeBoard(config));
+    const store = await openStore(repo.root, { watch: false, now: () => NOW });
+    opened.push(store);
+    return { repo, store };
+  }
+
+  it('rewrites board.yml with the new columns and keeps every other key', async () => {
+    const { repo, store } = await boardWithExtras();
+    const res = await store.setColumns(NEXT_COLUMNS, 'claude/rcb-34');
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    expect(res.config.columns).toEqual(NEXT_COLUMNS);
+    expect(store.config.columns).toEqual(NEXT_COLUMNS);
+
+    const text = await readFile(join(repo.root, '.repoboard', 'board.yml'), 'utf8');
+    const parsed = parseBoard(text);
+    expect(parsed.ok).toBe(true);
+    if (!parsed.ok) return;
+    expect(parsed.config.columns).toEqual(NEXT_COLUMNS);
+    expect(parsed.config.name).toBe('MyBoard');
+    expect(parsed.config.logDir).toBe('docs/log');
+    expect(parsed.config.prefix).toBe('ZZ');
+    expect(parsed.config.extraKey).toBe(1);
+  });
+
+  it('an empty list is refused with "at least one column"; the file is untouched', async () => {
+    const { repo, store } = await boardWithExtras();
+    const before = await readFile(join(repo.root, '.repoboard', 'board.yml'), 'utf8');
+    const res = await store.setColumns([], 'claude/rcb-34');
+    expect(res.ok).toBe(false);
+    if (res.ok) return;
+    expect(res.error).toContain('at least one column');
+    const after = await readFile(join(repo.root, '.repoboard', 'board.yml'), 'utf8');
+    expect(after).toBe(before);
+  });
+
+  it('a duplicate column id is refused; the file is untouched', async () => {
+    const { repo, store } = await boardWithExtras();
+    const before = await readFile(join(repo.root, '.repoboard', 'board.yml'), 'utf8');
+    const res = await store.setColumns([{ id: 'x' }, { id: 'x' }], 'claude/rcb-34');
+    expect(res.ok).toBe(false);
+    if (res.ok) return;
+    expect(res.error).toContain('duplicate column id "x"');
+    const after = await readFile(join(repo.root, '.repoboard', 'board.yml'), 'utf8');
+    expect(after).toBe(before);
+  });
+
+  it('map-only root: MapOnlyError / readOnly, and .repoboard/ stays absent', async () => {
+    const repo = await makeTempRepoNoBoard({ 'src/a.ts': 'export const a = 1;\n' });
+    repos.push(repo);
+    const store = await openStore(repo.root, { watch: false, now: () => NOW });
+    opened.push(store);
+    const res = await store.setColumns(NEXT_COLUMNS, 'claude/rcb-34');
+    expect(res.ok).toBe(false);
+    if (res.ok) return;
+    expect(res.readOnly).toBe(true);
+    expect(res.error).toBe(MAP_ONLY_ERROR);
+    expect(await repo.hasRepoboard()).toBe(false);
+  });
+
+  it('cards in a removed column stay on disk untouched and still listed', async () => {
+    const repo = await repoWith({ 'RB-1.md': cardText('RB-1', 'doing') });
+    const store = await openStore(repo.root, { watch: false, now: () => NOW });
+    opened.push(store);
+    const before = await readFile(join(repo.cardsDir, 'RB-1.md'), 'utf8');
+    // Drops 'doing' from the column set entirely.
+    const res = await store.setColumns([{ id: 'backlog', title: 'Backlog' }], 'claude/rcb-34');
+    expect(res.ok).toBe(true);
+    const after = await readFile(join(repo.cardsDir, 'RB-1.md'), 'utf8');
+    expect(after).toBe(before);
+    expect(store.get('RB-1')?.status).toBe('doing');
+    expect(store.list().map((c) => c.id)).toEqual(['RB-1']);
+  });
+
+  it('emits exactly one "config" per write, even with the watcher on (measured)', async () => {
+    const repo = await repoWith({});
+    const store = await openStore(repo.root, { watch: true, now: () => NOW });
+    opened.push(store);
+    const seen: BoardConfig[] = [];
+    store.on('config', (c) => seen.push(c));
+    const res = await store.setColumns(NEXT_COLUMNS, 'claude/rcb-34');
+    expect(res.ok).toBe(true);
+    // Give the watcher time to notice the rename and NOT re-emit (awaitWriteFinish is 100ms;
+    // same margin the "does not synthesise a file event for its own write" test above uses).
+    await sleep(600);
+    expect(seen).toHaveLength(1);
+    expect(seen[0]?.columns).toEqual(NEXT_COLUMNS);
+  });
+});
+
 // ---- P8.6 `logDir`: `check` reads an extra daily-log directory ------------------------------
 // (fpj `docs/STATE-CONVERGENCE-BRIEF.md` locked decision 1 / control C2.)
 describe('check: board.yml logDir (P8.6, C2)', () => {
@@ -1068,11 +1174,13 @@ describe('K10 structure of store.ts', () => {
       'decide',
       'move',
       'releaseLease',
+      'setColumns',
       'setStateSection',
       'takeLease',
       'update',
     ]);
     expect(decls.map((d) => d[3])).toEqual([
+      'mutate',
       'mutate',
       'mutate',
       'mutate',
@@ -1103,6 +1211,17 @@ describe('K10 structure of store.ts', () => {
     }
   });
 
+  /**
+   * RCB-34/P7.3: `setColumns` is not one of the five (structural check above), so it carries its
+   * OWN `this.refuseWriteWithoutBoard()` — the behavioural control for this is
+   * "map-only root → MapOnlyError / HTTP 409" below, which fails when this line is removed.
+   */
+  it('setColumns calls refuseWriteWithoutBoard itself', () => {
+    const [start, end] = methodRange('setColumns(columns: Column[]');
+    const lines = SRC.slice(start, end).split('\n');
+    expect(lines.some((l) => l.trim() === 'this.refuseWriteWithoutBoard();')).toBe(true);
+  });
+
   it('and nothing else in the store writes to disk', () => {
     const ranges = [
       methodRange('private async writeCard'),
@@ -1110,6 +1229,9 @@ describe('K10 structure of store.ts', () => {
       methodRange('private async writeLeases'),
       methodRange('private async writeState'),
       methodRange('private async writeLog'),
+      // RCB-34/P7.3: `setColumns` is the sixth write site, guarded inline rather than through a
+      // private `writeXxx` — see its doc comment in store.ts for why.
+      methodRange('setColumns(columns: Column[]'),
     ];
     const writes = [...SRC.matchAll(/await (writeFile|appendFile|rename|mkdir)\(/g)];
     expect(writes.length).toBeGreaterThan(0);

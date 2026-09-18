@@ -343,6 +343,89 @@ describe('HTTP routes', () => {
   });
 });
 
+describe('PATCH /api/board (RCB-34/P7.3)', () => {
+  const NEXT_COLUMNS = [
+    { id: 'backlog', title: 'Backlog' },
+    { id: 'doing', title: 'Doing', active: true },
+  ];
+
+  it('200 with the same body GET /api/board returns, and exactly one ws config broadcast', async () => {
+    const r = await rig({});
+    const ws = await connect(r.url);
+    cleanups.push(async () => ws.close());
+    await nextMessage(ws, (m) => m.type === 'snapshot');
+
+    const patch = await fetch(`${r.url}/api/board`, {
+      method: 'PATCH',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ columns: NEXT_COLUMNS, actor: 'claude/rcb-34' }),
+    });
+    expect(patch.status).toBe(200);
+    const patchBody = (await json(patch)) as { config: { columns: unknown } };
+    expect(patchBody.config.columns).toEqual(NEXT_COLUMNS);
+    const getBody = await json(await fetch(`${r.url}/api/board`));
+    expect(patchBody).toEqual(getBody);
+
+    const configMsg = await nextMessage<{ type: string; config: { columns: unknown } }>(
+      ws,
+      (m) => m.type === 'config',
+    );
+    expect(configMsg.config.columns).toEqual(NEXT_COLUMNS);
+    // Measured: one write must not produce two broadcasts (store.test.ts also counts the
+    // store-level `config` emit directly). No second `config` message should arrive.
+    await expect(nextMessage(ws, (m) => m.type === 'config', 500)).rejects.toThrow(/timed out/);
+  });
+
+  it('400 on an empty column list, an unknown body key, or a missing columns field', async () => {
+    const r = await rig({});
+    const empty = await fetch(`${r.url}/api/board`, {
+      method: 'PATCH',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ columns: [] }),
+    });
+    expect(empty.status).toBe(400);
+    expect(((await json(empty)) as { error: string }).error).toContain('at least one column');
+
+    const unknownField = await fetch(`${r.url}/api/board`, {
+      method: 'PATCH',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ columns: NEXT_COLUMNS, nope: 1 }),
+    });
+    expect(unknownField.status).toBe(400);
+    expect(((await json(unknownField)) as { error: string }).error).toMatch(/unknown field "nope"/);
+
+    const missing = await fetch(`${r.url}/api/board`, {
+      method: 'PATCH',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ actor: 'me' }),
+    });
+    expect(missing.status).toBe(400);
+
+    // Refused writes leave board.yml untouched — GET still shows the original columns.
+    const getBody = (await json(await fetch(`${r.url}/api/board`))) as {
+      config: { columns: { id: string }[] };
+    };
+    expect(getBody.config.columns.map((c) => c.id)).toEqual([
+      'backlog',
+      'decide',
+      'todo',
+      'doing',
+      'done',
+    ]);
+  });
+
+  it('a duplicate column id is 400 with the schema message', async () => {
+    const r = await rig({});
+    const res = await fetch(`${r.url}/api/board`, {
+      method: 'PATCH',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ columns: [{ id: 'x' }, { id: 'x' }] }),
+    });
+    expect(res.status).toBe(400);
+    expect(((await json(res)) as { error: string }).error).toContain('duplicate column id "x"');
+  });
+});
+
 describe('static files', () => {
   it('serves "web not built" when no bundle exists', async () => {
     const empty = await makeTempDir('repoboard-noweb-');
@@ -780,6 +863,18 @@ describe('map-only mode refuses mutations over HTTP (K10)', () => {
     expect(((await json(await fetch(`${r.url}/api/board`))) as { cards: Card[] }).cards).toEqual(
       [],
     );
+  });
+
+  it('PATCH /api/board is 409 on a map-only root and writes nothing into the target', async () => {
+    const r = await boardlessRig();
+    const res = await fetch(`${r.url}/api/board`, {
+      method: 'PATCH',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ columns: [{ id: 'backlog' }] }),
+    });
+    expect(res.status).toBe(409);
+    expect(((await json(res)) as { error: string }).error).toContain('map-only');
+    expect(await r.repo.hasRepoboard()).toBe(false);
   });
 
   it('PATCH of a card that cannot exist is still 404, not 409', async () => {

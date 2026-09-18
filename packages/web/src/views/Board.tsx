@@ -10,10 +10,11 @@ import {
   useSensors,
 } from '@dnd-kit/core';
 import { sortableKeyboardCoordinates } from '@dnd-kit/sortable';
-import { type Card, findColumn, isActive } from '@repoboard/core';
+import { type Card, type Column as ColumnConfig, findColumn, isActive } from '@repoboard/core';
 import { useCallback, useMemo, useState } from 'react';
 import { CardItem } from '../components/CardItem.jsx';
 import { Column } from '../components/Column.jsx';
+import { ColumnEditor } from '../components/ColumnEditor.jsx';
 import { Confetti } from '../components/Confetti.jsx';
 import { StatePanel } from '../components/StatePanel.jsx';
 import { useArrivals, useBoardState, useNow, useStore } from '../hooks.js';
@@ -115,6 +116,7 @@ export function Board() {
     handleDragEnd(store, ev);
   };
   const archiveDone = useCallback(() => void store.archiveDone(), [store]);
+  const saveColumns = useCallback((cols: ColumnConfig[]) => store.saveColumns(cols), [store]);
   const open = useCallback((id: string) => store.select(id), [store]);
   const pin = useCallback((id: string) => store.togglePin(id), [store]);
   const hover = useCallback((id: string | null) => store.setHover(id), [store]);
@@ -141,6 +143,7 @@ export function Board() {
         decideColumnId={decideColumnId}
         onGoToDecide={scrollColumnIntoView}
       />
+      <ColumnEditor config={config} cards={cards} onSave={saveColumns} />
       <DndContext
         sensors={sensors}
         collisionDetection={closestCorners}

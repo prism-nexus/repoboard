@@ -1675,3 +1675,80 @@ button {
     max-height: 40vh;
   }
 }
+
+/* ---- column editor (RCB-34/P7.3) ---- */
+.column-editor-toggle {
+  align-self: flex-start;
+  flex: 0 0 auto;
+  margin: 6px 12px;
+  font-family: inherit;
+  font-size: 12px;
+  color: var(--muted);
+  background: none;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius);
+  padding: 3px 8px;
+  cursor: pointer;
+}
+.column-editor-toggle:hover {
+  color: var(--ink);
+  border-color: var(--ink);
+}
+.column-editor {
+  flex: 0 0 auto;
+  margin: 6px 12px;
+  padding: 10px 12px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  font-size: 12px;
+}
+.column-editor__note {
+  margin: 0 0 8px;
+  color: var(--muted);
+}
+.column-editor__table {
+  width: 100%;
+  border-collapse: collapse;
+  margin-bottom: 8px;
+}
+.column-editor__table th,
+.column-editor__table td {
+  padding: 3px 6px;
+  text-align: left;
+  vertical-align: middle;
+}
+.column-editor__table th {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+  border-bottom: 1px solid var(--line);
+}
+.column-editor__table input[type="text"] {
+  width: 100%;
+  min-width: 80px;
+}
+.column-editor__table input[type="number"] {
+  width: 60px;
+}
+.column-editor__count {
+  font-family: var(--font-mono);
+  color: var(--muted);
+}
+.column-editor__row-actions {
+  white-space: nowrap;
+}
+.column-editor__row-actions button + button {
+  margin-left: 6px;
+}
+.column-editor__add {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  margin-bottom: 8px;
+}
+.column-editor__actions {
+  display: flex;
+  gap: 6px;
+}

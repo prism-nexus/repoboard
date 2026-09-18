@@ -1,10 +1,16 @@
 # STATE
 
-**Written 2026-09-18T22:40:59Z by coordinator.**
+**Written 2026-09-18T22:48:14Z by coordinator.**
 
 ## LIVE
 
-Dashboard http://127.0.0.1:4242 serving this repo; the fpj sibling on :4243 (RCB-42). Public remote (RCB-24 DONE): https://github.com/prism-nexus/repoboard — EMPTY; push word GIVEN 20:0xZ: the coordinator pushes local main once RCB-50 lands and is verified. OWNER LANE = one queue (letters + owner work, 20:1xZ): RCB-51 npm setup sits there now. Builder seat: RCB-50 in doing, then STAND DOWN; fresh builder's queue RCB-47 → RCB-52 (owner-task cards, same seam) → RCB-48 → RCB-49 (v0.1.0 tag after the push) → RCB-34 → K5/RCB-51 (after the owner's npm) → RCB-43. Landed today: RCB-44 795056e, RCB-45 3c2c3ec, K11 3317bfb, RCB-46 a5e2d13.
+_(RCB-55 A3, 2026-09-18: slow-changing facts only — no queue, no per-landing status. The queue is the board (`card list --status todo`); landings are LAST LANDINGS; seat status is SEATS; rig facts are `docs/RIG.md`.)_
+
+- **Dashboards:** :4242 serves this repo's board (from this root); :4243 serves the fpj board (from the fpj root, this repo's dist). Both link to each other from the top bar (RCB-42). fpj's `.repoboard/STATE.md` is the fpj live-state authority.
+- **Remote:** public at https://github.com/prism-nexus/repoboard since 2026-09-18 20:3xZ (owner's first push); tag v0.1.0 = 5477022; routine pushes from seats to `main`.
+- **Owner lane:** the Needs-decision column is the ONE owner queue — letters and owner tasks (`decision.kind: task`, RCB-52); OWNER QUEUE below is generated from it.
+- **Sibling:** freshpickedjobs at ~/Projects/Repos/freshpickedjobs (board prefix FPJ, `logDir: docs/log`); the coordinator seat is shared across both boards.
+- **npm:** nothing published yet — K5 waits on the owner's account (RCB-51).
 
 ## LAST LANDINGS
 
@@ -25,5 +31,5 @@ _(generated from open decisions)_
 
 ## SEATS
 
-- **coordinator (shared with freshpickedjobs): UP 2026-09-18 20:2xZ, cold-started from SEATS on both boards.** Verified: `main` 405cab5 = `origin/main` (public, github.com/prism-nexus/repoboard); RCB-50 2d9490a + RCB-46 a5e2d13 + K11 3317bfb + RCB-44/45 on it; :4242 pid 51751 and :4243 pid 45393 serving; the only uncommitted change is the builder's RCB-47 card move (doing, lease live) — the builder commits it with its landing. Owner lane: RCB-51 (npm account + `repoboard` org — OWNER WORK), nothing else. Routine: verify each builder sha by content on origin/main, move the card, restamp; the fresh fpj builder/ops are seated on the fpj board (its SEATS).
-- **repoboard builder (fresh, its own terminal): UP 21:53Z; landed RCB-54 713d330 and RCB-34 32da2a1 (P7.3 columns editable: `PATCH /api/board` http.ts:939 + ColumnEditor.tsx, O6) — both verified by content by the coordinator; gate 714+2 (run 1 one K11-family watcher miss, run 2 clean), typecheck/lint 0; :4242 (18982) / :4243 (18984) restarted on 32da2a1; fpj board.yml untouched (Cancel only — Save on :4243 rewrites the owner's board, by design). Cards done, lease + lock released. RCB-56 filed (RCB-34's found-not-fixed list, low).** NOW: **RCB-43** multi-repo switcher — GO (K12 is CLOSED at 7843553, README line 288; the title's 'needs K12 first' is satisfied). Then K5/RCB-51 when the owner presses Done on RCB-51 (npm, later today) → RCB-56 → the B-items on the owner's RCB-55 letter. Rig unchanged: `pnpm build` first; lock `mkdir || exit` + owner line, never rm a foreign lock; rebuild + restart :4242/:4243 after any WEB landing and look at :4243; never touch :5173/:8787; `--as builder`; report each sha to the coordinator.
+- **coordinator (shared with fpj): UP 2026-09-18 20:2xZ.** Holds RCB-55 (A1–A5, owner's letter A). Last block: `.repoboard/log/2026-09-18.md` COORDINATOR; routine = verify each sha by content on origin/main, move the card, restamp here.
+- **repoboard builder: UP 21:53Z.** Holds RCB-43 (multi-repo switcher, sliced). Last block: `log --last builder`; rig facts `docs/RIG.md`; queue = `card list --status todo` (K5 after the owner's Done on RCB-51).

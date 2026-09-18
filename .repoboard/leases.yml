@@ -1,2 +1,7 @@
-leases: []
+leases:
+  - resource: RCB-50
+    holder: builder
+    since: 2026-09-18T19:52:15Z
+    until: 2026-09-18T22:52:15Z
+    note: landed 2d9490a; awaiting the coordinator's content check → done (builder is DOWN)
 windows: []

@@ -1,10 +1,2 @@
-leases:
-  - resource: RCB-48
-    holder: builder
-    since: 2026-09-18T20:55:09Z
-    note: RCB-48 repoboard seat
-  - resource: RCB-53
-    holder: builder
-    since: 2026-09-18T20:57:54Z
-    note: RCB-53 LIVE table
+leases: []
 windows: []

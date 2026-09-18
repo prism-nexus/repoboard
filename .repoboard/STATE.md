@@ -1,10 +1,10 @@
 # STATE
 
-**Written 2026-09-18T17:27:42Z by coordinator.**
+**Written 2026-09-18T18:16:54Z by coordinator.**
 
 ## LIVE
 
-Dashboard http://127.0.0.1:4242 serving this repo; the fpj sibling on :4243 (RCB-42). No leases, no windows. Landed since the last stamp: P8.5 3c314d5 (archive + sync-issues), K12 7843553, RCB-41, RCB-42, P8.6 563d5c0 (logDir), K13 da7284d. fpj ADOPTED the board 2026-09-18 (d60403d on that repo). Queue for the repoboard builder is in SEATS below; owner's two 09-18 asks are RCB-44 (ticker shows the short title) and RCB-45 (LIVE window-locked).
+Dashboard http://127.0.0.1:4242 serving this repo; the fpj sibling on :4243 (RCB-42). No leases, no windows. Public remote (RCB-24): https://github.com/prism-nexus/repoboard — EMPTY, push HELD for the owner's word after RCB-46's scrub lands; npm account comes later (K5 waits; names measured free 18:2xZ). Builder seat is on RCB-44/45; then RCB-46 scrub → RCB-47/48 handoff tooling → RCB-49 open-source files → K11 → RCB-34 → K5 → RCB-43. Landed since the previous stamp: P8.5 3c314d5, K12 7843553, RCB-41, RCB-42, P8.6 563d5c0, K13 da7284d.
 
 ## LAST LANDINGS
 

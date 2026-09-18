@@ -634,13 +634,21 @@ describe('watcher', () => {
     expect(log).toContain('"actor":"file"');
   });
 
-  it('sees a new file, a removed file, and a file that turns invalid', async () => {
-    const repo = await repoWith({ 'RB-1.md': cardText('RB-1', 'todo') });
+  // K11: pre-creates RB-2 in the fixture and starts with a `change`, not an `add` — a brand-new
+  // file's chokidar `add` event is measurably unreliable under concurrent watcher load in this
+  // sandbox (P8.2 §7, the same pattern as the leases.yml and STATE.md watcher tests above; not a
+  // product defect). The `add` path itself still has a test: 'a second process running `card add`
+  // emits one event, not two' (≈line 739) creates its card AFTER the watcher starts.
+  it('sees a changed file, a file that turns invalid, and a removed file', async () => {
+    const repo = await repoWith({
+      'RB-1.md': cardText('RB-1', 'todo'),
+      'RB-2.md': cardText('RB-2', 'todo'),
+    });
     const store = await open(repo, true);
 
-    const added = waitForEvent<Card>(store, 'card', (c) => c.id === 'RB-2');
+    const changed = waitForEvent<Card>(store, 'card', (c) => c.id === 'RB-2');
     await writeFile(join(repo.cardsDir, 'RB-2.md'), cardText('RB-2', 'review'));
-    expect((await added).status).toBe('review');
+    expect((await changed).status).toBe('review');
     expect(store.list()).toHaveLength(2);
 
     const invalid = waitForEvent<InvalidCard[]>(store, 'invalid', (list) => list.length === 1);

@@ -270,14 +270,11 @@ that call is the owner's. No GitHub repo until after v1 (O2).
   no longer tells agents to hand-edit frontmatter for this. Verified on the built binary against a
   throwaway fixture, and one `card update` with `serve` running put **exactly one** line in
   `events.jsonl` (4 → 5, zero `actor: "file"` events); tests 242 → 250.
-- **K11** `test/store.test.ts › watcher › sees a new file, a removed file, and a file that turns invalid`
-  times out (4,000 ms waiting for "card") intermittently under load: 1 failure in 3 full-suite runs on
-  2026-09-17 with two dashboards serving and another repo's vitest running on the box; passes in
-  isolation every time. The P8.2 builder isolated the mechanism the same day with a 20-store concurrency
-  harness: chokidar's `add`-event detection for a NEWLY CREATED file is what stalls, `change` events on
-  an existing file are reliable — the same reason every "external edit" test pre-writes its file.
-  Not a product defect; the watcher does re-read. Fix candidates: pre-create then modify in that one
-  test (matches its siblings), or a longer timeout for `add` only. Filed by the orchestrator.
+- ~~**K11** `test/store.test.ts › watcher › sees a new file, a removed file, and a file that turns
+  invalid` timed out intermittently under load: chokidar's `add`-event detection for a NEWLY
+  CREATED file is what stalls, `change` events on an existing file are reliable. Not a product
+  defect; the watcher does re-read.~~ Closed 2026-09-18 (`Closes K11` commit): the test now
+  pre-creates its file and starts with a `change`, matching its siblings.
 - ~~**K12** `serve --root <large repo>` in map-only mode ran at 141 % CPU with RSS 2.9 GB after 3 m 44 s
   and answered `/api/board` only intermittently (2026-09-17 22:0xZ, root = freshpickedjobs: 1,021
   scanned files, 1,368 edges, but a working tree with `node_modules/`, `apps/web/dist/`, and four

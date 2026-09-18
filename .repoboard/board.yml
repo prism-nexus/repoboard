@@ -16,3 +16,6 @@ columns:
   - id: done
     title: Done
     done: true
+siblings:
+  - name: freshpickedjobs
+    url: http://127.0.0.1:4243

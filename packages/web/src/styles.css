@@ -436,11 +436,28 @@ button {
   height: 160px;
   min-width: 0;
   overflow-y: auto;
+  overflow-x: auto;
   overflow-wrap: anywhere;
   border: 1px solid var(--line);
   border-radius: 4px;
   padding: 6px 8px;
   background: var(--surface-2);
+}
+/* RCB-53: prose in the window wraps anywhere; table cells do not — with `anywhere` a cell's
+   min-content is one character and auto table layout starves the narrow column (fpj's LIVE table,
+   header "row" rendered as "ro"/"w"). Cells wrap at spaces but never inside a word, so the
+   narrow column gets its longest word and the wide column wraps (nowrap would hide long
+   values behind a sideways scroll — measured on the fpj board). */
+.state-panel__window table {
+  border-collapse: collapse;
+}
+.state-panel__window :is(th, td) {
+  overflow-wrap: normal;
+  word-break: keep-all;
+  white-space: normal;
+  padding: 2px 8px 2px 0;
+  text-align: left;
+  vertical-align: top;
 }
 .state-panel__queue {
   list-style: none;

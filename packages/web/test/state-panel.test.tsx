@@ -213,4 +213,24 @@ describe('StatePanel', () => {
     expect(rule).not.toBeNull();
     expect(rule?.[0]).toMatch(/min-width:\s*0;/);
   });
+
+  // RCB-53: `.state-panel__window { overflow-wrap: anywhere }` (RCB-45, for prose) starves a
+  // table's narrow column to one character under auto table layout (fpj's LIVE table, header
+  // "row" rendered as "ro"/"w"). Cells must keep whole words yet still wrap at spaces (nowrap hid
+  // the value column behind a sideways scroll on the fpj board). Sliced from the selector to the
+  // next `}` (not the whole file) so a `keep-all` elsewhere cannot satisfy this vacuously
+  // (RCB-44's `toContain('height: 160px')` matching a `max-height` is exactly that failure mode).
+  it('the .state-panel__window :is(th, td) rule keeps whole words yet wraps: overflow-wrap normal, word-break keep-all, white-space normal', () => {
+    const css = readFileSync(STYLES_PATH, 'utf8');
+    const selector = '.state-panel__window :is(th, td)';
+    const selectorIndex = css.indexOf(selector);
+    expect(selectorIndex).toBeGreaterThan(-1);
+    const braceStart = css.indexOf('{', selectorIndex);
+    const braceEnd = css.indexOf('}', braceStart);
+    const block = css.slice(braceStart, braceEnd + 1);
+    expect(block).toContain('overflow-wrap: normal');
+    expect(block).toContain('word-break: keep-all');
+    expect(block).toContain('white-space: normal');
+    expect(block).not.toContain('nowrap');
+  });
 });

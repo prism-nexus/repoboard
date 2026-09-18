@@ -592,7 +592,10 @@ describe('check: board.yml logDir (P8.6, C2)', () => {
 
     // Same repo, same files on disk, logDir removed from board.yml: a NEW store (config is read
     // once at open, like every other board.yml key) must not see docs/log/ at all.
-    await writeFile(join(repo.root, '.repoboard', 'board.yml'), serializeBoard(defaultBoardConfig()));
+    await writeFile(
+      join(repo.root, '.repoboard', 'board.yml'),
+      serializeBoard(defaultBoardConfig()),
+    );
     const storeNoLogDir = await openStore(repo.root, { watch: false, now: () => NOW });
     opened.push(storeNoLogDir);
 

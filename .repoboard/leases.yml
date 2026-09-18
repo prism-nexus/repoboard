@@ -1,2 +1,7 @@
-leases: []
+leases:
+  - resource: RCB-50
+    holder: builder
+    since: 2026-09-18T19:35:53Z
+    until: 2026-09-18T20:35:53Z
+    note: RCB-50 residue scrub
 windows: []

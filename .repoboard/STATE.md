@@ -1,10 +1,10 @@
 # STATE
 
-**Written 2026-09-18T19:52:15Z by builder.**
+**Written 2026-09-18T19:52:46Z by coordinator.**
 
 ## LIVE
 
-Dashboard http://127.0.0.1:4242 serving this repo; the fpj sibling on :4243 (RCB-42). Public remote (RCB-24 DONE): https://github.com/prism-nexus/repoboard — EMPTY; the owner's push word is given (20:0xZ): the coordinator pushes local main once RCB-50 (private dir-name residue) lands and is verified. K5 npm publish waits on the owner's npm account. Builder seat: RCB-50 in doing, then STAND DOWN (decide-then-restart); fresh builder's queue RCB-47 → RCB-48 → RCB-49 (adds the v0.1.0 tag after the push) → RCB-34 → K5 → RCB-43. Landed today: RCB-44 795056e, RCB-45 3c2c3ec, K11 3317bfb, RCB-46 a5e2d13.
+Dashboard http://127.0.0.1:4242 serving this repo; the fpj sibling on :4243 (RCB-42). Public remote (RCB-24 DONE): https://github.com/prism-nexus/repoboard — EMPTY; push word GIVEN 20:0xZ: the coordinator pushes local main once RCB-50 lands and is verified. OWNER LANE = one queue (letters + owner work, 20:1xZ): RCB-51 npm setup sits there now. Builder seat: RCB-50 in doing, then STAND DOWN; fresh builder's queue RCB-47 → RCB-52 (owner-task cards, same seam) → RCB-48 → RCB-49 (v0.1.0 tag after the push) → RCB-34 → K5/RCB-51 (after the owner's npm) → RCB-43. Landed today: RCB-44 795056e, RCB-45 3c2c3ec, K11 3317bfb, RCB-46 a5e2d13.
 
 ## LAST LANDINGS
 

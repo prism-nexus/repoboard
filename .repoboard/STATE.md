@@ -1,12 +1,15 @@
 # STATE
 
-**Written 2026-09-18T18:35:18Z by coordinator.**
+**Written 2026-09-18T19:35:19Z by coordinator.**
 
 ## LIVE
 
 Dashboard http://127.0.0.1:4242 serving this repo; the fpj sibling on :4243 (RCB-42). No leases, no windows. Public remote (RCB-24): https://github.com/prism-nexus/repoboard — EMPTY, push HELD for the owner's word after RCB-46's scrub lands; npm account comes later (K5 waits; names measured free 18:2xZ). Builder seat is on RCB-44/45; then RCB-46 scrub → RCB-47/48 handoff tooling → RCB-49 open-source files → K11 → RCB-34 → K5 → RCB-43. Landed since the previous stamp: P8.5 3c314d5, K12 7843553, RCB-41, RCB-42, P8.6 563d5c0, K13 da7284d.
 
 ## LAST LANDINGS
+
+-3. **RCB-46 a5e2d13 — 2026-09-18 19:4xZ, verified by content** (home paths 22 → 2, both in today's append-only log; CLAUDE.md rule 1 generic; sibling-repo proofs skipIf $REPOBOARD_SIBLING_ROOT, 629+2 skipped without / 631 with; fixture → sample-claude.md; origin = https://github.com/prism-nexus/repoboard, NOTHING pushed). Residue filed as RCB-50 (private dir names as path examples, 9 lines) — lands before the push. Push HELD for the owner's word.
+
 
 -2. **K11 3317bfb — 2026-09-18 19:1xZ, verified by content** (the watcher test pre-creates its card and starts with a `change`; README entry closed in the commit; 631/631 ×12 after vs 2 of 6 failing before, different load). RCB-46 scrub in doing; owner's answers relayed: the dogfood `.repoboard/` IS public, the append-only log keeps the old handle.
 

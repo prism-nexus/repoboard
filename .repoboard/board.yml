@@ -1,3 +1,4 @@
+name: repoboard
 prefix: RCB
 activeWindowMinutes: 30
 columns:

@@ -67,6 +67,67 @@ describe('CardItem: decision badge and chip', () => {
   });
 });
 
+const OPEN_TASK = {
+  question: 'buy the domain',
+  kind: 'task' as const,
+  options: [],
+  askedBy: 'claude/agent',
+  askedAt: '2026-09-02T22:00:00Z',
+  returnTo: 'todo',
+  chosen: null,
+  words: null,
+  decidedBy: null,
+  decidedAt: null,
+};
+
+describe('CardItem: owner task mark (RCB-52)', () => {
+  it('an OPEN task shows the ! mark, not ?', () => {
+    const store = testStore();
+    snapshot(store, [card('RB-2', 'decide', { decision: OPEN_TASK })]);
+    renderApp(store);
+    const badge = screen.getByTestId('decision-badge-RB-2');
+    expect(within(badge).getByText('!')).toBeInTheDocument();
+    expect(within(badge).getByText('!')).toHaveClass('card__decision-mark--task');
+    expect(badge).toHaveAttribute('title', expect.stringContaining('owner task: buy the domain'));
+  });
+});
+
+describe('Drawer: Owner task section (RCB-52)', () => {
+  it('heading reads Owner task, no option buttons, Done enabled with empty words', async () => {
+    const fetchMock = stubFetch(async () =>
+      card('RB-2', 'todo', {
+        decision: {
+          ...OPEN_TASK,
+          decidedBy: 'web',
+          decidedAt: '2026-09-02T23:00:00Z',
+        },
+      }),
+    );
+    const store = testStore();
+    snapshot(store, [card('RB-2', 'decide', { decision: OPEN_TASK })]);
+    renderApp(store);
+    fireEvent.click(screen.getByTitle('Open RB-2'));
+    const section = screen.getByTestId('decision-section');
+    expect(within(section).getByText('Owner task')).toBeInTheDocument();
+    expect(within(section).queryByTestId(/decision-option-/)).toBeNull();
+    const submit = within(section).getByText('Done');
+    expect(submit).not.toBeDisabled();
+
+    await act(async () => {
+      fireEvent.click(submit);
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    const body = JSON.parse(String(init.body));
+    expect(body).toEqual({ actor: 'web' });
+
+    const answer = await screen.findByTestId('decision-answer');
+    expect(answer).toHaveTextContent('Done');
+  });
+});
+
 describe('Drawer: Decision section', () => {
   it('renders one button per option and a words field above the description', () => {
     const store = testStore();

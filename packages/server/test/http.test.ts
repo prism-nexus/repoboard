@@ -711,6 +711,50 @@ describe('POST /api/cards/:id/ask and /decide (P8.1)', () => {
   });
 });
 
+describe('POST /api/cards/:id/ask with kind: task (RCB-52 owner tasks)', () => {
+  it('kind: "task" is 200 and the ownerQueue payload item carries kind: "task"', async () => {
+    const r = await rig({ 'RB-1.md': cardText('RB-1', 'todo') });
+    await r.store.setStateSection('live', 'x', 'claude/test'); // scaffolds STATE.md
+    const res = await fetch(`${r.url}/api/cards/RB-1/ask`, {
+      method: 'POST',
+      body: JSON.stringify({ question: 'set up npm', kind: 'task' }),
+    });
+    expect(res.status).toBe(200);
+    const card = (await json(res)) as Card;
+    expect(card.decision).toMatchObject({ kind: 'task', options: [] });
+    const state = (await json(await fetch(`${r.url}/api/state`))) as {
+      ownerQueue: { id: string; kind?: string }[];
+    };
+    expect(state.ownerQueue).toEqual([
+      { id: 'RB-1', question: 'set up npm', options: [], kind: 'task' },
+    ]);
+  });
+
+  it('kind: "nope" is 400 naming the field', async () => {
+    const r = await rig({ 'RB-1.md': cardText('RB-1', 'todo') });
+    const res = await fetch(`${r.url}/api/cards/RB-1/ask`, {
+      method: 'POST',
+      body: JSON.stringify({ question: 'q', kind: 'nope' }),
+    });
+    expect(res.status).toBe(400);
+    expect(((await json(res)) as { error: string }).error).toMatch(/kind must be "task"/);
+  });
+
+  it("a plain question's ownerQueue item has no kind key at all", async () => {
+    const r = await rig({ 'RB-1.md': cardText('RB-1', 'todo') });
+    await r.store.setStateSection('live', 'x', 'claude/test'); // scaffolds STATE.md
+    await fetch(`${r.url}/api/cards/RB-1/ask`, {
+      method: 'POST',
+      body: JSON.stringify({ question: 'q' }),
+    });
+    const state = (await json(await fetch(`${r.url}/api/state`))) as {
+      ownerQueue: Record<string, unknown>[];
+    };
+    expect(state.ownerQueue).toHaveLength(1);
+    expect('kind' in (state.ownerQueue[0] as object)).toBe(false);
+  });
+});
+
 describe('map-only mode refuses mutations over HTTP (K10)', () => {
   async function boardlessRig() {
     const repo = await makeTempRepoNoBoard({ 'src/a.ts': 'export const a = 1;\n' });

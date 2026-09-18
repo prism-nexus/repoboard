@@ -20,6 +20,8 @@ export interface AskDecisionOptions {
   question: string;
   /** May be empty: a yes/no or free-text question, answered with `words` only. */
   options?: DecisionOption[];
+  /** RCB-52: an owner WORK item, same queue. Must have no options (`askDecision` refuses). */
+  kind?: 'task';
   actor: string;
   now: Date;
   /** Withdraw an already-open decision instead of erroring; logs `question withdrawn` first. */
@@ -66,6 +68,11 @@ export function isDecided(card: Card): boolean {
   return d.chosen !== null || d.decidedAt !== null;
 }
 
+/** RCB-52: is the open (or answered) decision on this card an owner WORK item, not a question? */
+export function isOwnerTask(card: Card): boolean {
+  return card.decision?.kind === 'task';
+}
+
 function duplicateLetters(options: readonly DecisionOption[]): string[] {
   const seen = new Set<string>();
   const dups = new Set<string>();
@@ -76,14 +83,22 @@ function duplicateLetters(options: readonly DecisionOption[]): string[] {
   return [...dups];
 }
 
-/** `asked: <question> [A1|A2|A3]` — the bracket is omitted when there are no options. */
-function askedLine(question: string, options: readonly DecisionOption[]): string {
+/**
+ * `asked: <question> [A1|A2|A3]` — the bracket is omitted when there are no options.
+ * RCB-52: a task (always no options) logs `owner task: <question>` instead.
+ */
+function askedLine(question: string, options: readonly DecisionOption[], kind?: 'task'): string {
+  if (kind === 'task') return `owner task: ${question}`;
   const letters = options.length > 0 ? ` [${options.map((o) => o.letter).join('|')}]` : '';
   return `asked: ${question}${letters}`;
 }
 
-/** `decided <letter> — "<words>"` · `decided <letter>` · `decided — "<words>"` (no letter). */
-function decidedLine(letter: string | undefined, words: string | undefined): string {
+/**
+ * `decided <letter> — "<words>"` · `decided <letter>` · `decided — "<words>"` (no letter).
+ * RCB-52: a task (never a letter) logs `done` or `done — "<words>"` instead.
+ */
+function decidedLine(letter: string | undefined, words: string | undefined, kind?: 'task'): string {
+  if (kind === 'task') return words !== undefined ? `done — "${words}"` : 'done';
   if (letter !== undefined && words !== undefined) return `decided ${letter} — "${words}"`;
   if (letter !== undefined) return `decided ${letter}`;
   return `decided — "${words}"`;
@@ -109,6 +124,9 @@ export function askDecision(card: Card, opts: AskDecisionOptions): AskDecisionRe
     return { ok: false, error: 'question must not be empty' };
   }
   const options = (opts.options ?? []).map((o) => ({ letter: o.letter, text: o.text }));
+  if (opts.kind === 'task' && options.length > 0) {
+    return { ok: false, error: 'a task has no options' };
+  }
   const dups = duplicateLetters(options);
   if (dups.length > 0) {
     return { ok: false, error: `duplicate option letter(s): ${dups.join(', ')}` };
@@ -158,6 +176,8 @@ export function askDecision(card: Card, opts: AskDecisionOptions): AskDecisionRe
 
   const decision: Decision = {
     question,
+    // Spread conditionally: a question object must have no `kind` key at all.
+    ...(opts.kind === 'task' ? { kind: 'task' as const } : {}),
     options,
     askedBy: opts.actor,
     askedAt: ts,
@@ -171,7 +191,10 @@ export function askDecision(card: Card, opts: AskDecisionOptions): AskDecisionRe
     ...working,
     decision,
     updated: ts,
-    body: appendLogLine(working.body, formatLogLine(ts, opts.actor, askedLine(question, options))),
+    body: appendLogLine(
+      working.body,
+      formatLogLine(ts, opts.actor, askedLine(question, options, opts.kind)),
+    ),
   };
   return { ok: true, card: next, event, warnings };
 }
@@ -191,7 +214,7 @@ export function decide(card: Card, opts: DecideOptions): DecideResult {
   if (!decision || !needsDecision(card)) {
     return { ok: false, error: `no decision is open on ${card.id}` };
   }
-  if (opts.letter === undefined && opts.words === undefined) {
+  if (opts.letter === undefined && opts.words === undefined && decision.kind !== 'task') {
     return { ok: false, error: 'decide needs a letter, words, or both' };
   }
   if (opts.letter !== undefined) {
@@ -215,7 +238,7 @@ export function decide(card: Card, opts: DecideOptions): DecideResult {
     updated: ts,
     body: appendLogLine(
       card.body,
-      formatLogLine(ts, opts.actor, decidedLine(opts.letter, opts.words)),
+      formatLogLine(ts, opts.actor, decidedLine(opts.letter, opts.words, decision.kind)),
     ),
   };
   let warnings: string[] = [];

@@ -21,6 +21,7 @@ import {
   formatCostTable,
   formatLogBlock,
   initialStateText,
+  isOwnerTask,
   isSiblingUrl,
   needsDecision,
   type Priority,
@@ -96,9 +97,12 @@ Usage:
   repoboard card show <id> [--resolve]        print the card file; --resolve appends the lines each
                                         refs: entry points at, read live from the file; an
                                         archived id prints \`archived: .repoboard/archive/<id>.md\`
-  repoboard card ask <id> "<question>" [--option "A1 <text>"]... [--as a] [--replace]
+  repoboard card ask <id> "<question>" [--option "A1 <text>"]... [--as a] [--replace] [--task]
                                         open a decision on a card (P8.1); --replace withdraws one
                                         already open. With no options, the owner answers with --words.
+                                        --task files an owner WORK item instead of a question (no
+                                        options; the owner closes it with \`card decide <id>\` and
+                                        no letter)
   repoboard card decide <id> [<letter>] [--words "<verbatim>"] [--as a]
                                         answer the open decision; a letter, --words, or both
   repoboard lease take <resource> [--as h] [--until ts] [--note n] [--force]
@@ -560,25 +564,31 @@ async function cmdCardAsk(args: string[], io: CliIO): Promise<number> {
     option: { type: 'string', multiple: true },
     as: { type: 'string' },
     replace: { type: 'boolean', default: false },
+    task: { type: 'boolean', default: false },
   });
   const [id, question] = positionals;
   if (!id || !question) {
     throw new UserError(
-      'usage: repoboard card ask <id> "<question>" [--option "A1 <text>"]... [--as a] [--replace]',
+      'usage: repoboard card ask <id> "<question>" [--option "A1 <text>"]... [--as a] [--replace] [--task]',
     );
   }
   const options = (values.option ?? []).map(parseOptionFlag);
+  const kind = values.task ? ('task' as const) : undefined;
   const root = await requireRoot(io);
   const store = await openStore(root, { watch: false, now: io.now });
   const res = await store.ask(
     id,
-    { question, options, replace: values.replace },
+    { question, options, replace: values.replace, kind },
     actorFrom(values.as, io),
   );
   if (!res.ok) throw new UserError(res.error);
   for (const w of res.warnings) (io.stderr ?? io.stdout).write(`warning: ${w}\n`);
-  const n = options.length;
-  io.stdout.write(`asked ${id}: ${question} (${n} option${n === 1 ? '' : 's'})\n`);
+  if (values.task) {
+    io.stdout.write(`owner task ${id}: ${question}\n`);
+  } else {
+    const n = options.length;
+    io.stdout.write(`asked ${id}: ${question} (${n} option${n === 1 ? '' : 's'})\n`);
+  }
   return 0;
 }
 
@@ -598,7 +608,11 @@ async function cmdCardDecide(args: string[], io: CliIO): Promise<number> {
   for (const w of res.warnings) (io.stderr ?? io.stdout).write(`warning: ${w}\n`);
   const chosen = res.card.decision?.chosen ?? null;
   const words = res.card.decision?.words ?? undefined;
-  io.stdout.write(chosen !== null ? `decided ${id} ${chosen}\n` : `decided ${id} — "${words}"\n`);
+  if (isOwnerTask(res.card)) {
+    io.stdout.write(words !== undefined ? `done ${id} — "${words}"\n` : `done ${id}\n`);
+  } else {
+    io.stdout.write(chosen !== null ? `decided ${id} ${chosen}\n` : `decided ${id} — "${words}"\n`);
+  }
   return 0;
 }
 
@@ -616,7 +630,7 @@ export function formatTable(cards: Card[]): string {
   const anyDecision = cards.some((c) => needsDecision(c));
   const rows = cards.map((c) => {
     const row = [c.id, c.status, c.assignee ?? '-'];
-    if (anyDecision) row.push(needsDecision(c) ? '?' : '');
+    if (anyDecision) row.push(needsDecision(c) ? (isOwnerTask(c) ? '!' : '?') : '');
     row.push(c.title);
     return row;
   });

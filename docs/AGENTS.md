@@ -255,13 +255,25 @@ decision:
 
 `options` may be empty — a yes/no or free-text question, answered with `words` only.
 
+### Owner tasks (RCB-52)
+
+`decision:` gains an optional `kind: task` — an owner WORK item in the SAME queue, not a new
+record type (plan §11 O10, CLAUDE.md "one function per guarantee": `needsDecision` stays the only
+gate into the OWNER QUEUE). `kind` is absent for a question and never written as `kind: question`
+— a question card's bytes are unchanged. A task has no options (asking one with `--option` is
+refused: `a task has no options`) and `decide` closes it with **neither a letter nor words** — a
+plain "done"; words are optional and kept verbatim. The OWNER QUEUE line reads
+`RCB-9 · owner: buy the domain` instead of the question form, and `card list`'s `DECISION` column
+shows `!` for a task instead of `?`.
+
 ### CLI
 
 | Command | Example |
 |---|---|
 | `repoboard card ask <id> "<question>" [--option "A1 <text>"]... [--as a] [--replace]` | `repoboard card ask RCB-36 "sync-issues: which column?" --option "A todo" --option "B backlog"` → `asked RCB-36: sync-issues: which column? (2 options)` |
-| `repoboard card decide <id> [<letter>] [--words "<verbatim>"] [--as a]` | `repoboard card decide RCB-36 A` → `decided RCB-36 A`; or `repoboard card decide RCB-36 --words "do it"` → `decided RCB-36 — "do it"` |
-| `repoboard card list --needs-decision` | filters to cards with an OPEN decision; the table gains a `DECISION` column (a `?` marker) only when at least one listed card has one — see the bytes below |
+| `repoboard card ask <id> "<task text>" --task [--as a]` | `repoboard card ask RCB-9 "buy the domain" --task --as coord` → `owner task RCB-9: buy the domain` |
+| `repoboard card decide <id> [<letter>] [--words "<verbatim>"] [--as a]` | `repoboard card decide RCB-36 A` → `decided RCB-36 A`; or `repoboard card decide RCB-36 --words "do it"` → `decided RCB-36 — "do it"`; on a task, `repoboard card decide RCB-9` → `done RCB-9` (or `done RCB-9 — "<words>"`) |
+| `repoboard card list --needs-decision` | filters to cards with an OPEN decision; the table gains a `DECISION` column (a `?` marker, `!` for a task) only when at least one listed card has one — see the bytes below |
 
 Asking again on a card whose decision is OPEN is refused, naming the open question — pass
 `--replace` to withdraw it and ask a new one. Asking again on a DECIDED card just replaces the
@@ -272,18 +284,21 @@ without one, both only touch the badge.
 
 ### MCP
 
-`ask_owner(id, question, options?, replace?)` and `record_decision(id, letter?, words?)`, plus
-`list_cards(needsDecision: true)` for the owner queue. `get_card` returns `decision` for free —
-nothing extra to ask for.
+`ask_owner(id, question, options?, replace?, kind?)` and `record_decision(id, letter?, words?)`,
+plus `list_cards(needsDecision: true)` for the owner queue. `get_card` returns `decision` for free
+— nothing extra to ask for. `kind: "task"` on `ask_owner` files an owner WORK item (no options; a
+bare `record_decision(id)` closes it, no letter or words needed).
 
 ### HTTP
 
-`POST /api/cards/:id/ask` `{question, options?, replace?}`, `POST /api/cards/:id/decide`
-`{letter?, words?}` — 200 with the card, 400 naming the bad field, 409 when the request conflicts
-with the decision's own state (nothing open to decide; one already open to ask again without
-`replace`). **`PATCH /api/cards/:id` refuses a `decision` field** with 400 ("use /ask and
-/decide") — the only two writers of `decision` are `ask`/`decide`, so nothing can bypass the log
-line that makes a decision auditable.
+`POST /api/cards/:id/ask` `{question, options?, replace?, kind?}`, `POST /api/cards/:id/decide`
+`{letter?, words?}` — 200 with the card, 400 naming the bad field (`kind` must be `"task"` if
+present), 409 when the request conflicts with the decision's own state (nothing open to decide;
+one already open to ask again without `replace`). **`PATCH /api/cards/:id` refuses a `decision`
+field** with 400 ("use /ask and /decide") — the only two writers of `decision` are `ask`/`decide`,
+so nothing can bypass the log line that makes a decision auditable. `GET /api/state`'s
+`ownerQueue` items carry `kind: "task"` only for a task, so the web can render it without
+re-deriving.
 
 ### Bytes (O3), measured on a 10-card fixture (6 plain, 4 with an open 3-option decision)
 

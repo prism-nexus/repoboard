@@ -46,6 +46,26 @@ function askedCard(id: string, question: string, letters: string[]): Card {
   });
 }
 
+/** RCB-52: an open owner task — same shape as `askedCard`, but `kind: 'task'` and no options. */
+function askedTaskCard(id: string, question: string): Card {
+  return sampleCard({
+    id,
+    status: 'decide',
+    decision: {
+      question,
+      kind: 'task',
+      options: [],
+      askedBy: 'claude/coordinator',
+      askedAt: '2026-09-17T20:00:00Z',
+      returnTo: 'doing',
+      chosen: null,
+      words: null,
+      decidedBy: null,
+      decidedAt: null,
+    },
+  });
+}
+
 describe('initialStateText', () => {
   it('is a fresh page with every section a placeholder, stamped now', () => {
     const text = initialStateText({ now: NOW, actor: ACTOR });
@@ -168,6 +188,11 @@ describe('ownerQueueLine / renderOwnerQueue', () => {
     expect(ownerQueueLine(withLetters)).toBe('RCB-40 · sync-issues column? · [A B]');
     const noLetters = askedCard('RCB-41', 'ship now?', []);
     expect(ownerQueueLine(noLetters)).toBe('RCB-41 · ship now?');
+  });
+
+  it('RCB-52: an owner task renders "<id> · owner: <text>" — no letters bracket', () => {
+    const task = askedTaskCard('RCB-9', 'buy the domain');
+    expect(ownerQueueLine(task)).toBe('RCB-9 · owner: buy the domain');
   });
 
   it('the placeholder when nothing is open', () => {

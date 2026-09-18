@@ -1112,6 +1112,11 @@ button {
   border: 1px solid var(--amber);
   line-height: 1;
 }
+.card__decision-mark--task {
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 15%, transparent);
+  border-color: var(--accent);
+}
 .card__decision-letters {
   color: var(--amber);
   letter-spacing: 0.06em;

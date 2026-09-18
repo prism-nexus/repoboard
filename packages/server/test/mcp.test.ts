@@ -464,6 +464,50 @@ describe('repoboard mcp: ask_owner / record_decision (P8.1)', () => {
     expect(rowsAfter).toEqual([]);
   });
 
+  it('ask_owner kind: "task" then record_decision with only id succeeds (RCB-52)', async () => {
+    const r = await rig({ 'RB-1.md': cardText('RB-1', 'todo') });
+    const asked = await r.json<{ card: Card }>('ask_owner', {
+      id: 'RB-1',
+      question: 'set up npm',
+      kind: 'task',
+    });
+    expect(asked.card.decision).toMatchObject({ kind: 'task', options: [] });
+    expect(asked.card.status).toBe('decide');
+    const decided = await r.json<{ card: Card }>('record_decision', { id: 'RB-1' });
+    expect(decided.card.status).toBe('todo');
+    expect(decided.card.decision).toMatchObject({ kind: 'task', chosen: null, words: null });
+  });
+
+  it('ask_owner kind: "task" with options is refused: "a task has no options"', async () => {
+    const r = await rig({ 'RB-1.md': cardText('RB-1', 'todo') });
+    const refused = await r.call('ask_owner', {
+      id: 'RB-1',
+      question: 'set up npm',
+      kind: 'task',
+      options: [{ letter: 'A', text: 'x' }],
+    });
+    expect(refused.isError).toBe(true);
+    expect(textOf(refused)).toMatch(/a task has no options/);
+  });
+
+  /**
+   * Control C3 (MCP half): dropping the `kind` pass-through in `store.ask` writes the card as a
+   * plain question, so a bare `record_decision` (neither letter nor words) would then be refused
+   * instead of succeeding — this test fails on both assertions. Verified per CLAUDE.md; see the
+   * agent's report for the perturbation applied, both failing assertions, and the restore proof.
+   */
+  it('control C3: ask_owner --task really sets kind: task, and record_decision with nothing then succeeds', async () => {
+    const r = await rig({ 'RB-1.md': cardText('RB-1', 'todo') });
+    const asked = await r.json<{ card: Card }>('ask_owner', {
+      id: 'RB-1',
+      question: 'set up npm',
+      kind: 'task',
+    });
+    expect(asked.card.decision?.kind).toBe('task'); // assertion 1
+    const decided = await r.call('record_decision', { id: 'RB-1' });
+    expect(decided.isError).toBeFalsy(); // assertion 2 (a plain question would refuse)
+  });
+
   it('a board with no decision:true column leaves status alone (badge only)', async () => {
     const repo = await makeTempRepoboard({ 'RB-1.md': cardText('RB-1', 'todo') });
     cleanups.push(repo.cleanup);

@@ -11,7 +11,19 @@ import { Avatar } from './Avatar.jsx';
  */
 function DecisionMark({ decision, cardId }: { decision: Decision; cardId: string }) {
   const open = decision.chosen === null && decision.decidedAt === null;
+  const task = decision.kind === 'task';
   if (open) {
+    if (task) {
+      return (
+        <span
+          className="card__decision"
+          title={`owner task: ${decision.question}`}
+          data-testid={`decision-badge-${cardId}`}
+        >
+          <span className="card__decision-mark card__decision-mark--task">!</span>
+        </span>
+      );
+    }
     return (
       <span
         className="card__decision"

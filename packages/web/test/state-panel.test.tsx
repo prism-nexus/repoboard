@@ -70,6 +70,28 @@ describe('StatePanel', () => {
     expect(queue).toHaveTextContent('RCB-40 · sync-issues column? · [A B]');
   });
 
+  it('the OWNER QUEUE line for a task reads owner: <text>, not a question with letters (RCB-52)', () => {
+    const store = testStore();
+    const asked = card('RCB-52', 'decide', {
+      decision: {
+        question: 'buy the domain',
+        kind: 'task',
+        options: [],
+        askedBy: 'claude/coordinator',
+        askedAt: '2026-09-02T22:00:00Z',
+        returnTo: 'doing',
+        chosen: null,
+        words: null,
+        decidedBy: null,
+        decidedAt: null,
+      },
+    });
+    snapshot(store, [asked], undefined, undefined, undefined, mockState());
+    renderApp(store);
+    const queue = screen.getByTestId('state-panel-queue');
+    expect(queue).toHaveTextContent('RCB-52 · owner: buy the domain');
+  });
+
   it('a decided card never appears in the queue', () => {
     const store = testStore();
     const decided = card('RCB-41', 'todo', {

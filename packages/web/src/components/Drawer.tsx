@@ -324,6 +324,7 @@ function DecisionSection({
   onDecide: (input: { letter?: string; words?: string }) => void;
 }) {
   const open = decision.chosen === null && decision.decidedAt === null;
+  const task = decision.kind === 'task';
   const [letter, setLetter] = useState<string | null>(null);
   const [words, setWords] = useState('');
   // A fresh question (or a hand edit that reopened one) clears any half-typed draft.
@@ -336,10 +337,11 @@ function DecisionSection({
   if (!open) {
     return (
       <section className="drawer__section drawer__decision" data-testid="decision-section">
-        <h3>Decision</h3>
+        <h3>{task ? 'Owner task' : 'Decision'}</h3>
         <p className="drawer__decision-question">{decision.question}</p>
         <p className="drawer__decision-answer" data-testid="decision-answer">
-          Decided{decision.chosen ? ` ${decision.chosen}` : ''}
+          {task ? 'Done' : 'Decided'}
+          {decision.chosen ? ` ${decision.chosen}` : ''}
           {decision.words ? ` — "${decision.words}"` : ''} by {decision.decidedBy ?? 'unknown'}
           {decision.decidedAt ? (
             <>
@@ -354,10 +356,10 @@ function DecisionSection({
     );
   }
 
-  const canDecide = letter !== null || words.trim().length > 0;
+  const canDecide = task || letter !== null || words.trim().length > 0;
   return (
     <section className="drawer__section drawer__decision" data-testid="decision-section">
-      <h3>Decision</h3>
+      <h3>{task ? 'Owner task' : 'Decision'}</h3>
       <p className="drawer__decision-question">{decision.question}</p>
       {decision.options.length > 0 ? (
         <div className="drawer__decision-options">
@@ -379,7 +381,7 @@ function DecisionSection({
       ) : null}
       <input
         className="field__input mono drawer__decision-words"
-        placeholder="your words, kept verbatim"
+        placeholder={task ? 'notes, optional' : 'your words, kept verbatim'}
         value={words}
         onChange={(e) => setWords(e.target.value)}
         aria-label="Your words"
@@ -390,7 +392,7 @@ function DecisionSection({
         disabled={!canDecide}
         onClick={() => onDecide({ letter: letter ?? undefined, words: words.trim() || undefined })}
       >
-        Decide
+        {task ? 'Done' : 'Decide'}
       </button>
     </section>
   );

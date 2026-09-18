@@ -19,6 +19,11 @@ export interface DecisionOption {
  */
 export interface Decision {
   question: string;
+  /**
+   * RCB-52: an owner WORK item in the same queue. Absent = a question. A task has no options and
+   * is closed by `decide` with neither letter nor words.
+   */
+  kind?: 'task';
   options: DecisionOption[];
   askedBy: string;
   askedAt: string;

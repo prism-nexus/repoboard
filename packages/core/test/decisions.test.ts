@@ -6,7 +6,8 @@
 import { describe, expect, it } from 'vitest';
 import { defaultBoardConfig } from '../src/board.js';
 import { parseCard, serializeCard } from '../src/card.js';
-import { askDecision, decide, isDecided, needsDecision } from '../src/decisions.js';
+import { askDecision, decide, isDecided, isOwnerTask, needsDecision } from '../src/decisions.js';
+import { ownerQueueLine } from '../src/state.js';
 import type { BoardConfig, Card, Decision } from '../src/types.js';
 import { NOW, sampleCard } from './helpers.js';
 
@@ -388,6 +389,125 @@ describe('needsDecision / isDecided truth table', () => {
     });
     expect(needsDecision(card)).toBe(false);
     expect(isDecided(card)).toBe(true);
+  });
+});
+
+describe('owner tasks (RCB-52): askDecision/decide with kind: task', () => {
+  it('asks a task: kind "task", options [], log line "owner task: …", moves to decide like a question', () => {
+    const card = sampleCard({ status: 'todo', body: 'desc\n' });
+    const r = askDecision(card, {
+      question: 'buy the domain',
+      kind: 'task',
+      actor,
+      now: NOW,
+      config,
+    });
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.card.status).toBe('decide');
+    expect(r.card.decision?.kind).toBe('task');
+    expect(r.card.decision?.options).toEqual([]);
+    expect(r.card.body).toContain('owner task: buy the domain');
+    expect(isOwnerTask(r.card)).toBe(true);
+    expect(needsDecision(r.card)).toBe(true);
+  });
+
+  it('a task with options is refused: "a task has no options"', () => {
+    const card = sampleCard({ status: 'todo' });
+    const r = askDecision(card, {
+      question: 'buy the domain',
+      kind: 'task',
+      options: [{ letter: 'A', text: 'x' }],
+      actor,
+      now: NOW,
+      config,
+    });
+    expect(r).toEqual({ ok: false, error: 'a task has no options' });
+  });
+
+  it('decide with nothing on a task: decided, chosen null, words null, decidedAt set, log "done", moves back to returnTo', () => {
+    const card = sampleCard({ status: 'todo' });
+    const asked = askDecision(card, {
+      question: 'buy the domain',
+      kind: 'task',
+      actor,
+      now: NOW,
+      config,
+    });
+    if (!asked.ok) throw new Error(asked.error);
+    const r = decide(asked.card, { actor, now: NOW, config });
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.card.status).toBe('todo'); // moved back to returnTo
+    expect(r.card.decision?.chosen).toBeNull();
+    expect(r.card.decision?.words).toBeNull();
+    expect(r.card.decision?.decidedAt).toBe('2026-09-02T22:41:10Z');
+    expect(r.card.body).toContain('done');
+    expect(r.card.body).not.toContain('decided');
+    expect(isDecided(r.card)).toBe(true);
+  });
+
+  it('decide with --words on a task: log line "done — \\"<words>\\""', () => {
+    const card = sampleCard({ status: 'todo' });
+    const asked = askDecision(card, {
+      question: 'buy the domain',
+      kind: 'task',
+      actor,
+      now: NOW,
+      config,
+    });
+    if (!asked.ok) throw new Error(asked.error);
+    const r = decide(asked.card, { words: 'done, renewed for a year', actor, now: NOW, config });
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.card.decision?.words).toBe('done, renewed for a year');
+    expect(r.card.body).toContain('done — "done, renewed for a year"');
+  });
+
+  it('a letter on a task is refused with the existing unknown-option message', () => {
+    const card = sampleCard({ status: 'todo' });
+    const asked = askDecision(card, {
+      question: 'buy the domain',
+      kind: 'task',
+      actor,
+      now: NOW,
+      config,
+    });
+    if (!asked.ok) throw new Error(asked.error);
+    expect(decide(asked.card, { letter: 'A', actor, now: NOW, config })).toEqual({
+      ok: false,
+      error: 'unknown option "A" (valid: (this decision has no lettered options))',
+    });
+  });
+
+  /**
+   * Control C2: `decide` on a plain QUESTION with neither letter nor words must still be
+   * refused — only a task (`kind === 'task'`) waives that requirement. Removing the
+   * `&& decision.kind !== 'task'` guard in `decide` (decisions.ts) makes this test fail: bare
+   * `decide` on a question would then wrongly succeed. Verified per CLAUDE.md: see the agent's
+   * report for the perturbation applied, the failing assertion, and the restore proof.
+   */
+  it('control C2: decide with nothing on a plain QUESTION (no kind) is still refused', () => {
+    const card = sampleCard({ status: 'todo' });
+    const asked = askDecision(card, { question: 'Ship it?', actor, now: NOW, config });
+    if (!asked.ok) throw new Error(asked.error);
+    expect(decide(asked.card, { actor, now: NOW, config })).toEqual({
+      ok: false,
+      error: 'decide needs a letter, words, or both',
+    });
+  });
+
+  it('ownerQueueLine for a task omits letters: "RCB-9 · owner: buy the domain"', () => {
+    const card = sampleCard({ id: 'RCB-9', status: 'todo' });
+    const asked = askDecision(card, {
+      question: 'buy the domain',
+      kind: 'task',
+      actor,
+      now: NOW,
+      config,
+    });
+    if (!asked.ok) throw new Error(asked.error);
+    expect(ownerQueueLine(asked.card)).toBe('RCB-9 · owner: buy the domain');
   });
 });
 

@@ -306,6 +306,60 @@ describe('parseCard: unquoted title recovery (K1(b))', () => {
 });
 
 /**
+ * RCB-52: `kind: 'task'` on a `decision:` block. Control C1 — `DecisionSchema`'s FIELD ORDER (not
+ * the input file's order) is what a re-serialize follows: a hand-written file with `kind: task`
+ * written LAST still comes back out with `kind: task` on the line right after `question:`, because
+ * zod's parsed output follows the schema's declared key order (card.ts's own comment). A plain
+ * QUESTION card's bytes stay byte-for-byte UNCHANGED — no `kind:` line at all, never written as
+ * `kind: question` (the field is spread conditionally in `askDecision`, and simply absent from a
+ * hand-written question card). Perturbing `DecisionSchema` to declare `kind` after `options`
+ * instead of right after `question` makes the first test below fail.
+ */
+describe('RCB-52: decision.kind "task" follows schema order; a question card is byte-unchanged (C1)', () => {
+  const DECISION_TASK_LAST = [
+    '---',
+    'id: RB-1',
+    'title: t',
+    'status: decide',
+    'decision:',
+    '  question: buy the domain',
+    '  options: []',
+    '  askedBy: claude/test',
+    '  askedAt: 2026-09-02T22:41:10Z',
+    '  returnTo: null',
+    '  chosen: null',
+    '  words: null',
+    '  decidedBy: null',
+    '  decidedAt: null',
+    '  kind: task', // written LAST on purpose — proves SCHEMA order wins, not input order
+    'created: 2026-01-01T00:00:00Z',
+    'updated: 2026-01-02T00:00:00Z',
+    '---',
+    'body\n',
+  ].join('\n');
+
+  it('a task round-trips with `kind: task` on the line right after `question:`, regardless of input order', () => {
+    const card = mustParse(DECISION_TASK_LAST);
+    expect(card.decision?.kind).toBe('task');
+    const text = serializeCard(card);
+    const lines = text.split('\n');
+    const questionIdx = lines.findIndex((l) => l.trim().startsWith('question:'));
+    expect(questionIdx).toBeGreaterThanOrEqual(0);
+    expect(lines[questionIdx + 1]?.trim()).toBe('kind: task');
+    expect(mustParse(text)).toEqual(card);
+    expect(serializeCard(mustParse(text))).toBe(text);
+  });
+
+  it('a plain QUESTION card (no kind) is byte-for-byte unchanged: no `kind:` line at all', () => {
+    const card = mustParse(DECISION_TASK_LAST.replace('  kind: task\n', ''));
+    expect('kind' in (card.decision as object)).toBe(false);
+    const text = serializeCard(card);
+    expect(text).not.toMatch(/^\s*kind:/m);
+    expect(mustParse(text)).toEqual(card);
+  });
+});
+
+/**
  * The recovery must be invisible to every card this repo already has: if none of them makes
  * `YAML.parse` throw, none of them can reach the fallback, so none can change meaning. Read-only,
  * and skipped when the directory is absent (a packed copy, a clean checkout of the package alone).

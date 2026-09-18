@@ -996,6 +996,97 @@ describe('repoboard card ask / decide (P8.1)', () => {
   });
 });
 
+describe('repoboard card ask --task / decide (RCB-52 owner tasks)', () => {
+  it('card ask --task RCB-x "set up npm" --as coord → card file has kind: task, status decide, needs-decision shows !', async () => {
+    const root = await freshRepo({ 'RB-1.md': cardText('RB-1', 'todo', { title: 'Set up npm' }) });
+    const res = await repoboard(
+      root,
+      'card',
+      'ask',
+      'RB-1',
+      'set up npm',
+      '--task',
+      '--as',
+      'coord',
+    );
+    expect(res.code).toBe(0);
+    expect(res.out).toBe('owner task RB-1: set up npm\n');
+    const file = await readFile(join(root, '.repoboard', 'cards', 'RB-1.md'), 'utf8');
+    expect(file).toContain('kind: task');
+    expect(file).toContain('status: decide');
+    expect(file).toContain('owner task: set up npm');
+    const filtered = await repoboard(root, 'card', 'list', '--needs-decision');
+    expect(filtered.out.split('\n')).toEqual([
+      'ID    STATUS  ASSIGNEE  DECISION  TITLE',
+      'RB-1  decide  -         !         Set up npm',
+      '',
+    ]);
+  });
+
+  it('card ask --task with --option is refused: exit 1 "a task has no options"', async () => {
+    const root = await freshRepo({ 'RB-1.md': cardText('RB-1', 'todo') });
+    const res = await repoboard(
+      root,
+      'card',
+      'ask',
+      'RB-1',
+      'set up npm',
+      '--task',
+      '--option',
+      'A x',
+    );
+    expect(res.code).toBe(1);
+    expect(res.err).toMatch(/a task has no options/);
+  });
+
+  it('card decide RCB-x --as owner on a task with nothing: exit 0 "done RB-1", status back to returnTo', async () => {
+    const root = await freshRepo({ 'RB-1.md': cardText('RB-1', 'todo') });
+    await repoboard(root, 'card', 'ask', 'RB-1', 'set up npm', '--task');
+    const res = await repoboard(root, 'card', 'decide', 'RB-1', '--as', 'owner');
+    expect(res.code).toBe(0);
+    expect(res.out).toBe('done RB-1\n');
+    const file = await readFile(join(root, '.repoboard', 'cards', 'RB-1.md'), 'utf8');
+    expect(file).toContain('status: todo');
+    expect(file).toContain('chosen: null');
+    expect(file).toContain('— done\n');
+    expect(file).not.toContain('— decided');
+  });
+
+  it('card decide on a task with --words prints \'done <id> — "<words>"\'', async () => {
+    const root = await freshRepo({ 'RB-1.md': cardText('RB-1', 'todo') });
+    await repoboard(root, 'card', 'ask', 'RB-1', 'set up npm', '--task');
+    const res = await repoboard(root, 'card', 'decide', 'RB-1', '--words', 'done, renewed');
+    expect(res.code).toBe(0);
+    expect(res.out).toBe('done RB-1 — "done, renewed"\n');
+  });
+
+  it('a letter on a task is refused, same as any option-less decision', async () => {
+    const root = await freshRepo({ 'RB-1.md': cardText('RB-1', 'todo') });
+    await repoboard(root, 'card', 'ask', 'RB-1', 'set up npm', '--task');
+    const res = await repoboard(root, 'card', 'decide', 'RB-1', 'A');
+    expect(res.code).toBe(1);
+    expect(res.err).toMatch(
+      /unknown option "A" \(valid: \(this decision has no lettered options\)\)/,
+    );
+  });
+
+  /**
+   * Control C3 (server half): dropping the `kind` pass-through in `store.ask` (store.ts, the
+   * `askDecision(card, {..., kind: input.kind, ...})` call) writes the card as a plain question —
+   * this test then fails on BOTH assertions below. Verified per CLAUDE.md; see the agent's report
+   * for the perturbation applied, both failing assertions, and the restore proof.
+   */
+  it('control C3: card ask --task really sets kind: task, and decide with nothing then succeeds', async () => {
+    const root = await freshRepo({ 'RB-1.md': cardText('RB-1', 'todo') });
+    await repoboard(root, 'card', 'ask', 'RB-1', 'set up npm', '--task');
+    const file = await readFile(join(root, '.repoboard', 'cards', 'RB-1.md'), 'utf8');
+    expect(file).toContain('kind: task'); // assertion 1
+    const decided = await repoboard(root, 'card', 'decide', 'RB-1');
+    expect(decided.code).toBe(0); // assertion 2 (a plain question would refuse: exit 1)
+    expect(decided.out).toBe('done RB-1\n');
+  });
+});
+
 describe('repoboard lease / window (P8.2)', () => {
   it('lease take writes leases.yml and prints "took <resource> as <holder> until <until|—>"', async () => {
     const root = await freshRepo({});

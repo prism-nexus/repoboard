@@ -40,7 +40,7 @@ export type {
   DecideOptions,
   DecideResult,
 } from './decisions.js';
-export { askDecision, decide, isDecided, needsDecision } from './decisions.js';
+export { askDecision, decide, isDecided, isOwnerTask, needsDecision } from './decisions.js';
 export type {
   CloseSyncedCardOptions,
   CloseSyncedCardResult,

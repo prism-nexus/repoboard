@@ -22,6 +22,8 @@ export const DecisionOptionSchema = z.looseObject({
  */
 export const DecisionSchema = z.looseObject({
   question: z.string(),
+  /** RCB-52: absent for a question — never written as `kind: question`. */
+  kind: z.literal('task').optional(),
   options: z.array(DecisionOptionSchema).default(() => []),
   askedBy: z.string(),
   askedAt: isoDatetime,

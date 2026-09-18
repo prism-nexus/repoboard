@@ -400,11 +400,18 @@ export function createMcpServer(opts: McpServerOptions): McpServer {
               'free-text question — the owner then answers with words only.',
           ),
         replace: z.boolean().optional().describe('Withdraw an already-open decision and re-ask.'),
+        kind: z
+          .literal('task')
+          .optional()
+          .describe(
+            'An owner WORK item, same queue; no options; closed by record_decision with ' +
+              'neither letter nor words.',
+          ),
         actor: z.string().optional().describe(ACTOR_DESC),
       },
     },
-    async ({ id, question, options, replace, actor }) => {
-      const res = await store.ask(id, { question, options, replace }, actor ?? defaultActor);
+    async ({ id, question, options, replace, kind, actor }) => {
+      const res = await store.ask(id, { question, options, replace, kind }, actor ?? defaultActor);
       if (!res.ok) return fail(nameField(res.error));
       return ok({ card: res.card, warnings: res.warnings });
     },
@@ -418,7 +425,8 @@ export function createMcpServer(opts: McpServerOptions): McpServer {
         `${CARD_INTRO}Answers the card's open \`decision\`: a \`letter\` naming one of its ` +
         'options, `words` (verbatim), or both — at least one is required. Refuses an unknown ' +
         'letter (names the valid ones) and refuses when nothing is open. Moves the card back to ' +
-        'where `ask_owner` moved it from, if anywhere.',
+        'where `ask_owner` moved it from, if anywhere. On an owner task (RCB-52), neither a ' +
+        'letter nor words is required — a bare call closes it.',
       inputSchema: {
         id: z.string().describe('Card id, e.g. RB-12.'),
         letter: z.string().optional().describe('One of the decision’s option letters.'),

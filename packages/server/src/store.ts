@@ -116,6 +116,8 @@ export interface AskInput {
   question: string;
   options?: DecisionOption[];
   replace?: boolean;
+  /** RCB-52: an owner WORK item, same queue. Must have no options. */
+  kind?: 'task';
 }
 
 /** P8.1: `decide` input. At least one of `letter`/`words` is required (enforced by core). */
@@ -422,6 +424,7 @@ export class CardStore extends EventEmitter<StoreEvents> {
         question: input.question,
         options: input.options,
         replace: input.replace,
+        kind: input.kind,
         actor,
         now: this.now(),
         config: this.cfg,

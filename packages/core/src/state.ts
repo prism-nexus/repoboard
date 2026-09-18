@@ -11,7 +11,7 @@
  */
 import { findColumn } from './board.js';
 import type { CostReport } from './cost.js';
-import { needsDecision } from './decisions.js';
+import { isOwnerTask, needsDecision } from './decisions.js';
 import { holdsLiveLease, staleLeases } from './leases.js';
 import { isActive } from './presence.js';
 import type { LogBlock } from './repolog.js';
@@ -98,9 +98,13 @@ export function parseState(text: string): StateParseResult {
   return { ok: true, doc };
 }
 
-/** `RCB-40 · <question> · [A B]` (locked decision 1) — the letters are omitted when there are none. */
+/**
+ * `RCB-40 · <question> · [A B]` (locked decision 1) — the letters are omitted when there are none.
+ * RCB-52: an owner task renders `RCB-9 · owner: buy the domain` instead — no letters bracket.
+ */
 export function ownerQueueLine(card: Card): string {
   const d = card.decision;
+  if (isOwnerTask(card)) return `${card.id} · owner: ${d?.question ?? ''}`;
   const letters =
     d && d.options.length > 0 ? ` · [${d.options.map((o) => o.letter).join(' ')}]` : '';
   return `${card.id} · ${d?.question ?? ''}${letters}`;

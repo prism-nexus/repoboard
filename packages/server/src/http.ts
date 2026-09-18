@@ -15,6 +15,7 @@ import {
   type CardPatch,
   type CreateCardInput,
   type DecisionOption,
+  isOwnerTask,
   mergeSiblings,
   needsDecision,
   type Priority,
@@ -114,7 +115,13 @@ const CREATE_FIELDS: ReadonlySet<string> = new Set([
   'actor',
 ]);
 const PRIORITIES: ReadonlySet<string> = new Set(['high', 'medium', 'low']);
-const ASK_FIELDS: ReadonlySet<string> = new Set(['question', 'options', 'replace', 'actor']);
+const ASK_FIELDS: ReadonlySet<string> = new Set([
+  'question',
+  'options',
+  'replace',
+  'kind',
+  'actor',
+]);
 const DECIDE_FIELDS: ReadonlySet<string> = new Set(['letter', 'words', 'actor']);
 const TAKE_LEASE_FIELDS: ReadonlySet<string> = new Set([
   'resource',
@@ -426,6 +433,7 @@ interface AskInput {
   question: string;
   options?: DecisionOption[];
   replace?: boolean;
+  kind?: 'task';
 }
 
 function toAskInput(body: Json): AskInput {
@@ -444,6 +452,10 @@ function toAskInput(body: Json): AskInput {
   if (body.replace !== undefined) {
     if (typeof body.replace !== 'boolean') throw new HttpError(400, 'replace must be a boolean');
     input.replace = body.replace;
+  }
+  if (body.kind !== undefined) {
+    if (body.kind !== 'task') throw new HttpError(400, 'kind must be "task"');
+    input.kind = 'task';
   }
   return input;
 }
@@ -708,6 +720,7 @@ export async function startServer(opts: ServerOptions): Promise<RunningServer> {
       id: c.id,
       question: c.decision?.question ?? '',
       options: c.decision?.options ?? [],
+      ...(isOwnerTask(c) ? { kind: 'task' as const } : {}),
     }));
     const text = renderState(doc.sections, openCards, {
       now: new Date(Date.parse(doc.stamp)),

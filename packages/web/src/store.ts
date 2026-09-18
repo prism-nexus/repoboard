@@ -13,10 +13,12 @@ import {
   type RepoSnapshot,
   type Sibling,
 } from '@repoboard/core';
+import { apiPath, locationForRepo, wsPath } from './repo-key.js';
 import type {
   ClientMessage,
   LeasesPayload,
   LogPayload,
+  ReposPayload,
   ServerMessage,
   StatePayload,
   Transport,
@@ -32,6 +34,13 @@ export interface Toast {
 }
 
 export interface State {
+  /** RCB-43 slice 3: this page's own key (`?repo=<key>` at load), or `null` for the primary.
+   * Set once from `StoreOptions.repoKey` and never changed — switching repos is a real
+   * navigation (`locationForRepo` + `window.location.assign`), not an in-place update. */
+  repoKey: string | null;
+  /** RCB-43 slice 3: `GET /api/repos`, fetched once when the store starts (`connect()`); `null`
+   * until that fetch lands. Feeds the top bar's selector. */
+  repos: ReposPayload | null;
   config: BoardConfig | null;
   /**
    * P7.2: false when the served repo has no `.repoboard/` — map-only. `config` is then the
@@ -71,6 +80,8 @@ export interface StoreOptions {
   storage?: Pick<Storage, 'getItem' | 'setItem'> | null;
   prefersDark?: boolean;
   now?: () => number;
+  /** RCB-43 slice 3: see `State.repoKey`. Defaults to `null` (today's single-repo behaviour). */
+  repoKey?: string | null;
 }
 
 export const EVENTS_KEPT = 50;
@@ -133,8 +144,11 @@ export function createStore(factory: TransportFactory, opts: StoreOptions = {}):
   const storage = opts.storage === undefined ? safeLocalStorage() : opts.storage;
   const storedFun = storage?.getItem(STORAGE_FUN);
   const storedTheme = storage?.getItem(STORAGE_THEME);
+  const repoKey = opts.repoKey ?? null;
 
   let state: State = {
+    repoKey,
+    repos: null,
     config: null,
     hasBoard: true,
     cards: [],
@@ -179,6 +193,31 @@ export function createStore(factory: TransportFactory, opts: StoreOptions = {}):
     const id = ++toastSeq;
     set({ toasts: [...state.toasts, { id, text }] });
     setTimeout(() => store.dismissToast(id), 6000);
+  };
+
+  /**
+   * RCB-43 slice 3: `GET /api/repos` — always unprefixed, fetched once when the store starts
+   * (`connect()`). An unknown `repoKey` (a stale or mistyped `?repo=` in the URL) toasts and
+   * navigates to the primary rather than spinning forever — every scoped fetch would 404 and the
+   * scoped WS upgrade is destroyed by the server, so there is nothing to wait for.
+   */
+  const loadRepos = async (): Promise<void> => {
+    if (typeof fetch !== 'function') return;
+    let res: Response;
+    try {
+      res = await fetch('/api/repos');
+    } catch {
+      return;
+    }
+    if (!res.ok) return;
+    const payload = (await res.json()) as ReposPayload;
+    set({ repos: payload });
+    if (repoKey !== null && !payload.repos.some((r) => r.key === repoKey)) {
+      toast(`unknown repo '${repoKey}' — showing ${payload.primary}`);
+      if (typeof window !== 'undefined') {
+        window.location.assign(locationForRepo(null, payload.primary));
+      }
+    }
   };
 
   const settle = (id: string) => {
@@ -296,7 +335,7 @@ export function createStore(factory: TransportFactory, opts: StoreOptions = {}):
       if (typeof fetch !== 'function') return;
       let res: Response;
       try {
-        res = await fetch(`/api/cards/${encodeURIComponent(id)}/decide`, {
+        res = await fetch(apiPath(`/api/cards/${encodeURIComponent(id)}/decide`, repoKey), {
           method: 'POST',
           headers: { 'content-type': 'application/json' },
           body: JSON.stringify({ ...input, actor: 'web' }),
@@ -319,7 +358,7 @@ export function createStore(factory: TransportFactory, opts: StoreOptions = {}):
       if (typeof fetch !== 'function') return;
       let res: Response;
       try {
-        res = await fetch('/api/archive', {
+        res = await fetch(apiPath('/api/archive', repoKey), {
           method: 'POST',
           headers: { 'content-type': 'application/json' },
           body: JSON.stringify({ olderThan: '14d', actor: 'web' }),
@@ -343,7 +382,7 @@ export function createStore(factory: TransportFactory, opts: StoreOptions = {}):
       if (typeof fetch !== 'function') return false;
       let res: Response;
       try {
-        res = await fetch('/api/board', {
+        res = await fetch(apiPath('/api/board', repoKey), {
           method: 'PATCH',
           headers: { 'content-type': 'application/json' },
           body: JSON.stringify({ columns, actor: 'web' }),
@@ -385,10 +424,14 @@ export function createStore(factory: TransportFactory, opts: StoreOptions = {}):
     dismissToast: (id) => set({ toasts: state.toasts.filter((t) => t.id !== id) }),
     connect() {
       transport?.close();
-      transport = factory({
-        onMessage: (msg) => store.dispatch(msg),
-        onConnected: (connected) => set({ connected }),
-      });
+      transport = factory(
+        {
+          onMessage: (msg) => store.dispatch(msg),
+          onConnected: (connected) => set({ connected }),
+        },
+        wsPath(repoKey),
+      );
+      void loadRepos();
       return () => {
         transport?.close();
         transport = null;

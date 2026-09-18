@@ -227,3 +227,85 @@ As every slice (no commit; no `pnpm test`; targeted `vitest run test/multiroot.t
 test/http.test.ts test/repo-watch.test.ts`; typecheck 0 per save; no `any`; biome from root;
 stay in Owns; ports 0 only; never touch :4242/:4243/:5173/:8787; controls the CLAUDE.md way;
 `packages/web` untouched — slice 3 is the web).
+
+---
+
+## Slice 3 — detailed brief (written after slice 2 landed 4f75bec)
+
+Baseline on `main` @ 4f75bec: 730 passed | 2 skipped (732), 45 files; typecheck 0; lint 129 clean.
+
+### What exists
+Server: `GET /api/repos` (list, always unprefixed), `/api/repos/<key>/<rest>` mirrors `/api/<rest>`
+on that root, `/api/repos/<key>/ws` is that root's WS, unprefixed = primary. Web: `main.tsx`
+builds one store with `connectWs` (`ws.ts:defaultWsUrl` → `/ws`), and five call sites hardcode
+`/api/...` (`store.ts:299,322,346`, `ws.ts:76`, `CostTile.tsx:23`, `Drawer.tsx:228`). `TopBar`
+shows `boardDisplayName(config, repo.root)` and RCB-42 sibling links.
+
+### Design — one base-path rule, a selector, the key in the URL, a real navigation to switch
+**1. `packages/web/src/repo-key.ts`** (new, pure, tested): 
+```ts
+export function repoKeyFromLocation(loc: Pick<Location, 'search'>): string | null  // ?repo=<key>, trimmed, '' → null
+export function apiPath(path: string, key: string | null): string
+  // key null → path unchanged; else '/api/x' → `/api/repos/${encodeURIComponent(key)}/x`.
+  // Throws if path does not start with '/api/' — a wrong call is a bug, not a silent primary hit.
+export function wsPath(key: string | null): string   // '/ws' or `/api/repos/${key}/ws`
+export function locationForRepo(key: string | null, primaryKey: string): string
+  // '?repo=<key>' or '?' stripped when key === primaryKey or null — the primary's URL is the plain one
+```
+**2. The store takes the key once.** `StoreOptions.repoKey?: string | null` (default null);
+`createStore` keeps it and every existing `fetch('/api/...')` becomes `fetch(apiPath('/api/...',
+key))`. `connectWs`'s default URL becomes `defaultWsUrl(location, wsPath(key))` — add the
+optional second argument, default `'/ws'`, so existing callers/tests are unchanged. `CostTile`
+and `Drawer` get the key from the store (`store.getState().repoKey`, or a prop from where they are
+rendered — agent's call, say which; no module-level global). `main.tsx` reads
+`repoKeyFromLocation(window.location)` and passes it in. **Switching = navigation**: the page
+reloads at `locationForRepo(key, primaryKey)`. No in-place transport swap in this slice — the
+store holds cards, leases, state, repo, arrivals; re-pointing all of that live is a follow-up if
+the owner wants it, and a reload is honest.
+**3. Selector.** `GET /api/repos` (unprefixed, always) fetched once at start by the store into
+`state.repos: ReposPayload | null` (type in `wire.ts`, mirroring the server's shape). `TopBar`
+renders a `<select>` next to the name **only when `repos.repos.length >= 2`**, options
+`name` (+ ` · map-only` when `!hasBoard`), current = `repoKey ?? primary`; `onChange` →
+`window.location.assign(locationForRepo(key, primary))`. A one-repo server shows nothing new —
+a user of today's `serve` sees no change. Sibling links (RCB-42) stay as they are: they are boards
+served by OTHER processes.
+**4. Title/name**: unchanged — `boardDisplayName(config, repo.root)` already shows the right
+root because `repo` now comes from the scoped WS. Note for `map-only` roots: `hasBoard` arrives
+false in the snapshot and the existing `NoBoard` view renders — verify, do not special-case.
+**5. Unknown key in the URL** (`?repo=nope`): the WS upgrade is destroyed by the server and the
+scoped fetches 404. The store must show that, not spin: on the first `GET /api/repos` result, if
+`repoKey` is not among the keys, set a `state.error`-style toast "unknown repo ‘nope’ — showing
+<primary>" and navigate to the primary. One test.
+
+### Owns (slice 3)
+`packages/web/src/repo-key.ts` (new), `packages/web/src/store.ts`, `packages/web/src/ws.ts`
+(`defaultWsUrl` second arg only), `packages/web/src/wire.ts` (ReposPayload type),
+`packages/web/src/main.tsx`, `packages/web/src/components/TopBar.tsx`,
+`packages/web/src/components/CostTile.tsx`, `packages/web/src/components/Drawer.tsx` (the one
+url line each), `packages/web/src/App.tsx` (prop plumbing only), `packages/web/src/styles.css`
+(append `.topbar__repos` block), `packages/web/test/repo-key.test.ts` (new),
+`packages/web/test/repo-switcher.test.tsx` (new), `packages/web/test/helpers.tsx` (only to add
+`repos` to `snapshot`/`testStore` defaults if needed — say what), `docs/AGENTS.md` (one sentence
+where the web UI is described), `README.md` (one sentence: `?repo=<key>` and the selector).
+**Not** `packages/server`, `packages/core`.
+
+### Tests
+`repo-key.test.ts`: apiPath for null/key/encoding/throws-on-non-api; wsPath; repoKeyFromLocation
+('', '?repo=', '?repo=a%20b', other params); locationForRepo (primary → plain, other → ?repo=).
+`repo-switcher.test.tsx` (fetch stubbed; `/api/repos` → two repos):
+1. Selector renders with two options, current = primary when no key; hidden with one repo.
+2. With `repoKey:'b'`: every fetch the store makes hits `/api/repos/b/...` (assert on the stub's
+   recorded URLs for archive, decide, board PATCH, cost) and the WS factory was called with a URL
+   ending `/api/repos/b/ws`.
+3. `onChange` to `b` calls `location.assign('?repo=b')`; back to the primary → `'?'`-stripped
+   plain path (stub `window.location.assign`, do not navigate jsdom).
+4. Unknown key → toast text contains `unknown repo` and `assign` called with the primary's URL.
+Existing web tests all green (they construct stores with no key — the default path).
+Control: make `apiPath` ignore the key (return `path`) → test 2 fails (paste); restore. Second:
+drop the `>= 2` condition → test 1's "hidden with one repo" fails; restore.
+
+### Rules
+As every slice; targeted `pnpm --filter @repoboard/web exec vitest run test/repo-key.test.ts
+test/repo-switcher.test.tsx` then the whole web test dir once (`vitest run` in packages/web — no
+ports, jsdom only); typecheck 0 after EVERY save (hot reload); no `any`; biome from root; no
+`git add`; never touch :4242/:4243/:5173/:8787. The builder dogfoods on a third port after landing.

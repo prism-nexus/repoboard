@@ -73,6 +73,11 @@ per root too: `/ws` is always the primary, `/api/repos/<key>/ws` is that root's 
 naming every known key. `repos` is a reserved key (a root whose folder is literally `repos`
 becomes `repos-2`, as if it had already collided) so it can never be confused with the list route.
 
+**The web (RCB-43 slice 3).** The top bar shows a repo `<select>` (fed by `GET /api/repos`, shown
+only when 2+ roots are served) whose choice is a real page navigation to `?repo=<key>` (or the
+plain URL for the primary) — every scoped fetch and the WS go through the one base-path rule in
+`packages/web/src/repo-key.ts`.
+
 `card list` prints a table by default. `--json` prints one compact row per line, without the body:
 `{id, title, status, assignee, priority, labels, files, updated}`, absent scalars as `null`;
 `--json --full` adds `body` and the rest of the frontmatter. On this repo's 31 cards, measured

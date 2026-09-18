@@ -58,6 +58,8 @@ function Shell() {
         fun={state.fun}
         theme={state.theme}
         view={state.view}
+        repos={state.repos}
+        repoKey={state.repoKey}
         onView={store.setView}
         onFun={store.setFun}
         onTheme={store.setTheme}

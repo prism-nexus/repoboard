@@ -14,9 +14,12 @@ export function reconnectDelay(attempt: number, random: () => number = Math.rand
   return Math.min(RECONNECT_CAP_MS, Math.round(base + jitter));
 }
 
-export function defaultWsUrl(loc: Location = window.location): string {
+/** RCB-43 slice 3: `path` defaults to `'/ws'` — the primary's socket, exactly as before this
+ * slice — so every existing caller (and test) that omits it is unaffected. A repo-scoped caller
+ * passes `repo-key.ts`'s `wsPath(key)` instead. */
+export function defaultWsUrl(loc: Location = window.location, path = '/ws'): string {
   const proto = loc.protocol === 'https:' ? 'wss:' : 'ws:';
-  return `${proto}//${loc.host}/ws`;
+  return `${proto}//${loc.host}${path}`;
 }
 
 export function connectWs(handlers: TransportHandlers, url: string = defaultWsUrl()): Transport {
@@ -32,7 +35,7 @@ export function connectWs(handlers: TransportHandlers, url: string = defaultWsUr
     ws.onopen = () => {
       attempt = 0;
       handlers.onConnected(true);
-      seedEvents(handlers);
+      seedEvents(handlers, eventsPathFromWsUrl(url));
     };
     ws.onmessage = (ev) => {
       let data: unknown;
@@ -70,10 +73,30 @@ export function connectWs(handlers: TransportHandlers, url: string = defaultWsUr
   };
 }
 
+/**
+ * RCB-43 slice 3: the events backfill must come from the SAME root as the socket, or a secondary
+ * board's ticker opens showing the primary's history. Derived from the WS URL itself rather than
+ * passed in separately, so the two cannot disagree: `/ws` → `/api/events`;
+ * `/api/repos/<key>/ws` → `/api/repos/<key>/events`. A URL that is neither (a test's `ws://x/`)
+ * falls back to the primary's, which is what it meant before.
+ */
+export function eventsPathFromWsUrl(url: string): string {
+  let pathname: string;
+  try {
+    pathname = new URL(url, 'http://localhost').pathname;
+  } catch {
+    return '/api/events';
+  }
+  if (pathname === '/ws') return '/api/events';
+  return /^\/api\/repos\/[^/]+\/ws$/.test(pathname)
+    ? pathname.replace(/\/ws$/, '/events')
+    : '/api/events';
+}
+
 /** The snapshot carries no history; ask HTTP for recent events so the ticker is not blank. */
-function seedEvents(handlers: TransportHandlers): void {
+function seedEvents(handlers: TransportHandlers, path: string): void {
   if (typeof fetch !== 'function') return;
-  fetch('/api/events')
+  fetch(path)
     .then((r) => (r.ok ? r.json() : []))
     .then((events: unknown) => {
       if (!Array.isArray(events)) return;

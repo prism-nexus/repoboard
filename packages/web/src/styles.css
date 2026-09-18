@@ -157,6 +157,16 @@ button {
   color: var(--ink);
   text-decoration: underline;
 }
+/* RCB-43 slice 3: the repo selector — only rendered when GET /api/repos lists 2+ repos. */
+.topbar__repos {
+  font-family: var(--font-ui);
+  font-size: 12px;
+  padding: 2px 6px;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius);
+  background: var(--surface);
+  color: var(--ink);
+}
 .tabs {
   display: flex;
   gap: 2px;

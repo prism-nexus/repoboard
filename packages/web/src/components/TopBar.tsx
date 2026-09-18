@@ -4,7 +4,9 @@ import {
   type RepoSnapshot,
   type Sibling,
 } from '@repoboard/core';
+import { locationForRepo } from '../repo-key.js';
 import type { Theme, View } from '../store.js';
+import type { ReposPayload } from '../wire.js';
 
 interface Props {
   config: BoardConfig | null;
@@ -16,6 +18,12 @@ interface Props {
   fun: boolean;
   theme: Theme;
   view: View;
+  /** RCB-43 slice 3: `GET /api/repos`, fetched once by the store; `null` until it lands. The
+   * selector renders only once it has landed AND lists 2+ repos — a one-repo `serve` shows
+   * nothing new. */
+  repos: ReposPayload | null;
+  /** RCB-43 slice 3: this page's own key (`?repo=<key>` at load), or `null` for the primary. */
+  repoKey: string | null;
   onView: (v: View) => void;
   onFun: (fun: boolean) => void;
   onTheme: (t: Theme) => void;
@@ -29,6 +37,8 @@ export function TopBar({
   fun,
   theme,
   view,
+  repos,
+  repoKey,
   onView,
   onFun,
   onTheme,
@@ -51,6 +61,21 @@ export function TopBar({
         ) : (
           <span className="muted">waiting for board…</span>
         )}
+        {repos && repos.repos.length >= 2 ? (
+          <select
+            className="topbar__repos"
+            aria-label="Repo"
+            value={repoKey ?? repos.primary}
+            onChange={(e) => window.location.assign(locationForRepo(e.target.value, repos.primary))}
+          >
+            {repos.repos.map((r) => (
+              <option key={r.key} value={r.key}>
+                {r.name}
+                {r.hasBoard ? '' : ' · map-only'}
+              </option>
+            ))}
+          </select>
+        ) : null}
         {siblings.length > 0 ? (
           <span className="topbar__siblings">
             {siblings.map((s) => (

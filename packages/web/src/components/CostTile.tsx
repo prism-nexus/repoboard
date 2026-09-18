@@ -7,7 +7,9 @@
  */
 import type { CostReport } from '@repoboard/core';
 import { useEffect, useState } from 'react';
+import { useStore } from '../hooks.js';
 import { formatBytes } from '../map/model.js';
+import { apiPath } from '../repo-key.js';
 
 type CostState =
   | { kind: 'loading' }
@@ -15,13 +17,16 @@ type CostState =
   | { kind: 'error'; message: string };
 
 function useCost(): CostState {
+  const store = useStore();
+  const repoKey = store.getState().repoKey;
   const [state, setState] = useState<CostState>({ kind: 'loading' });
   useEffect(() => {
     let alive = true;
+    const url = apiPath('/api/cost', repoKey);
     const load = async (): Promise<CostState> => {
       if (typeof fetch !== 'function') return { kind: 'error', message: 'fetch unavailable' };
-      const res = await fetch('/api/cost');
-      if (!res.ok) return { kind: 'error', message: `/api/cost → HTTP ${res.status}` };
+      const res = await fetch(url);
+      if (!res.ok) return { kind: 'error', message: `${url} → HTTP ${res.status}` };
       const report = (await res.json()) as CostReport;
       return { kind: 'ok', report };
     };
@@ -38,7 +43,7 @@ function useCost(): CostState {
     return () => {
       alive = false;
     };
-  }, []);
+  }, [repoKey]);
   return state;
 }
 

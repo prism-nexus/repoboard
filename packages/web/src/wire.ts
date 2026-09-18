@@ -92,6 +92,25 @@ export type ServerMessage =
   | { type: 'state'; state: StatePayload }
   | { type: 'log'; date: string; text: string };
 
+/**
+ * RCB-43 slice 3: one entry of `GET /api/repos`, mirroring `packages/server/src/http.ts`'s
+ * `RepoEntry` — not imported, since the web never depends on `@repoboard/server`.
+ */
+export interface RepoEntry {
+  key: string;
+  root: string;
+  name: string;
+  hasBoard: boolean;
+  open: boolean;
+  scanned: boolean;
+}
+
+/** RCB-43 slice 3: `GET /api/repos`'s whole payload, fetched once by the store into `state.repos`. */
+export interface ReposPayload {
+  primary: string;
+  repos: RepoEntry[];
+}
+
 export type ClientMessage =
   | { type: 'card:move'; id: string; status: string }
   | { type: 'card:update'; id: string; patch: CardPatch };
@@ -106,8 +125,13 @@ export interface TransportHandlers {
   onConnected(connected: boolean): void;
 }
 
-/** Something that opens a connection: the real socket (ws.ts) or the mock (mock/). */
-export type TransportFactory = (handlers: TransportHandlers) => Transport;
+/**
+ * Something that opens a connection: the real socket (ws.ts) or the mock (mock/). RCB-43 slice 3:
+ * the optional second argument is the path to connect to — `'/ws'` for the primary or the
+ * repo-scoped `'/api/repos/<key>/ws'` (`repo-key.ts`'s `wsPath`), which `store.ts`'s `connect()`
+ * always passes. A single-argument factory (the mock) simply ignores it and keeps working.
+ */
+export type TransportFactory = (handlers: TransportHandlers, url?: string) => Transport;
 
 export function isServerMessage(v: unknown): v is ServerMessage {
   return typeof v === 'object' && v !== null && typeof (v as { type?: unknown }).type === 'string';

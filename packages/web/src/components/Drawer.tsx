@@ -1,6 +1,8 @@
 import type { Card, Decision, ResolvedRef } from '@repoboard/core';
 import { useEffect, useMemo, useState } from 'react';
+import { useStore } from '../hooks.js';
 import { renderMarkdown, splitBody } from '../markdown.js';
+import { apiPath } from '../repo-key.js';
 import type { ColumnCards } from '../store.js';
 import { relTime, shortActor } from '../time.js';
 import { Avatar } from './Avatar.jsx';
@@ -218,6 +220,8 @@ type RefsState =
  * Never cached across cards: a new card id starts from `loading`.
  */
 function useRefs(card: Card): RefsState {
+  const store = useStore();
+  const repoKey = store.getState().repoKey;
   const [state, setState] = useState<RefsState>({ kind: 'loading' });
   const specs = card.refs;
   // biome-ignore lint/correctness/useExhaustiveDependencies: `card` identity is the refetch trigger (every card WS message), by design
@@ -225,7 +229,7 @@ function useRefs(card: Card): RefsState {
     if (!specs?.length) return;
     let alive = true;
     setState({ kind: 'loading' });
-    const url = `/api/cards/${encodeURIComponent(card.id)}/refs`;
+    const url = apiPath(`/api/cards/${encodeURIComponent(card.id)}/refs`, repoKey);
     const load = async (): Promise<RefsState> => {
       if (typeof fetch !== 'function') return { kind: 'error', message: 'fetch unavailable' };
       const res = await fetch(url);

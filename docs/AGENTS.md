@@ -23,6 +23,9 @@ tool schema per turn where the harness loads it, ~80 B per call and ~200 B per r
 cheapest per operation; MCP pays off when you have no shell or your harness loads schemas on
 demand; the file edit always works.
 
+This page is for a seat working the maintainers' own board. An outside contributor to this repo
+does not file cards here — see `CONTRIBUTING.md`.
+
 ## 2. CLI (first choice)
 
 `repoboard` is `packages/server/dist/cli.js` (run `pnpm build` once; `npx repoboard` once it is

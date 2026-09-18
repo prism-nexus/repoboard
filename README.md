@@ -19,6 +19,9 @@ npx repoboard init && npx repoboard serve --open
 `http://127.0.0.1:4242`. From a checkout today: `pnpm install && pnpm build`, then
 `node packages/server/dist/cli.js serve --open`.
 
+The repo is at https://github.com/prism-nexus/repoboard; contributions go through
+`CONTRIBUTING.md`.
+
 ## The idea
 
 Plain files are the database: a card is one markdown file with YAML frontmatter in
@@ -149,7 +152,7 @@ nonexistent `logDir` behaves exactly like today.
 
 ```sh
 pnpm install
-pnpm test        # vitest (250 tests) + a gzipped-bundle size check (135.7 KB JS, limit 600 KB)
+pnpm test        # vitest (687 passed, 2 skipped) + a gzipped-bundle size check (140.3 KB JS, limit 600 KB) — measured 2026-09-18
 pnpm typecheck && pnpm lint
 pnpm dev         # server + web with hot reload
 pnpm build       # packages/server/dist/cli.js, self-contained with the built web app
@@ -161,11 +164,14 @@ the running record: `docs/HANDOFF.md`.
 
 ## Status
 
-Pre-1.0. `repoboard@0.1.0` packs to a 267 KB tarball of 8 files and runs from `npx` in a foreign
-repo (2026-09-03), but it is not published yet. `@repoboard/core` stays `private` for v0.1 (plan
-§11 O4) — depend on `repoboard`. It now packs as built JS with `.d.ts` (23,896 bytes, 38 entries,
-no `src/`), so removing one `"private": true` line is all that stands between it and a publish;
-that call is the owner's. No GitHub repo until after v1 (O2).
+Pre-1.0. Public at https://github.com/prism-nexus/repoboard since 2026-09-18, tagged `v0.1.0`.
+Not on npm yet — K5 waits on the owner's npm account. `repoboard@0.1.0` packs to a 499.2 kB
+tarball of 8 files (measured 2026-09-18 with `npm pack --dry-run` in `packages/server`; it was
+267 KB on 2026-09-03) and runs from `npx` in a foreign repo (2026-09-03, not re-verified here).
+`@repoboard/core` stays `private` for v0.1 (plan §11 O4) — depend on `repoboard`. It packs as
+built JS with `.d.ts` (23,896 bytes, 38 entries, no `src/`, 2026-09-06, not re-measured here), so
+removing one `"private": true` line is all that stands between it and a publish; that call is the
+owner's.
 
 ## Known issues
 (numbered `K1` upward; a commit that closes one says `Closes K<n>` and edits this list)

@@ -3,7 +3,7 @@
 One agent, docs and templates only — **no source code changes**. The builder seat verifies, commits,
 pushes, and then cuts the `v0.1.0` tag itself (the tag is NOT the agent's job).
 
-Baseline on `main` (the builder fills this in at dispatch): tests ___, typecheck 0, lint 0, build 0.
+Baseline on `main` @ 6ddc269, measured 2026-09-18 by the builder: 687 passed | 2 skipped (689) ×2, typecheck 0, lint 0 (125 files), build 0; web bundle 145.36 KB JS + 5.62 KB CSS gzip.
 
 ## Context
 

@@ -322,6 +322,16 @@ dashboard, its bytes on the wire measured before it ships (O3).** Core stays I/O
   at `0427693`, the final build) — `git status --short` byte-identical before/after every call,
   `.repoboard/` absent throughout. `docs/AGENTS.md` §12 has the full table and the K-number list.
   Brief: `docs/P8.5-ARCHIVE-SYNC-BRIEF.md` §7.
+- **P8.6 `logDir`: an extra daily-log source for `check`** (fpj STATE convergence, source
+  `~/Projects/Repos/freshpickedjobs/docs/STATE-CONVERGENCE-BRIEF.md` locked decision 1).
+  `board.yml: logDir: <path>`, optional, relative to the repo root (e.g. `docs/log`) — an
+  ADDITIONAL directory of daily `<YYYY-MM-DD>.md` files that `repoboard check`'s `stale-state`
+  reads alongside `.repoboard/log/` (both merged into the store's `loadAllLogInfo`); `repoboard
+  log` remains the only writer, and it only ever writes `.repoboard/log/`. Absent `logDir` is
+  byte-identical to before; a configured path that does not exist reads as empty, not an error.
+  Lets a repo whose seats already keep their own daily log (fpj's `docs/log/`, headed
+  `##### SEAT YYYY-MM-DD HH:MMZ: TITLE` — not ISO, so `newestMomentOf` falls back to the file's
+  mtime) be seen by `check` without a second copy of the same text.
 
 **Exit criterion for P8:** in freshpickedjobs, `repoboard init --practices` + `sync-issues
 README.md#Known issues` produces a board with one card per open K-entry and no second copy of any

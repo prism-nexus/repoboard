@@ -123,7 +123,9 @@ Usage:
                                         append one block to today's .repoboard/log/<date>.md
   repoboard log show [--date YYYY-MM-DD] [--seat s]
                                         print a day's log (default today), optionally one seat's blocks
-  repoboard check [--json] [--strict]  exit 0 "ok" / 1 with one line per finding: stale-state,
+  repoboard check [--json] [--strict]  exit 0 "ok" / 1 with one line per finding: stale-state
+                                        (also reads board.yml's logDir, P8.6 — an extra daily-log
+                                        directory alongside .repoboard/log/, read-only),
                                         active-without-lease (warning; blocks only with --strict),
                                         stale-lease, needs-decision (informational, never fails),
                                         cost-over-budget (error; see \`repoboard cost\`)

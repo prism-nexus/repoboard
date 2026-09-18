@@ -233,6 +233,67 @@ describe('setStateSection: restamps and touches nothing else', () => {
   });
 });
 
+// ---- STATE convergence C1: a multi-line body round-trips byte-identical ---------------------
+// (fpj `docs/STATE-CONVERGENCE-BRIEF.md` locked decision 1 / control C1.) The fpj lane table is
+// a markdown table with pipes and a `|---|` row; a bullet list; a line with **bold** and
+// `backticks`; and — the case that catches a per-LINE `.trim()` regression, which a
+// whole-section `.trim()` would not — a nested bullet with intentional leading spaces.
+const LANE_LIVE_BODY = `| Lane | Holder | Window |
+|---|---|---|
+| repoboard-tree | claude/p8-6 | 12:10Z-12:40Z closed |
+| vitest-lock | none | — |
+
+- fpj STATE convergence: repoboard half in \`p8-6-logdir\`
+- fpj half tracked separately
+  - nested: STATE.md becomes a three-line pointer
+
+Tree is dev = origin/main. **Do not** hand-edit \`.repoboard/STATE.md\`.`;
+
+describe('setStateSection: multi-line body round-trip pin (C1)', () => {
+  it('a markdown table + bullets + nested bullet + bold/backticks round-trips byte-identical', () => {
+    const before = initialStateText({ now: new Date('2026-09-18T09:00:00Z'), actor: 'claude/ops' });
+    const parsedBefore = parseState(before);
+    expect(parsedBefore.ok).toBe(true);
+    if (!parsedBefore.ok) return;
+
+    const res = setStateSection(before, 'live', LANE_LIVE_BODY, { now: NOW, actor: ACTOR });
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+
+    const parsedAfter = parseState(res.text);
+    expect(parsedAfter.ok).toBe(true);
+    if (!parsedAfter.ok) return;
+
+    // The pin: the LIVE body — table, pipes, |---| row, bullets, nested-bullet leading spaces,
+    // bold and backticks all intact — comes back byte-identical.
+    expect(parsedAfter.doc.sections.live).toBe(LANE_LIVE_BODY.trim());
+    // The other two sections' bytes are untouched by a write to a third section.
+    expect(parsedAfter.doc.sections.lastLandings).toBe(parsedBefore.doc.sections.lastLandings);
+    expect(parsedAfter.doc.sections.seats).toBe(parsedBefore.doc.sections.seats);
+  });
+
+  it('control: the pin is sensitive — a body missing one pipe does not round-trip to the original', () => {
+    const before = initialStateText({ now: new Date('2026-09-18T09:00:00Z'), actor: 'claude/ops' });
+    // Remove exactly one pipe from the second table row.
+    const perturbed = LANE_LIVE_BODY.replace(
+      '| repoboard-tree | claude/p8-6 | 12:10Z-12:40Z closed |',
+      '| repoboard-tree  claude/p8-6 | 12:10Z-12:40Z closed |',
+    );
+    expect(perturbed).not.toBe(LANE_LIVE_BODY); // the perturbation itself applied
+
+    const res = setStateSection(before, 'live', perturbed, { now: NOW, actor: ACTOR });
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    const parsedAfter = parseState(res.text);
+    expect(parsedAfter.ok).toBe(true);
+    if (!parsedAfter.ok) return;
+
+    // A round-trip of the PERTURBED body must not equal the ORIGINAL correct body — proving the
+    // pin above would actually catch this corruption rather than passing vacuously.
+    expect(parsedAfter.doc.sections.live).not.toBe(LANE_LIVE_BODY);
+  });
+});
+
 // ---- checkFindings -------------------------------------------------------------------------
 
 function emptyLeases(): LeasesDoc {

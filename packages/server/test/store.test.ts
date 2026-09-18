@@ -1,9 +1,9 @@
 import { readFileSync } from 'node:fs';
-import { mkdir, readFile, rm, utimes, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, rm, stat, utimes, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { BoardConfig, Card } from '@repoboard/core';
-import { parseCard } from '@repoboard/core';
+import { defaultBoardConfig, parseCard, serializeBoard } from '@repoboard/core';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
   type CardStore,
@@ -555,6 +555,53 @@ describe('state and log (P8.3)', () => {
       readOnly: true,
       error: MAP_ONLY_ERROR,
     });
+  });
+});
+
+// ---- P8.6 `logDir`: `check` reads an extra daily-log directory ------------------------------
+// (fpj `docs/STATE-CONVERGENCE-BRIEF.md` locked decision 1 / control C2.)
+describe('check: board.yml logDir (P8.6, C2)', () => {
+  it('a fresh entry in the configured logDir is seen as stale-state; removing logDir hides it', async () => {
+    const repo = await repoWith({});
+    await writeFile(
+      join(repo.root, '.repoboard', 'board.yml'),
+      serializeBoard({ ...defaultBoardConfig(), logDir: 'docs/log' }),
+    );
+
+    const store = await openStore(repo.root, { watch: false, now: () => NOW });
+    opened.push(store);
+    await store.setStateSection('live', 'first', 'claude/p8-6'); // STATE stamp = NOW
+
+    // fpj's own daily log lives outside .repoboard/, headed like fpj's real blocks — the `ts` is
+    // not ISO, so `newestMomentOf` falls back to the file's mtime, set strictly after the stamp.
+    const extraLogDir = join(repo.root, 'docs', 'log');
+    await mkdir(extraLogDir, { recursive: true });
+    const extraLogPath = join(extraLogDir, '2026-09-18.md');
+    await writeFile(
+      extraLogPath,
+      '# Log — 2026-09-18\n\n##### BUILDER 2026-09-18 09:2xZ: p8-6-logdir under way\n\ntext\n',
+    );
+    const later = new Date(NOW.getTime() + 60_000);
+    await utimes(extraLogPath, later, later); // mtime strictly after the STATE stamp
+    expect((await stat(extraLogPath)).mtimeMs).toBeGreaterThan(NOW.getTime());
+
+    // Assertion 1: with logDir configured, the extra directory's newer entry is seen — stale-state fires.
+    const withLogDir = await store.check(false);
+    expect(withLogDir.findings.some((f) => f.kind === 'stale-state')).toBe(true);
+    expect(withLogDir.exitCode).toBe(1);
+
+    // Same repo, same files on disk, logDir removed from board.yml: a NEW store (config is read
+    // once at open, like every other board.yml key) must not see docs/log/ at all.
+    await writeFile(join(repo.root, '.repoboard', 'board.yml'), serializeBoard(defaultBoardConfig()));
+    const storeNoLogDir = await openStore(repo.root, { watch: false, now: () => NOW });
+    opened.push(storeNoLogDir);
+
+    // Assertion 2: with logDir unset, .repoboard/log/ is empty and docs/log/ is ignored — no
+    // logs at all, so stale-state cannot fire. This is the proof the config is READ, not that
+    // the directory merely exists.
+    const withoutLogDir = await storeNoLogDir.check(false);
+    expect(withoutLogDir.findings.some((f) => f.kind === 'stale-state')).toBe(false);
+    expect(withoutLogDir.exitCode).toBe(0);
   });
 });
 

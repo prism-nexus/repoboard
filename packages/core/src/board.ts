@@ -71,6 +71,9 @@ export const BoardConfigSchema = z
     activeWindowMinutes: z.number().positive().default(30),
     /** P8.4: `repoboard cost`'s CLAUDE.md budget in bytes. Absent = the CLI's own default. */
     claudeMdBudgetBytes: z.number().int().positive().optional(),
+    /** P8.6: an extra daily-log directory `check` reads alongside `.repoboard/log/`, relative to
+     * the repo root (e.g. `docs/log`). Absent = today's behaviour, unchanged. */
+    logDir: z.string().trim().min(1, 'must not be empty').optional(),
     // An absent `columns` key means "the defaults"; an explicit empty list is an error.
     columns: z
       .array(ColumnSchema)
@@ -124,6 +127,7 @@ const CONFIG_ORDER = [
   'prefix',
   'activeWindowMinutes',
   'claudeMdBudgetBytes',
+  'logDir',
   'columns',
 ] as const;
 const COLUMN_ORDER = ['id', 'title', 'active', 'wip', 'done', 'decision'] as const;

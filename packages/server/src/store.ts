@@ -868,11 +868,12 @@ export class CardStore extends EventEmitter<StoreEvents> {
     }
   }
 
-  /** Every `.repoboard/log/*.md` file's date, mtime and parsed blocks — `check`'s pure input. */
-  private async loadAllLogInfo(): Promise<LogFileInfo[]> {
+  /** Every `<dir>/*.md` file's date, mtime and parsed blocks. A missing `dir` reads as empty,
+   * never an error — shared by `.repoboard/log/` and P8.6's configured `logDir`. */
+  private async loadLogInfoFrom(dir: string): Promise<LogFileInfo[]> {
     let names: string[] = [];
     try {
-      names = await readdir(this.logDir);
+      names = await readdir(dir);
     } catch (e) {
       if ((e as NodeJS.ErrnoException).code !== 'ENOENT') throw e;
       return [];
@@ -880,11 +881,25 @@ export class CardStore extends EventEmitter<StoreEvents> {
     const out: LogFileInfo[] = [];
     for (const name of names) {
       if (!name.endsWith('.md')) continue;
-      const path = join(this.logDir, name);
+      const path = join(dir, name);
       const [text, st] = await Promise.all([readFile(path, 'utf8'), stat(path)]);
       out.push({ date: name.slice(0, -3), mtimeMs: st.mtimeMs, blocks: parseLogBlocks(text) });
     }
     return out;
+  }
+
+  /**
+   * Every `.repoboard/log/*.md` file's date, mtime and parsed blocks, merged with `board.yml`'s
+   * `logDir` (P8.6, locked decision 1) when configured — an ADDITIONAL read-only source `check`
+   * looks at, resolved relative to `this.root`. `repoboard log` never writes there; only
+   * `.repoboard/log/` is ever written by this store. `check`'s pure input.
+   */
+  private async loadAllLogInfo(): Promise<LogFileInfo[]> {
+    const own = await this.loadLogInfoFrom(this.logDir);
+    const extra = this.cfg.logDir
+      ? await this.loadLogInfoFrom(resolve(this.root, this.cfg.logDir))
+      : [];
+    return [...own, ...extra];
   }
 
   private async loadLeases(): Promise<void> {

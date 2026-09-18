@@ -126,6 +126,13 @@ export interface BoardConfig {
   siblings?: Sibling[];
   prefix: string;
   activeWindowMinutes: number;
+  /** P8.6 (fpj convergence): an ADDITIONAL directory of daily `<YYYY-MM-DD>.md` log files that
+   * `repoboard check` reads alongside `.repoboard/log/` — `repoboard log` never writes here, so
+   * a repo whose seats already keep their own daily log (fpj's `docs/log/`) can be seen by
+   * `check` without a second copy. Relative to the REPO ROOT, e.g. `docs/log`. Absent means
+   * today's behaviour, byte-identical; a configured path that does not exist reads as empty,
+   * never an error. */
+  logDir?: string;
   /** P8.4: `repoboard cost`'s budget for the root `CLAUDE.md`, in bytes. A CLI `--budget` flag
    * wins over this; absent here AND on the flag means `DEFAULT_CLAUDE_MD_BUDGET_BYTES` (cost.ts). */
   claudeMdBudgetBytes?: number;

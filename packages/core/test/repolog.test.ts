@@ -2,6 +2,8 @@
  * P8.3 (plan §5 P8.3, §11 O9): `.repoboard/log/YYYY-MM-DD.md` — append-only, one block per seat
  * per call, newest last. `appendLogBlock` is the only writer core exposes; there is no rewrite.
  */
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import {
   appendLogBlock,
@@ -12,6 +14,10 @@ import {
   lastBlockFor,
   parseLogBlocks,
 } from '../src/repolog.js';
+
+const SIBLING_LOG_HEADINGS = fileURLToPath(
+  new URL('./fixtures/sibling-log-headings.md', import.meta.url),
+);
 
 describe('dailyLogHeader', () => {
   it('is the line 1 shape', () => {
@@ -227,5 +233,66 @@ describe('lastBlockFor', () => {
       { date: '2026-09-16', blocks: [block('OPS', '2026-09-16T10:00:00Z')] },
     ];
     expect(lastBlockFor('   ', days)).toBeNull();
+  });
+});
+
+/**
+ * RCB-54: the sibling repo (freshpickedjobs) writes `.repoboard/log/`-shaped files by hand into
+ * `board.yml`'s `logDir`, and its real headings do not match the old `<SEAT> <ISO>: ` shape
+ * exactly. Fixture copied from its real 2026-09-18 `docs/log/*.md` heading LINES only (bodies
+ * replaced with a one-line placeholder) — see `docs/RCB-54-LOGDIR-BRIEF.md`.
+ */
+describe('parseLogBlocks: sibling log heading shapes (RCB-54)', () => {
+  const fixtureText = readFileSync(SIBLING_LOG_HEADINGS, 'utf8');
+  const headingLineCount = (fixtureText.match(/^#####/gm) ?? []).length;
+
+  it('parses one block per ##### heading line in the fixture', () => {
+    const blocks = parseLogBlocks(fixtureText);
+    expect(headingLineCount).toBe(8);
+    expect(blocks).toHaveLength(headingLineCount);
+  });
+
+  it('the SPACE shape (date and time separated by a space, no "T") parses seat/ts/title', () => {
+    const blocks = parseLogBlocks(fixtureText);
+    const b = blocks.find((x) => x.seat === 'OPS' && x.ts === '2026-09-16 00:0xZ');
+    expect(b?.title.startsWith('K124 + K125 LANDED HOT')).toBe(true);
+  });
+
+  it('the (addendum) shape keeps the parenthetical in `ts`, splits at the first ": " after it', () => {
+    const blocks = parseLogBlocks(fixtureText);
+    const b = blocks.find((x) => x.seat === 'OPS' && x.ts.includes('(addendum)'));
+    expect(b?.ts).toBe('2026-09-18 19:5xZ (addendum)');
+    expect(b?.title.startsWith('MIGRATION 0023 APPLIED')).toBe(true);
+  });
+
+  it('the COORDINATOR/SEARCH seat (a "/" in the seat) is captured whole, not truncated', () => {
+    const blocks = parseLogBlocks(fixtureText);
+    const b = blocks.find((x) => x.seat === 'COORDINATOR/SEARCH');
+    expect(b).toBeDefined();
+    expect(b?.title.startsWith('OVERHAUL LETTERS')).toBe(true);
+  });
+
+  it('the "BUILDER (fresh, f87be1)" seat (a parenthetical IN the seat) is captured whole', () => {
+    const blocks = parseLogBlocks(fixtureText);
+    const b = blocks.find((x) => x.seat === 'BUILDER (fresh, f87be1)');
+    expect(b).toBeDefined();
+    expect(b?.title.startsWith('K101 IDLE-RETENTION RESEARCH')).toBe(true);
+  });
+
+  it('the title-with-colon shape (our own ISO ts) stops `ts` at the FIRST ": ", not the one in the title', () => {
+    const blocks = parseLogBlocks(fixtureText);
+    const b = blocks.find((x) => x.seat === 'COORDINATOR' && x.ts === '2026-09-18T20:23:38Z');
+    expect(b).toBeDefined();
+    expect(b?.title.startsWith('stand-up')).toBe(true);
+  });
+
+  it('CONTROL: the OLD `<SEAT> <ISO>: ` regex parses only 1 of these 8 shapes', () => {
+    const OLD_BLOCK_HEADING = /^##### (\S+) (\S+): (.*)$/gm;
+    const oldBlocks = [...fixtureText.matchAll(OLD_BLOCK_HEADING)];
+    // Every shape with a SPACE in the seat or between date and time fails `\S+`; only the
+    // title-with-colon line (no space anywhere before its ISO ts) still matches the old regex.
+    expect(oldBlocks).toHaveLength(1);
+    expect(oldBlocks[0]?.[1]).toBe('COORDINATOR');
+    expect(oldBlocks.length).not.toBe(headingLineCount);
   });
 });

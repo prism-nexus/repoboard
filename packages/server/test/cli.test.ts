@@ -1622,6 +1622,29 @@ describe('repoboard seat', () => {
     expect(res.code).toBe(1);
     expect(res.err).toMatch(/usage/);
   });
+
+  it(
+    'RCB-54: an ops block that sits only in the configured logDir, in the SPACE heading shape, ' +
+      'is found — not "(no log block for ops)"',
+    async () => {
+      const root = await freshRepo({});
+      await writeFile(
+        join(root, '.repoboard', 'board.yml'),
+        serializeBoard({ ...defaultBoardConfig(), logDir: 'docs/log' }),
+      );
+      const extraLogDir = join(root, 'docs', 'log');
+      await mkdir(extraLogDir, { recursive: true });
+      await writeFile(
+        join(extraLogDir, '2026-09-18.md'),
+        '# Log — 2026-09-18\n\n##### OPS 2026-09-18 21:4xZ: hand-written by the sibling\n\ntext\n',
+      );
+      const res = await repoboard(root, 'seat', 'ops');
+      expect(res.code).toBe(0);
+      expect(res.out).not.toContain('(no log block for ops)');
+      expect(res.out).toContain('## Last block — OPS');
+      expect(res.out).toContain('hand-written by the sibling');
+    },
+  );
 });
 
 describe('repoboard check', () => {

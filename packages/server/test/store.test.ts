@@ -608,6 +608,78 @@ describe('check: board.yml logDir (P8.6, C2)', () => {
   });
 });
 
+// ---- RCB-54: `lastRepoLogBlock` (and therefore `log --last` / `seat`) must agree with `check`
+// on what "the log" is — it now also reads the configured `logDir`, not just `.repoboard/log/`.
+describe('lastRepoLogBlock: board.yml logDir (RCB-54)', () => {
+  it('finds a block that exists only in the configured logDir; removing logDir makes it null', async () => {
+    const repo = await repoWith({});
+    await writeFile(
+      join(repo.root, '.repoboard', 'board.yml'),
+      serializeBoard({ ...defaultBoardConfig(), logDir: 'docs/log' }),
+    );
+    const extraLogDir = join(repo.root, 'docs', 'log');
+    await mkdir(extraLogDir, { recursive: true });
+    // The SPACE shape (a real fpj heading shape, RCB-54 cause 2) — proves the regex fix and the
+    // logDir read are BOTH needed: the old regex alone would still find nothing here.
+    await writeFile(
+      join(extraLogDir, '2026-09-18.md'),
+      '# Log — 2026-09-18\n\n##### OPS 2026-09-18 21:4xZ: hand-written by the sibling\n\ntext\n',
+    );
+
+    const store = await openStore(repo.root, { watch: false, now: () => NOW });
+    opened.push(store);
+    const found = await store.lastRepoLogBlock('ops');
+    expect(found?.date).toBe('2026-09-18');
+    expect(found?.block.seat).toBe('OPS');
+    expect(found?.block.ts).toBe('2026-09-18 21:4xZ');
+    expect(found?.block.title).toBe('hand-written by the sibling');
+
+    // Same repo, same files on disk, logDir removed from board.yml (config read once at open,
+    // like every other board.yml key): a NEW store must not see docs/log/ at all.
+    await writeFile(
+      join(repo.root, '.repoboard', 'board.yml'),
+      serializeBoard(defaultBoardConfig()),
+    );
+    const storeNoLogDir = await openStore(repo.root, { watch: false, now: () => NOW });
+    opened.push(storeNoLogDir);
+    expect(await storeNoLogDir.lastRepoLogBlock('ops')).toBeNull();
+  });
+
+  it('same date in both dirs: the own-dir file wins because it is EARLIER in file-list order, not because it is newer', async () => {
+    const repo = await repoWith({});
+    await writeFile(
+      join(repo.root, '.repoboard', 'board.yml'),
+      serializeBoard({ ...defaultBoardConfig(), logDir: 'docs/log' }),
+    );
+
+    // Own dir: an OLDER-looking block (earlier ts), written first (file-list order: own before
+    // extra — `loadAllLogInfo` returns `[...own, ...extra]`).
+    const ownLogDir = join(repo.root, '.repoboard', 'log');
+    await mkdir(ownLogDir, { recursive: true });
+    await writeFile(
+      join(ownLogDir, '2026-09-18.md'),
+      '# Log — 2026-09-18\n\n##### OPS 2026-09-18T10:00:00Z: own dir, earlier ts\n\ntext\n',
+    );
+
+    // Extra dir (configured logDir): a NEWER-looking block, same date file.
+    const extraLogDir = join(repo.root, 'docs', 'log');
+    await mkdir(extraLogDir, { recursive: true });
+    await writeFile(
+      join(extraLogDir, '2026-09-18.md'),
+      '# Log — 2026-09-18\n\n##### OPS 2026-09-18T23:00:00Z: extra dir, later ts\n\ntext\n',
+    );
+
+    const store = await openStore(repo.root, { watch: false, now: () => NOW });
+    opened.push(store);
+    const found = await store.lastRepoLogBlock('ops');
+    // If this were "newest wins" by ts, the extra-dir block (23:00Z) would win. It does not:
+    // `lastBlockFor` takes the LAST match within the first `days` entry for a given date, and
+    // for a tied date the own-dir entry comes first in `loadAllLogInfo`'s file-list order.
+    expect(found?.block.title).toBe('own dir, earlier ts');
+    expect(found?.block.ts).toBe('2026-09-18T10:00:00Z');
+  });
+});
+
 describe('watcher', () => {
   it('picks up an external sed-style edit and synthesises a file event', async () => {
     const repo = await repoWith({ 'RB-1.md': cardText('RB-1', 'todo') });

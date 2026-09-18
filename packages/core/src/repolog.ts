@@ -25,7 +25,9 @@ function firstLine(text: string): string {
 }
 
 /**
- * `##### <SEAT-UPPERCASED> <ISO>: <title or first line>` + a blank line + the text verbatim.
+ * `##### <SEAT-UPPERCASED> <ISO>: <title or first line>` + a blank line + the text verbatim —
+ * this is the WRITER's shape, still exactly this and only this; RCB-54 widened only the READER
+ * (`parseLogBlocks`/`BLOCK_HEADING`) to also accept shapes a hand-written log produces.
  * No trailing blank line here — `appendLogBlock` owns all inter-block spacing, so a block's own
  * shape is stable regardless of where it lands in the file.
  */
@@ -52,12 +54,30 @@ export function appendLogBlock(text: string, block: string): string {
 export interface LogBlock {
   /** As stored in the heading: UPPERCASED. */
   seat: string;
+  /**
+   * As stored in the heading, verbatim. The writer (`formatLogBlock`) always puts a parseable
+   * ISO string here, but RCB-54 widened the reader to accept hand-written shapes too (e.g.
+   * `2026-09-18 0x:xxZ`, or a trailing `(addendum)`), so a caller must not assume `new Date(ts)`
+   * succeeds — `packages/web`'s `relTime` gets `Invalid Date` on those shapes (RCB-54, out of
+   * scope, reported, not fixed here).
+   */
   ts: string;
   title: string;
   text: string;
 }
 
-const BLOCK_HEADING = /^##### (\S+) (\S+): (.*)$/gm;
+/**
+ * RCB-54: the WRITER (`formatLogBlock`) still emits exactly `<SEAT> <ISO>: <title>`, but the
+ * READER must also parse blocks a hand-written sibling log wrote directly (not through this
+ * store) — measured shapes (`docs/RCB-54-LOGDIR-BRIEF.md`) include a SPACE between date and
+ * time, an `(addendum)` parenthetical after the time, an `x`-redacted hour, a `/` in the seat,
+ * and a parenthetical in the seat. Contract: `seat` is everything after `##### ` up to the space
+ * before the first `YYYY-MM-DD` token (lazy); `ts` runs from that date token, lazily, up to the
+ * FIRST `: ` (colon-space) — so a title containing `: ` (our own ISO shape's "stand-up HH:MxZ: …")
+ * does not get absorbed into `ts`; `title` is the rest of the line. `ts` is no longer guaranteed
+ * to be a parseable ISO `Date` — a hand-written block's `ts` can be `2026-09-18 0x:xxZ`.
+ */
+const BLOCK_HEADING = /^##### (.+?) (\d{4}-\d{2}-\d{2}.*?): (.*)$/gm;
 
 /** Every `#####`-headed block in a daily log file, in file order (oldest first). */
 export function parseLogBlocks(fileText: string): LogBlock[] {

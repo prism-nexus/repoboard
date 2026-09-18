@@ -605,12 +605,20 @@ export class CardStore extends EventEmitter<StoreEvents> {
 
   /**
    * RCB-47: the newest block `seat` wrote, searching back across every day in `.repoboard/log/`
-   * (OWN dir only — not `cfg.logDir`, which `check` reads as an additional read-only source; a
-   * seat's own last block is by definition one it wrote with `repoboard log`, which only ever
-   * writes `.repoboard/log/`). Fresh from disk each call, never cached, like `log()`.
+   * AND, when configured, `board.yml`'s `logDir` (P8.6 locked decision 1 — `logDir` is an
+   * ADDITIONAL read-only source; `repoboard log` itself still only ever writes `.repoboard/log/`).
+   * RCB-54: the original doc comment here argued OWN-dir-only was correct by definition ("a
+   * seat's own last block is one it wrote with `repoboard log`") — false in the field, because a
+   * seat can also write its blocks by hand straight into the configured `logDir` (as fpj's seats
+   * do). `check` (`loadAllLogInfo`) already read both dirs; `seat`/`log --last` must agree with
+   * it on what "the log" is, so this now reads the same merged set. Two files with the same date
+   * (one per dir) both contribute — `lastBlockFor` sorts by date desc and, within a day, takes
+   * the LAST block in (own-dir-then-extra-dir) file-list order; this is not deduped, and ties are
+   * file-list order, not a "newest wins" comparison (see `store.test.ts`, P8.6 describe block).
+   * Fresh from disk each call, never cached, like `log()`.
    */
   async lastRepoLogBlock(seat: string): Promise<{ date: string; block: LogBlock } | null> {
-    const infos = await this.loadLogInfoFrom(this.logDir);
+    const infos = await this.loadAllLogInfo();
     return lastBlockFor(seat, infos);
   }
 

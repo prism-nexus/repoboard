@@ -272,7 +272,12 @@ export function checkFindings(input: CheckInput): Finding[] {
   const newest = newestLogMoment(input.logs);
   if (newest !== null) {
     const stampMs = input.state ? Date.parse(input.state.stamp) : Number.NaN;
-    if (input.state === null || Number.isNaN(stampMs) || stampMs < newest) {
+    // The stamp is written at SECOND resolution (`toIso`), a file's mtime carries milliseconds:
+    // a `--set-section` that lands in the same second as the log append it answers would
+    // otherwise read as stale by a few hundred ms forever (fpj convergence, 2026-09-18).
+    // Compare at the stamp's own resolution.
+    const newestSec = Math.floor(newest / 1000) * 1000;
+    if (input.state === null || Number.isNaN(stampMs) || stampMs < newestSec) {
       findings.push({
         kind: 'stale-state',
         level: 'error',

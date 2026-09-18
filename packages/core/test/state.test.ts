@@ -344,6 +344,32 @@ describe('checkFindings', () => {
     expect(exitCodeForFindings(findings, false)).toBe(1);
   });
 
+  it('NOT stale when the stamp and the log mtime fall in the same second — the stamp has second resolution, mtime has ms', () => {
+    const state = stateAt('2026-09-17T18:00:00Z');
+    const findings = checkFindings({
+      state,
+      logs: [{ date: '2026-09-17', mtimeMs: Date.parse('2026-09-17T18:00:00Z') + 850, blocks: [] }],
+      cards: [],
+      config,
+      leases: emptyLeases(),
+      now: NOW,
+    });
+    expect(findings).toEqual([]);
+  });
+
+  it('stale when the log mtime is in the NEXT second after the stamp', () => {
+    const state = stateAt('2026-09-17T18:00:00Z');
+    const findings = checkFindings({
+      state,
+      logs: [{ date: '2026-09-17', mtimeMs: Date.parse('2026-09-17T18:00:01Z'), blocks: [] }],
+      cards: [],
+      config,
+      leases: emptyLeases(),
+      now: NOW,
+    });
+    expect(findings.map((f) => f.kind)).toEqual(['stale-state']);
+  });
+
   it('stale-state also fires from the newest ##### header time, not just mtime', () => {
     const state = stateAt('2026-09-17T18:00:00Z');
     const blocks: LogBlock[] = [{ seat: 'OPS', ts: '2026-09-17T19:30:00Z', title: 'x', text: 'y' }];

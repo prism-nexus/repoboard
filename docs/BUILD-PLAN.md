@@ -156,6 +156,18 @@ type RepoSnapshot = {
 Respect `.gitignore` (use `git ls-files` as the file list when in a git repo; walk otherwise).
 Cap at 20,000 files; beyond that, report and truncate rather than hang.
 
+**K12 (2026-09-17): the repo watcher must respect the same `.gitignore` rule as the scan above, and
+carry its own hard cap.** Before K12, `serve`'s chokidar watcher over `--root` skipped only `.git`
+(mostly), `.repoboard`, and `node_modules`/`dist` path segments — not `.gitignore` — so a gitignored
+tree the scan never lists (build output, a data dump, a pile of worktrees) was still walked and
+watched in full. Measured on freshpickedjobs: 6.36M files outside node_modules/.git, EMFILE at 27 s,
+RSS past 1.6 GB, `/api/board` never answering. Fixed in `packages/server/src/watch-ignore.ts`
+(shared ignore predicate, one `git ls-files --others --ignored --exclude-standard --directory` spawn
+per watcher start) plus `ServerOptions.watchCap` / CLI `--watch-cap` (default `DEFAULT_WATCH_CAP` =
+20,000 watched paths, checked via `getWatched()` once the watcher is ready): over cap, or an
+EMFILE/ENFILE from the watcher itself, closes it and serves from the last scan, logging one warning
+rather than degrading silently. See README K12 and `docs/AGENTS.md`'s "`serve`'s repo watcher" note.
+
 ---
 
 ## §5 Phases and tasks
@@ -183,7 +195,7 @@ one commit carrying verification output.
 
 ### P2 Server
 - **P2.1** CLI `repoboard init` writes `.repoboard/board.yml` and a first card; `repoboard card add|move|list|show`;
-  `repoboard serve [--port] [--open] [--no-fun]`. Uses core for every mutation.
+  `repoboard serve [--port] [--open] [--no-fun] [--watch-cap]` (K12). Uses core for every mutation.
 - **P2.2** Card store: reads `.repoboard/cards/*.md`, chokidar watcher, atomic writes (temp + rename),
   event log append. Tests write to a temp dir, never the repo.
 - **P2.3** HTTP + WS per §3. Binds `127.0.0.1` only.

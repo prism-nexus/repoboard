@@ -36,8 +36,21 @@ published). It finds `.repoboard/` by walking up from the current directory.
 | `repoboard log --as <seat> [--title t] (<text>\|--stdin)` / `log show [--date d] [--seat s]` | `repoboard log --as claude/ops "armed the fires"` (section 10) |
 | `repoboard check [--json] [--strict]` | `repoboard check` — exit 0 `ok`, or 1 with findings (section 10) |
 | `repoboard cost [--root <dir>] [--budget <bytes>] [--json]` | `repoboard cost --root /path/to/other/repo` — "cold context" bytes/≈tokens, exit 1 if CLAUDE.md is OVER budget (section 11) |
-| `repoboard serve [--port 4242] [--open] [--no-fun]` | `repoboard serve --open` — the dashboard on 127.0.0.1 |
+| `repoboard serve [--root <dir>] [--port 4242] [--open] [--no-fun] [--watch-cap 20000]` | `repoboard serve --open` — the dashboard on 127.0.0.1 |
 | `repoboard mcp [--root <dir>]` | `repoboard mcp` — the MCP server on stdio (section 3) |
+
+**`serve`'s repo watcher (K12).** The chokidar watcher over `--root` shares the scanner's own idea
+of "the repo": on a git root, `git ls-files -z --others --ignored --exclude-standard --directory`
+(`packages/server/src/watch-ignore.ts`) builds the ignore set once at start, so a gitignored tree —
+build output, a data dump, a pile of worktrees — is neither walked nor watched, matching what
+`git ls-files --cached --others --exclude-standard` already excludes from the scan. It also carries
+a hard cap (`--watch-cap`, default 20,000 watched paths, checked once the watcher reports ready): if
+what it would watch still exceeds the cap, or the watcher itself hits `EMFILE`/`ENFILE`, it closes
+itself and logs one `warning: repo watcher off: … (rescans now only on request)` line — the map
+keeps serving from the last scan, and a rescan only happens on request, rather than the server
+degrading silently under load. Measured on freshpickedjobs (K12, README): before the fix, the
+watcher walked 6.36M gitignored files and hit EMFILE at 27 s with RSS climbing past 1.6 GB and
+`/api/board` never answering; after, `/api/board` answered in 4 ms with RSS flat at ~169 MB.
 
 `card list` prints a table by default. `--json` prints one compact row per line, without the body:
 `{id, title, status, assignee, priority, labels, files, updated}`, absent scalars as `null`;

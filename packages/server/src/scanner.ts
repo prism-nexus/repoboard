@@ -265,7 +265,8 @@ async function git(root: string, args: string[]): Promise<string> {
   return stdout;
 }
 
-async function isGitRepo(root: string): Promise<boolean> {
+/** Exported for the repo watcher (K12): same "is this a git root" test the file list uses. */
+export async function isGitRepo(root: string): Promise<boolean> {
   try {
     await stat(join(root, '.git'));
     return true;

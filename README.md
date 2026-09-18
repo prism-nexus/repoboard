@@ -270,14 +270,33 @@ that call is the owner's. No GitHub repo until after v1 (O2).
   an existing file are reliable — the same reason every "external edit" test pre-writes its file.
   Not a product defect; the watcher does re-read. Fix candidates: pre-create then modify in that one
   test (matches its siblings), or a longer timeout for `add` only. Filed by the orchestrator.
-- **K12** `serve --root <large repo>` in map-only mode ran at 141 % CPU with RSS 2.9 GB after 3 m 44 s
+- ~~**K12** `serve --root <large repo>` in map-only mode ran at 141 % CPU with RSS 2.9 GB after 3 m 44 s
   and answered `/api/board` only intermittently (2026-09-17 22:0xZ, root = freshpickedjobs: 1,021
   scanned files, 1,368 edges, but a working tree with `node_modules/`, `apps/web/dist/`, and four
   sibling worktrees' worth of git history). An earlier start of the same root answered in ≈4 s on an
   idle box, so this is load-sensitive, not deterministic. Unmeasured: whether the watcher (chokidar
   over the root — does it honour `.gitignore`?) or the churn scan (`git log` per file) is the cost.
   Measure both before fixing; the P7.2 read-only guarantee held throughout (`git status` clean,
-  `.repoboard/` absent). Filed by the orchestrator; the process was killed to free the box.
+  `.repoboard/` absent). Filed by the orchestrator; the process was killed to free the box.~~
+  Closed 2026-09-17 (measured by the coordinator, then built): the cost was the **repo watcher**,
+  not the scan. `serve --root /Users/hometown/Projects/Repos/freshpickedjobs --port 4243` hit
+  `warning: watcher: EMFILE: too many open files, scandir …/.repoboard/log` at 27 s (RSS 1.46 GB →
+  1.61 GB by 36 s, 47 % CPU, `/api/board` never answered), because the chokidar watcher over the
+  root skipped only `.git` (mostly), `.repoboard`, and `node_modules`/`dist` segments — it did NOT
+  honour `.gitignore`, while the scanner's own file list (`git ls-files --cached --others
+  --exclude-standard`) does. On that root the gitignored tree the watcher still walked was
+  `packages/db/backups` (19 GB), `apps/web/.wrangler` (1.5 GB), and `.claude/worktrees`
+  (17,027 dirs): 6.36M files outside node_modules/.git. Fix: before the watcher starts, one
+  `git ls-files -z --others --ignored --exclude-standard --directory` builds the same ignore set
+  the scanner already respects (`packages/server/src/watch-ignore.ts`), plus a hard cap
+  (`--watch-cap`, default 20,000 watched paths — `DEFAULT_WATCH_CAP` in `http.ts`) checked once the
+  watcher is ready: over cap, or an EMFILE/ENFILE from the watcher itself, closes it and serves
+  from the last scan, logging one warning, rather than degrading silently. Re-measured against the
+  same root (fpj at `b708897`, now carrying its own adopted `.repoboard/`, port 4299, read-only —
+  `git status --short | shasum -a 256` and `git rev-parse --short HEAD` identical before and after):
+  `/api/board` answered in **4 ms**, RSS held at **~169 MB** (172,672 KB) at 10 s/30 s/60 s, CPU
+  **0 %** once idle, watcher held **1,210 paths**, neither the cap nor EMFILE fired. `pnpm test` ×2:
+  592/592 both runs; typecheck/lint/build all exit 0.
 - **K13** `repoboard check` reports `stale-state` when STATE.md's stamp EQUALS the newest log block's
   header second. Reproduced 2026-09-17 22:37:39Z on this repo's own first `init --practices`: `log`
   then `state --set-section LIVE` within one second → stamp `22:37:39Z`, newest `##### ` header

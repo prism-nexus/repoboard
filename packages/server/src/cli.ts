@@ -151,10 +151,15 @@ Usage:
                                         the done column. Idempotent by ref; NEVER writes <path>.
                                         --dry-run prints what it would do and writes nothing —
                                         the only mode to run against a repo you do not own.
-  repoboard serve [--root <dir>] [--port 4242] [--open] [--no-fun]
+  repoboard serve [--root <dir>] [--port 4242] [--open] [--no-fun] [--watch-cap 20000]
                                         start the dashboard (binds 127.0.0.1); --root serves that
                                         directory as given — a directory with no .repoboard/ opens
-                                        map-only, and nothing is ever written into it
+                                        map-only, and nothing is ever written into it. The repo
+                                        watcher honours .gitignore (K12); if what it would watch
+                                        still exceeds --watch-cap (default 20000 paths), or it hits
+                                        EMFILE/ENFILE, it turns itself off and logs one warning —
+                                        the map keeps working from the last scan, rescans only on
+                                        request
   repoboard mcp [--root <dir>]                MCP server over stdio (for Claude Code etc.)
   repoboard --help | --version
 
@@ -1096,10 +1101,20 @@ async function cmdServe(args: string[], io: CliIO): Promise<number> {
     port: { type: 'string', default: '4242' },
     open: { type: 'boolean', default: false },
     'no-fun': { type: 'boolean', default: false },
+    'watch-cap': { type: 'string' },
   });
   const port = Number.parseInt(values.port ?? '', 10);
   if (!Number.isInteger(port) || port < 0 || port > 65535) {
     throw new UserError(`--port must be 0–65535 (got "${values.port}")`);
+  }
+  // K12: hard cap on what the repo watcher may hold before it turns itself off (`DEFAULT_WATCH_CAP`,
+  // 20,000, when the flag is absent).
+  let watchCap: number | undefined;
+  if (values['watch-cap'] !== undefined) {
+    watchCap = Number.parseInt(values['watch-cap'], 10);
+    if (!Number.isInteger(watchCap) || watchCap <= 0) {
+      throw new UserError(`--watch-cap must be a positive integer (got "${values['watch-cap']}")`);
+    }
   }
   const root = await serveRoot(values.root, io);
   const err = io.stderr ?? io.stdout;
@@ -1107,7 +1122,13 @@ async function cmdServe(args: string[], io: CliIO): Promise<number> {
   store.on('warning', (m) => err.write(`warning: ${m}\n`));
   let server: RunningServer;
   try {
-    server = await startServer({ store, port, fun: !values['no-fun'] });
+    server = await startServer({
+      store,
+      port,
+      fun: !values['no-fun'],
+      ...(watchCap !== undefined ? { watchCap } : {}),
+      warn: (m) => err.write(`warning: ${m}\n`),
+    });
   } catch (e) {
     await store.close();
     const code = (e as NodeJS.ErrnoException).code;
@@ -1115,6 +1136,7 @@ async function cmdServe(args: string[], io: CliIO): Promise<number> {
     throw e;
   }
   io.stdout.write(`repoboard: serving ${root}\n  ${server.url}\n`);
+  io.stdout.write(`  repo watcher: ${server.watchedPaths().length} paths\n`);
   if (!store.hasBoard) {
     io.stdout.write('  (no .repoboard/ here: map-only, and nothing will be written)\n');
   }

@@ -27,8 +27,9 @@ import { watch as chokidarWatch, type FSWatcher } from 'chokidar';
 import { type WebSocket, WebSocketServer } from 'ws';
 import { applySyncPlan, computeSyncPlan } from './issues.js';
 import { resolveCardRefs } from './refs.js';
-import { type ScanResult, scanRepo } from './scanner.js';
+import { isGitRepo, type ScanResult, scanRepo } from './scanner.js';
 import type { CardStore } from './store.js';
+import { buildRepoWatchIgnore, EMPTY_IGNORED, gitIgnoredPaths } from './watch-ignore.js';
 
 export interface ServerOptions {
   store: CardStore;
@@ -46,7 +47,19 @@ export interface ServerOptions {
   rescanDebounceMs?: number;
   /** Static directory override; otherwise dist/web then ../web/dist. */
   webDir?: string;
+  /**
+   * K12: hard cap on watched paths (directories + entries, `getWatched()`-counted) checked once
+   * the repo watcher is ready. Over cap — or an EMFILE/ENFILE from the watcher itself — closes it
+   * and serves from the last scan only; a rescan then happens only on request. Default 20,000
+   * (`DEFAULT_WATCH_CAP`); CLI `--watch-cap <n>`.
+   */
+  watchCap?: number;
+  /** One-line warnings (repo watcher capped or closed by an EMFILE/ENFILE). Default a no-op. */
+  warn?: (message: string) => void;
 }
+
+/** K12 default for `ServerOptions.watchCap`. */
+export const DEFAULT_WATCH_CAP = 20_000;
 
 export interface RunningServer {
   host: string;
@@ -56,6 +69,14 @@ export interface RunningServer {
   webDir: string | null;
   repo(): ScanResult | null;
   rescan(): Promise<void>;
+  /**
+   * K12 test surface: the repo watcher's currently watched paths (a directory plus each entry
+   * name chokidar reports inside it, repo-relative posix), or `[]` when scanning/watching is off,
+   * the cap tripped, or an EMFILE/ENFILE closed it. Production code has no reason to call this.
+   */
+  watchedPaths(): string[];
+  /** K12 test surface: how many times `doScan` has completed (initial + rescans). */
+  scanCount(): number;
   close(): Promise<void>;
 }
 
@@ -599,6 +620,23 @@ function fingerprint(snap: ScanResult): string {
   return JSON.stringify({ head: snap.head, files: snap.files, truncated: snap.truncated });
 }
 
+/**
+ * K12: what the repo watcher currently holds — one entry per watched directory, plus one per
+ * entry chokidar reports inside it (`getWatched()`'s own shape). This is the number that diverges
+ * from the scan's file count exactly when the ignore rule is wrong (a gitignored tree the scanner
+ * never lists but the watcher still walks), which is why the cap counts THIS and not the scan.
+ */
+function flattenWatchedPaths(watcher: FSWatcher, root: string): string[] {
+  const watched = watcher.getWatched();
+  const out: string[] = [];
+  for (const [dir, entries] of Object.entries(watched)) {
+    const relDir = relative(root, dir).split(sep).join('/');
+    out.push(relDir === '' ? '.' : relDir);
+    for (const entry of entries) out.push(relDir === '' ? entry : `${relDir}/${entry}`);
+  }
+  return out;
+}
+
 export async function startServer(opts: ServerOptions): Promise<RunningServer> {
   const { store } = opts;
   const host = opts.host ?? '127.0.0.1';
@@ -606,11 +644,14 @@ export async function startServer(opts: ServerOptions): Promise<RunningServer> {
   const scan = opts.scan ?? true;
   const watchRepo = opts.watchRepo ?? scan;
   const debounceMs = opts.rescanDebounceMs ?? 2000;
+  const watchCap = opts.watchCap ?? DEFAULT_WATCH_CAP;
+  const warn = opts.warn ?? ((): void => undefined);
   const root = store.root;
   const webDir = await findWebDir(opts.webDir);
 
   let repo: ScanResult | null = null;
   let repoFingerprint = '';
+  let scanCount = 0;
   const wss = new WebSocketServer({ noServer: true });
 
   // §3: one payload for `GET /api/board` and the `board` half of the WS snapshot, so `hasBoard`
@@ -681,6 +722,7 @@ export async function startServer(opts: ServerOptions): Promise<RunningServer> {
       const changed = fp !== repoFingerprint;
       repo = next;
       repoFingerprint = fp;
+      scanCount++;
       if (!initial && changed) broadcast({ type: 'repo', repo });
     } catch {
       // A failed rescan keeps the last snapshot; the next change tries again.
@@ -712,22 +754,47 @@ export async function startServer(opts: ServerOptions): Promise<RunningServer> {
 
   if (scan) await doScan(true);
 
+  // K12: the watcher's ignore rule must agree with the scanner's idea of "the repo" — see
+  // watch-ignore.ts's own header for the measured cause. `gitIgnoredPaths` is empty (not thrown)
+  // on a non-git root, which reduces this to exactly the pre-K12 segment-only rule.
   let repoWatcher: FSWatcher | null = null;
   if (scan && watchRepo) {
-    const gitAllowed = new Set(['.git', '.git/HEAD', '.git/logs', '.git/logs/HEAD']);
-    repoWatcher = chokidarWatch(root, {
+    const inGit = await isGitRepo(root);
+    const ignored = inGit ? await gitIgnoredPaths(root) : EMPTY_IGNORED;
+    const watcher = chokidarWatch(root, {
       ignoreInitial: true,
-      ignored: (p) => {
-        const rel = relative(root, p).split(sep).join('/');
-        if (rel === '' || rel.startsWith('..')) return false;
-        const parts = rel.split('/');
-        if (parts[0] === '.git') return !gitAllowed.has(rel);
-        if (parts[0] === '.repoboard') return true; // the store watches that
-        return parts.some((seg) => seg === 'node_modules' || seg === 'dist');
-      },
+      ignored: buildRepoWatchIgnore(root, ignored),
     });
-    repoWatcher.on('all', () => scheduleRescan());
-    repoWatcher.on('error', () => undefined);
+    repoWatcher = watcher;
+
+    let shutOffOnce = false;
+    const shutOff = (reason: string): void => {
+      if (shutOffOnce) return;
+      shutOffOnce = true;
+      warn(`repo watcher off: ${reason} (rescans now only on request)`);
+      repoWatcher = null;
+      void watcher.close();
+    };
+
+    watcher.on('all', () => scheduleRescan());
+    // Previously swallowed silently (species 7-shaped: an EMFILE here left the watcher wedged
+    // with no signal at all). Now it closes the watcher and says so, once.
+    watcher.on('error', (e: unknown) => {
+      const code = (e as NodeJS.ErrnoException | undefined)?.code;
+      const message = e instanceof Error ? e.message : String(e);
+      shutOff(code ? `${code}: ${message}` : message);
+    });
+
+    // Wait for the watcher to settle before counting what it holds — an error before `ready`
+    // (e.g. an EMFILE mid-walk) must not hang startup either.
+    await new Promise<void>((res) => {
+      watcher.once('ready', res);
+      watcher.once('error', () => res());
+    });
+    if (repoWatcher) {
+      const n = flattenWatchedPaths(watcher, root).length;
+      if (n > watchCap) shutOff(`${n} watched paths > cap ${watchCap}`);
+    }
   }
 
   // ---- store → clients ----------------------------------------------------------------
@@ -1071,6 +1138,8 @@ export async function startServer(opts: ServerOptions): Promise<RunningServer> {
     webDir,
     repo: () => repo,
     rescan,
+    watchedPaths: () => (repoWatcher ? flattenWatchedPaths(repoWatcher, root) : []),
+    scanCount: () => scanCount,
     async close() {
       if (closed) return;
       closed = true;

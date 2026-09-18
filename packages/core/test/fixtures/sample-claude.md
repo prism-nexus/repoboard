@@ -15,8 +15,8 @@ is FROZEN history as of 2026-09-17 — read a `§` it is pointed at, never appen
 
 ## Non-negotiables — every task, none worth rediscovering
 
-1. **NEVER write to `.../Job Seeker/job-seeker-stable`.** It is the owner's live job search.
-   Read-only, always. Same for `.../job-seeker-pipeline`.
+1. **NEVER write to `.../Other App/other-app-live`.** It is the owner's live project.
+   Read-only, always. Same for `.../other-app-pipeline`.
 2. **Read the predecessor database only as** `sqlite3 "file:...jobs.db?mode=ro" "SELECT ..."`.
    **Never `require('./database.js')`** — importing it runs its migration chain.
 3. **No LLM and no network in the ingest or scoring path** (D8).
@@ -24,7 +24,7 @@ is FROZEN history as of 2026-09-17 — read a `§` it is pointed at, never appen
    gate windows are in `docs/STATE.md` and a suite may not hold the lock inside one). One holder of
    `pnpm dev` (:8787) or `pnpm dev:web` (:5173). **Any count produced during overlap is worthless.**
 5. **Stop and ask a human** before: spend beyond Cloudflare Paid + Neon's tier, deviating from a
-   plan §1 decision, any write to `job-seeker-stable` or `~/job-seeker-data`, DNS, email to a real
+   plan §1 decision, any write to `other-app-live` or `~/other-app-data`, DNS, email to a real
    address, a public preview deploy, CAPTCHA/bot-protection evasion, a backfill's `--apply`, or firing
    a sweep. Full list: plan §0.6.
 6. **Delegate implementation to subagents and be the orchestrator.** Write the brief (pattern:

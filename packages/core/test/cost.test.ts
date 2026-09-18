@@ -52,14 +52,14 @@ describe('extractLinkedPaths — the sample CLAUDE.md fixture', () => {
     // must fail here, not just fail to add it to the expected list above.
     const excludedWithReason: Record<string, string> = {
       '--apply': 'no slash, no extension',
-      '.../job-seeker-pipeline': 'a path segment ("...") made only of dots',
+      '.../other-app-pipeline': 'a path segment ("...") made only of dots',
       '/tmp/fpj-vitest.lock': 'absolute',
       '/health/db': 'absolute',
-      '~/job-seeker-data': 'contains "~", not in the allowed character set',
-      'job-seeker-stable': 'no slash, no extension',
+      '~/other-app-data': 'contains "~", not in the allowed character set',
+      'other-app-live': 'no slash, no extension',
       main: 'no slash, no extension',
       any: 'no slash, no extension',
-      freshpickedjobs: 'no slash, no extension',
+      'sample-app': 'no slash, no extension',
       save_application: 'no slash, no extension',
       skip_jobs: 'no slash, no extension',
       'docs/log/<today>.md': 'contains "<"/">" , not in the allowed character set',
@@ -72,6 +72,9 @@ describe('extractLinkedPaths — the sample CLAUDE.md fixture', () => {
     const text = readFileSync(SAMPLE_CLAUDE_MD, 'utf8');
     const extracted = new Set(extractLinkedPaths(text));
     for (const [span, reason] of Object.entries(excludedWithReason)) {
+      // RCB-50: assert the "appears verbatim" claim, so a fixture edit that drops a span cannot
+      // leave this loop checking nothing.
+      expect(text, `${JSON.stringify(span)} should be in the fixture`).toContain(`\`${span}\``);
       expect(extracted.has(span), `${JSON.stringify(span)} should be excluded: ${reason}`).toBe(
         false,
       );

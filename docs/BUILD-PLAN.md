@@ -421,7 +421,7 @@ Answered 2026-09-07:
   once `--root` has been used enough to say what the switcher should do. **Standing constraint
   this decision creates:** pointing at a directory is a read-only act. Nothing may be written
   into a target repo without the user explicitly asking, and CLAUDE.md non-negotiable 1 (the
-  owner's Job Seeker repos are never written to, from any repo on this machine) now has a feature
+  owner's other private repos are never written to, from any repo on this machine) now has a feature
   that could violate it by accident — every test for P7 uses a fixture repo it created itself.
   Tasks P7.1, P7.2. Brief: `docs/P7-REPOS-BRIEF.md`.
 - **O8 — K9: the CLI gets `card update <id>`, not `--assign` on `card move`.** Decided

@@ -42,8 +42,8 @@ Cards: **RCB-32** (P7.1), **RCB-33** (P7.2). Both are in `todo` with
 This feature's whole purpose is to open directories outside this repo, which makes it the first
 task here that *could* write somewhere it must not.
 
-- **CLAUDE.md non-negotiable 1 is absolute: never write to `~/Projects/Repos/Job Seeker/job-seeker-stable`
-  or `job-seeker-pipeline`, from any repo on this machine, for any reason.** Do not point a test,
+- **CLAUDE.md non-negotiable 1 is absolute: never write to `~/Projects/Repos/Other App/other-app-live`
+  or `other-app-pipeline`, from any repo on this machine, for any reason.** Do not point a test,
   a manual run, or a scratch command at either. Do not `require` their `database.js`.
 - **Every test creates its own fixture repo** under `mkdtemp` in the OS temp dir and removes it
   afterwards. No test may point at a path outside the fixture it created, this repo included.

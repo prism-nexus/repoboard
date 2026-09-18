@@ -89,8 +89,9 @@ const HAS_EXTENSION = /\.[A-Za-z0-9]{1,6}$/;
  * - an absolute path (`/...`);
  * - a path with any segment made of ONLY dots — `..` (the brief's own example) and, measured
  *   against freshpickedjobs' real CLAUDE.md, the prose ellipsis `...` used to abbreviate a path
- *   outside the repo (`.../job-seeker-pipeline`) — both are "escape the repo" shaped, so both
- *   are rejected by the same rule rather than special-casing `..` alone (§7 correction).
+ *   outside the repo (`.../other-app-pipeline` in the sample fixture) — both are "escape the
+ *   repo" shaped, so both are rejected by the same rule rather than special-casing `..` alone
+ *   (§7 correction).
  * A bare word with no slash and no extension (`main`, `any`, `README` without `.md`) is not
  * treated as a path — it is far more often a branch name, a tool name, or a type name than a
  * file, and admitting it would flood the linked-paths list with false positives.

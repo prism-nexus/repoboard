@@ -111,6 +111,11 @@ button {
   display: grid;
   /* topbar, now-strip (P8.2, always rendered), ticker, banner (optional), main. */
   grid-template-rows: auto auto auto auto 1fr;
+  /* RCB-44: an implicit `auto` column sizes to its items' max-content, and the ticker's
+     nowrap marquee track is thousands of px wide (measured 10389px on the fpj board with 20
+     events), which widened every row — panel, board — to match. `minmax(0, 1fr)` pins the
+     column to the viewport; the ticker's own `overflow: hidden` clips the track. */
+  grid-template-columns: minmax(0, 1fr);
 }
 .topbar {
   display: flex;
@@ -260,6 +265,10 @@ button {
 }
 .ticker__when {
   color: var(--muted);
+}
+/* RCB-44: the title is the point of the line, not a muted aside. */
+.ticker__title {
+  font-weight: 500;
 }
 
 .banner {

@@ -64,7 +64,7 @@ function Shell() {
       />
       <NowStrip leases={state.leases} now={now} />
       <div className="status-row">
-        <Ticker events={state.events} fun={state.fun} now={now} />
+        <Ticker events={state.events} cards={state.cards} fun={state.fun} now={now} />
         <LogTimeline log={state.log} now={now} />
       </div>
       {state.everConnected && !state.connected ? (

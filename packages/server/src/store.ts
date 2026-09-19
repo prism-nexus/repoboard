@@ -35,6 +35,7 @@ import {
   type Finding,
   formatLogBlock,
   formatLogLine,
+  formatSeatBullet,
   initialStateText,
   type LeasesDoc,
   type LogBlock,
@@ -49,6 +50,7 @@ import {
   pruneWindows,
   type ReleaseLeaseInput,
   releaseLease,
+  replaceSeatBullet,
   type SeatBundle,
   type StateDoc,
   type StateSectionName,
@@ -565,6 +567,43 @@ export class CardStore extends EventEmitter<StoreEvents> {
       const parsed = parseState(res.text);
       if (!parsed.ok) throw new Error(`setStateSection produced unparseable text: ${parsed.error}`);
       return { ok: true as const, doc: parsed.doc, text: res.text };
+    });
+  }
+
+  /**
+   * RCB-58: replace ONLY `name`'s own SEATS bullet and restamp — a seat's own terminal can make
+   * this ONE write to shared STATE.md without touching another seat's line. The bullet is found
+   * the SAME way `repoboard seat <name>` finds it (`replaceSeatBullet` is `findSeatLine`'s own
+   * two-pass match, RCB-58), and the restamp goes through `setStateSectionCore` — the SAME code
+   * path `setStateSection`/`state --set-section` uses — so the byte-preservation of every other
+   * section is one guarantee, not two. Missing STATE.md is scaffolded first, exactly like
+   * `setStateSection`.
+   */
+  setSeatBullet(name: string, status: 'UP' | 'DOWN', text: string): Promise<SetStateOutcome> {
+    return this.mutate(async () => {
+      this.refuseWriteWithoutBoard();
+      let raw: string;
+      try {
+        raw = await readFile(this.statePath, 'utf8');
+      } catch (e) {
+        if ((e as NodeJS.ErrnoException).code !== 'ENOENT') throw e;
+        raw = initialStateText({ now: this.now(), actor: name });
+      }
+      const parsed = parseState(raw);
+      if (!parsed.ok) return { ok: false as const, error: parsed.error };
+      const now = this.now();
+      const newSeats = replaceSeatBullet(
+        parsed.doc.sections.seats,
+        name,
+        formatSeatBullet(name, status, text, now),
+      );
+      const res = setStateSectionCore(raw, 'seats', newSeats, { now, actor: name });
+      if (!res.ok) return { ok: false as const, error: res.error };
+      await this.writeState(res.text);
+      const reparsed = parseState(res.text);
+      if (!reparsed.ok)
+        throw new Error(`setSeatBullet produced unparseable text: ${reparsed.error}`);
+      return { ok: true as const, doc: reparsed.doc, text: res.text };
     });
   }
 

@@ -4,7 +4,14 @@
  * with placeholders for every missing part.
  */
 import { describe, expect, it } from 'vitest';
-import { findSeatLine, renderSeatBundle, type SeatBundle, seatBundle } from '../src/seat.js';
+import {
+  findSeatLine,
+  formatSeatBullet,
+  renderSeatBundle,
+  replaceSeatBullet,
+  type SeatBundle,
+  seatBundle,
+} from '../src/seat.js';
 import { SECTION_PLACEHOLDER } from '../src/state.js';
 import type { Card } from '../src/types.js';
 
@@ -432,5 +439,77 @@ describe('renderSeatBundle: placeholders for every missing part', () => {
     const rendered = renderSeatBundle(bundle, NOW);
     expect(rendered).toContain('RCB-1  todo  do this');
     expect(rendered).toContain('(first todo; nothing assigned, nothing prioritised)');
+  });
+});
+
+describe('replaceSeatBullet / formatSeatBullet (RCB-58)', () => {
+  const THREE = [
+    '- **coordinator**: routes work',
+    '- **repoboard builder (its own terminal)**: on RCB-1',
+    '  continuation one',
+    '  continuation two',
+    '- **ops**: watching things',
+  ].join('\n');
+
+  it('test 1: replaces ONLY the builder bullet; coordinator and ops bullets are byte-identical, all 3 old builder lines gone', () => {
+    const result = replaceSeatBullet(THREE, 'builder', 'X');
+    expect(result).toBe(
+      ['- **coordinator**: routes work', 'X', '- **ops**: watching things'].join('\n'),
+    );
+  });
+
+  it('test 2a: appends as the last bullet when the seat has none yet', () => {
+    const twoBullets = ['- **coordinator**: routes work', '- **ops**: watching things'].join('\n');
+    const result = replaceSeatBullet(twoBullets, 'builder', 'X');
+    expect(result).toBe(
+      ['- **coordinator**: routes work', '- **ops**: watching things', 'X'].join('\n'),
+    );
+  });
+
+  it('test 2b: a placeholder section becomes just the bullet', () => {
+    expect(replaceSeatBullet(SECTION_PLACEHOLDER, 'builder', 'X')).toBe('X');
+  });
+
+  it('test 3: label-pass precedence — the coordinator prose-mentions "the builder" ahead of the builder\'s own bullet, but the builder\'s own is the one replaced (RCB-48 dogfood case)', () => {
+    const REAL_SHAPE = [
+      '- **coordinator (shared with freshpickedjobs): UP 2026-09-18 20:2xZ, cold-started from ' +
+        'SEATS on both boards.** Verified: `main` 405cab5 = `origin/main`; the only uncommitted ' +
+        "change is the builder's RCB-47 card move (doing, lease live) — the builder commits it " +
+        'with its landing. Routine: verify each builder sha by content on origin/main, move the ' +
+        'card, restamp.',
+      '- **repoboard builder (its own terminal)**: UP; landed tonight RCB-47 00aae0a and RCB-52 552fb2e.',
+    ].join('\n');
+    const result = replaceSeatBullet(REAL_SHAPE, 'builder', 'X');
+    expect(result).toBe(
+      [
+        '- **coordinator (shared with freshpickedjobs): UP 2026-09-18 20:2xZ, cold-started from ' +
+          'SEATS on both boards.** Verified: `main` 405cab5 = `origin/main`; the only uncommitted ' +
+          "change is the builder's RCB-47 card move (doing, lease live) — the builder commits it " +
+          'with its landing. Routine: verify each builder sha by content on origin/main, move the ' +
+          'card, restamp.',
+        'X',
+      ].join('\n'),
+    );
+  });
+
+  it('test 4: formatSeatBullet produces the exact bullet text, with a 2-line continuation indented', () => {
+    const bullet = formatSeatBullet(
+      'repoboard builder',
+      'DOWN',
+      'x\ny',
+      new Date('2026-09-19T01:55:00Z'),
+    );
+    expect(bullet).toBe('- **repoboard builder: DOWN 2026-09-19 01:55Z.** x\n  y');
+  });
+
+  it('test 5: round trip — format → replace → findSeatLine returns exactly the new bullet', () => {
+    const bullet = formatSeatBullet(
+      'builder',
+      'UP',
+      'holding RCB-58',
+      new Date('2026-09-19T02:00:00Z'),
+    );
+    const replaced = replaceSeatBullet(THREE, 'builder', bullet);
+    expect(findSeatLine(replaced, 'builder')).toBe(bullet);
   });
 });

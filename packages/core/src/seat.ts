@@ -78,9 +78,28 @@ function bulletLabel(firstLine: string): string {
 }
 
 /**
- * Split `seatsSection` into top-level bullets — a line starting with `- `, plus every following
- * line up to the next `- ` line as its continuation. Two-pass match, case-insensitive whole word
- * (`\b`), against `name`:
+ * Line-index spans (end exclusive) of `lines`' top-level bullets — a line starting with `- `, plus
+ * every following line up to the next `- ` line as its continuation. Lines before the first bullet
+ * (if any) belong to no span, same as the old inline splitter this replaces. Shared by
+ * `findSeatLine` and `replaceSeatBullet` (RCB-58) so both split a SEATS section identically —
+ * `bulletSpans` is the one place that decides where a bullet starts and ends.
+ */
+function bulletSpans(lines: readonly string[]): Array<{ start: number; end: number }> {
+  const spans: Array<{ start: number; end: number }> = [];
+  let start = -1;
+  for (let i = 0; i < lines.length; i++) {
+    if (/^- /.test(lines[i] ?? '')) {
+      if (start !== -1) spans.push({ start, end: i });
+      start = i;
+    }
+  }
+  if (start !== -1) spans.push({ start, end: lines.length });
+  return spans;
+}
+
+/**
+ * The seat's own bullet among `bullets` (each already split into its lines) — two-pass match,
+ * case-insensitive whole word (`\b`), against `name`:
  *
  * 1. The bullet whose LABEL (see `bulletLabel`) contains `name` — this is the seat's own bullet.
  * 2. Only when no bullet's label matches at all: the old rule, `name` anywhere in the first line.
@@ -95,35 +114,89 @@ function bulletLabel(firstLine: string): string {
  *
  * `builder` matches `- **repoboard builder (its own terminal…)**`; `ordinator` matches nothing
  * even though `coordinator` is a substring, because the match is word-bounded. Returns the
- * bullet's full text (continuation lines kept), trimmed. `null` when nothing matches in either
- * pass — including a placeholder section, which has no `- ` line to begin with.
+ * bullet's index in `bullets`, or -1 when nothing matches in either pass — including an empty
+ * `bullets` array, which a placeholder section (no `- ` line) always produces. RCB-58: this is the
+ * ONE private helper `findSeatLine` and `replaceSeatBullet` both call, so the two can never
+ * disagree about which bullet is "mine".
  */
-export function findSeatLine(seatsSection: string, name: string): string | null {
+function locateSeatBullet(bullets: readonly (readonly string[])[], name: string): number {
   const wanted = name.trim();
-  if (wanted.length === 0) return null;
+  if (wanted.length === 0) return -1;
   const wordRe = new RegExp(`\\b${escapeRegExp(wanted)}\\b`, 'i');
 
-  const bullets: string[][] = [];
-  let current: string[] | null = null;
-  for (const line of seatsSection.split('\n')) {
-    if (/^- /.test(line)) {
-      current = [line];
-      bullets.push(current);
-    } else if (current) {
-      current.push(line);
+  for (let i = 0; i < bullets.length; i++) {
+    if (wordRe.test(bulletLabel(bullets[i]?.[0] ?? ''))) return i;
+  }
+  for (let i = 0; i < bullets.length; i++) {
+    if (wordRe.test(bullets[i]?.[0] ?? '')) return i;
+  }
+  return -1;
+}
+
+/**
+ * Split `seatsSection` into top-level bullets and return the one that is `name`'s own, whole text
+ * (continuation lines kept), trimmed — or `null` when nothing matches, including a placeholder
+ * section, which has no `- ` line to begin with. See `locateSeatBullet` for the match rule.
+ */
+export function findSeatLine(seatsSection: string, name: string): string | null {
+  const lines = seatsSection.split('\n');
+  const spans = bulletSpans(lines);
+  const bullets = spans.map((s) => lines.slice(s.start, s.end));
+  const idx = locateSeatBullet(bullets, name);
+  return idx === -1 ? null : (bullets[idx] ?? []).join('\n').trim();
+}
+
+/**
+ * RCB-58: replace ONLY `name`'s own SEATS bullet — found the SAME way `findSeatLine` finds it
+ * (`locateSeatBullet`, so the two can never disagree) — with `bullet`, preserving every other byte
+ * of the section (lines before, other bullets, blank lines between). `bullet` is passed in already
+ * formatted (see `formatSeatBullet`); this function does no formatting of its own.
+ *
+ * Not found: `bullet` is appended as the last bullet (after a trailing newline if the section
+ * lacks one). A section with no `- ` line at all (the placeholder, or anything else) becomes just
+ * `bullet` — there is nothing to append after.
+ *
+ * Pure, no I/O, no clock.
+ */
+export function replaceSeatBullet(seatsSection: string, name: string, bullet: string): string {
+  const lines = seatsSection.split('\n');
+  const spans = bulletSpans(lines);
+  if (spans.length === 0) return bullet;
+
+  const bullets = spans.map((s) => lines.slice(s.start, s.end));
+  const idx = locateSeatBullet(bullets, name);
+  if (idx !== -1) {
+    const span = spans[idx];
+    if (span) {
+      const before = lines.slice(0, span.start);
+      const after = lines.slice(span.end);
+      return [...before, ...bullet.split('\n'), ...after].join('\n');
     }
   }
 
-  for (const bullet of bullets) {
-    const firstLine = bullet[0] ?? '';
-    if (wordRe.test(bulletLabel(firstLine))) return bullet.join('\n').trim();
-  }
+  const needsNewline = !seatsSection.endsWith('\n');
+  return needsNewline ? `${seatsSection}\n${bullet}` : `${seatsSection}${bullet}`;
+}
 
-  for (const bullet of bullets) {
-    const firstLine = bullet[0] ?? '';
-    if (wordRe.test(firstLine)) return bullet.join('\n').trim();
-  }
-  return null;
+/**
+ * RCB-58: format one SEATS bullet — `- **<name>: <UP|DOWN> <YYYY-MM-DD HH:MMZ>.** <text>`, `text`
+ * trimmed with internal newlines turned into continuation lines (each `\n` becomes `\n  `, two
+ * spaces, so a ≤3-line bullet's second/third lines stay inside it). `HH:MM` is UTC from `now`,
+ * minutes exact — this is the restamp itself, not a redacted display form; a seat's own log block
+ * carries the redacted stamp if it wants one. The label `**<name>: …**` is exactly what
+ * `findSeatLine`'s label pass matches on the next call (see the round-trip test), so a bullet
+ * written by this function is always found again by it.
+ */
+export function formatSeatBullet(
+  name: string,
+  status: 'UP' | 'DOWN',
+  text: string,
+  now: Date,
+): string {
+  const iso = toIso(now);
+  const stamp = `${iso.slice(0, 10)} ${iso.slice(11, 16)}Z`;
+  const body = text.trim().replace(/\n/g, '\n  ');
+  return `- **${name}: ${status} ${stamp}.** ${body}`;
 }
 
 /**

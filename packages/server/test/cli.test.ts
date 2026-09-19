@@ -1698,6 +1698,101 @@ describe('repoboard seat', () => {
   );
 });
 
+describe('repoboard seat --up/--down (RCB-58)', () => {
+  /** Like `repoboard`, but with an explicit clock instead of the fixed `NOW` — needed to land a
+   *  restamp strictly AFTER a log file's (utimes-pinned) mtime, deterministically. */
+  async function repoboardWithClock(cwd: string, now: Date, ...argv: string[]) {
+    const stdout = new Sink();
+    const stderr = new Sink();
+    const code = await run(argv, {
+      cwd,
+      stdout,
+      stderr,
+      env: { REPOBOARD_ACTOR: 'test-actor' },
+      now: () => now,
+    });
+    return { code, out: stdout.text, err: stderr.text };
+  }
+
+  it(
+    'restamps ONLY the builder bullet; `check` is stale-state before the restamp (a log block ' +
+      'newer than the STATE stamp exists) and ok after — the whole point of the card',
+    async () => {
+      const root = await freshRepo({});
+      await repoboard(root, 'state', '--set-section', 'LIVE', 'x', '--as', 'coordinator');
+      await repoboard(root, 'log', '--as', 'builder', 'holding RCB-58');
+
+      // Pin the log file's mtime strictly after the STATE.md stamp (`NOW`), deterministically —
+      // same technique as store.test.ts's "check aggregates findings" test.
+      const logPath = join(root, '.repoboard', 'log', '2026-09-02.md');
+      const later = new Date(NOW.getTime() + 60_000);
+      await utimes(logPath, later, later);
+
+      const staleCheck = await repoboard(root, 'check');
+      expect(staleCheck.code).toBe(1);
+      expect(staleCheck.out).toContain('stale-state');
+
+      const restampClock = new Date(later.getTime() + 60_000); // strictly after the log's mtime
+      const up = await repoboardWithClock(
+        root,
+        restampClock,
+        'seat',
+        'builder',
+        '--up',
+        'holding RCB-58',
+      );
+      expect(up.code).toBe(0);
+      expect(up.out).toBe('restamped SEATS builder: UP 2026-09-02 22:43Z\n');
+
+      const shown = await repoboard(root, 'seat', 'builder');
+      expect(shown.code).toBe(0);
+      expect(shown.out).toContain('## SEATS line');
+      expect(shown.out).toContain('- **builder: UP 2026-09-02 22:43Z.** holding RCB-58');
+
+      const okCheck = await repoboard(root, 'check');
+      expect(okCheck.code).toBe(0);
+      expect(okCheck.out).toBe('ok\n');
+    },
+  );
+
+  it('appends the bullet when the seat has none yet, on a board with no STATE.md at all', async () => {
+    const root = await freshRepo({});
+    const res = await repoboard(root, 'seat', 'ops', '--down', 'stood down for the night');
+    expect(res.code).toBe(0);
+    expect(res.out).toBe('restamped SEATS ops: DOWN 2026-09-02 22:41Z\n');
+    const shown = await repoboard(root, 'seat', 'ops');
+    expect(shown.out).toContain('- **ops: DOWN 2026-09-02 22:41Z.** stood down for the night');
+  });
+
+  it('--json prints {name, status, stamp, bullet}', async () => {
+    const root = await freshRepo({});
+    const res = await repoboard(root, 'seat', 'ops', '--json', '--up', 'watching things');
+    expect(res.code).toBe(0);
+    const parsed = JSON.parse(res.out) as Record<string, unknown>;
+    expect(Object.keys(parsed).sort()).toEqual(['bullet', 'name', 'stamp', 'status']);
+    expect(parsed).toMatchObject({
+      name: 'ops',
+      status: 'UP',
+      stamp: '2026-09-02 22:41Z',
+      bullet: '- **ops: UP 2026-09-02 22:41Z.** watching things',
+    });
+  });
+
+  it('--up and --down together is a usage error', async () => {
+    const root = await freshRepo({});
+    const res = await repoboard(root, 'seat', 'ops', '--up', 'a', '--down', 'b');
+    expect(res.code).toBe(1);
+    expect(res.err).toMatch(/--up and --down are exclusive/);
+  });
+
+  it('--up with empty text is a usage error', async () => {
+    const root = await freshRepo({});
+    const res = await repoboard(root, 'seat', 'ops', '--up', '');
+    expect(res.code).toBe(1);
+    expect(res.err).toMatch(/needs the bullet text/);
+  });
+});
+
 describe('repoboard check', () => {
   it('exit 0 "ok" on a clean fixture', async () => {
     const root = await freshRepo({});

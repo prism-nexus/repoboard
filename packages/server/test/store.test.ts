@@ -629,6 +629,76 @@ describe('state and log (P8.3)', () => {
   });
 });
 
+describe('setSeatBullet (RCB-58)', () => {
+  const SEATS = [
+    '- **coordinator**: routes work',
+    '- **repoboard builder (its own terminal)**: on RCB-1',
+    '- **ops**: watching things',
+  ].join('\n');
+
+  it("replaces ONLY the builder's own bullet, restamps as the seat, leaves LIVE/LAST LANDINGS untouched", async () => {
+    const repo = await repoWith({});
+    const store = await open(repo, false);
+    await store.setStateSection('live', 'Tree is dev.', 'claude/p8-3');
+    await store.setStateSection('lastLandings', 'RCB-1 landed.', 'claude/p8-3');
+    await store.setStateSection('seats', SEATS, 'coordinator');
+    const before = store.state();
+
+    const res = await store.setSeatBullet('builder', 'UP', 'held: RCB-58');
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+
+    // LIVE and LAST LANDINGS: byte-identical to before this write.
+    expect(res.doc.sections.live).toBe(before?.sections.live);
+    expect(res.doc.sections.lastLandings).toBe(before?.sections.lastLandings);
+    expect(res.doc.sections.live).toBe('Tree is dev.');
+    expect(res.doc.sections.lastLandings).toBe('RCB-1 landed.');
+
+    // Stamp line: written by the seat name as typed.
+    expect(res.doc.stamp).toBe('2026-09-02T22:41:10Z');
+    expect(res.doc.actor).toBe('builder');
+
+    // SEATS: the other two bullets untouched, byte for byte, plus the new one in the builder's place.
+    expect(res.doc.sections.seats).toBe(
+      [
+        '- **coordinator**: routes work',
+        '- **builder: UP 2026-09-02 22:41Z.** held: RCB-58',
+        '- **ops**: watching things',
+      ].join('\n'),
+    );
+
+    const onDisk = await readFile(join(repo.root, '.repoboard', 'STATE.md'), 'utf8');
+    expect(onDisk).toContain('**Written 2026-09-02T22:41:10Z by builder.**');
+    expect(onDisk).toContain('Tree is dev.');
+    expect(onDisk).toContain('RCB-1 landed.');
+    expect(onDisk).toContain('- **builder: UP 2026-09-02 22:41Z.** held: RCB-58');
+    expect(onDisk).toContain('- **coordinator**: routes work');
+    expect(onDisk).toContain('- **ops**: watching things');
+  });
+
+  it('a missing STATE.md is scaffolded first, then the bullet is appended (no bullet to replace yet)', async () => {
+    const repo = await repoWith({});
+    const store = await open(repo, false);
+    expect(store.state()).toBeNull();
+
+    const res = await store.setSeatBullet('ops', 'DOWN', 'stood down for the night');
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    expect(res.doc.sections.live).toBe('_(nothing recorded yet)_');
+    expect(res.doc.sections.seats).toBe(
+      '- **ops: DOWN 2026-09-02 22:41Z.** stood down for the night',
+    );
+    expect(res.doc.actor).toBe('ops');
+
+    const onDisk = await readFile(join(repo.root, '.repoboard', 'STATE.md'), 'utf8');
+    expect(onDisk).toContain('- **ops: DOWN 2026-09-02 22:41Z.** stood down for the night');
+  });
+
+  // RCB-58 Control B: skip the replace inside `store.setSeatBullet` (pass `parsed.doc.sections.seats`
+  // unchanged to `setStateSectionCore` instead of the `replaceSeatBullet` result) — both tests above
+  // must fail. See cli.test.ts for the CLI-facing half of this same control.
+});
+
 // ---- RCB-34/P7.3: the column set is editable from the app (plan §11 O6) ---------------------
 describe('setColumns (RCB-34/P7.3)', () => {
   const NEXT_COLUMNS = [
@@ -1246,11 +1316,13 @@ describe('K10 structure of store.ts', () => {
       'move',
       'releaseLease',
       'setColumns',
+      'setSeatBullet',
       'setStateSection',
       'takeLease',
       'update',
     ]);
     expect(decls.map((d) => d[3])).toEqual([
+      'mutate',
       'mutate',
       'mutate',
       'mutate',

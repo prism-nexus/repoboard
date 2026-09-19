@@ -484,6 +484,7 @@ every other section byte-identical.
 | `repoboard log show [--date YYYY-MM-DD] [--seat s]` | prints a day's log (default today); `--seat` filters to that seat's own blocks |
 | `repoboard log --last <seat>` | `repoboard log --last claude/builder` — prints that seat's newest block, searching back across every day in `.repoboard/log/` AND, when configured, `board.yml`'s `logDir` (RCB-54 — the same merged set `check` reads; `repoboard log` itself still only ever writes `.repoboard/log/`), not just today; the seat match is by LEADING WORD, case-insensitive, when `<seat>` is one word (RCB-62) — `builder` finds a hand-written heading like `BUILDER (fresh, f87be1)`, but `coordinator` does NOT match `COORDINATOR/SEARCH` (no whitespace, so that whole token is its own leading word); a multi-word `<seat>` still compares whole-to-whole; a cold seat with no history prints `(no log block for <seat>)`, exit 0 |
 | `repoboard seat <name> [--json]` | `repoboard seat claude/builder` — the RCB-48 cold-start bundle in one command: the SEATS bullet mentioning `<name>` (whole word), its own last log block (same RCB-62 leading-word match as `log --last`), the coordinator's (omitted when `<name>` IS the coordinator), its next todo card (assigned to it, else the highest-priority unassigned todo card — high > medium > low > unset, list order among equals — the render says which), and the cards with an open decision. Fixed `## ` headings; a missing part prints a one-line placeholder, never an empty section. Exit 0 on any successful read, even an entirely cold seat. `--json` prints the bundle object. Prints `warning: dist is older than src — run pnpm build (<pkgs>)` on stderr when run from a source checkout whose `packages/*/src` is newer than its `dist` (RCB-60); silent from an npm install |
+| `repoboard seat <name> --up "<text>" \| --down "<text>"` | RCB-58: replaces ONLY that seat's own SEATS bullet — found the way `seat` finds its SEATS line: label first, then first line — with `- **<name>: UP\|DOWN <YYYY-MM-DD HH:MMZ>.** <text>`, restamping line 3 as `<name>` and touching no other byte; appended as the last bullet when the seat has none yet. `state --set-section SEATS` stays the whole-section rewrite |
 | `repoboard check [--json] [--strict]` | exit 0 `ok` with no findings, else exit 1 (or 0 if every finding is warning-grade and `--strict` is absent) with one line per finding |
 | `repoboard init --practices` | scaffolds `STATE.md`, today's log, `leases.yml`, and a root `NEXT-AGENT-PROMPT.md` — **never overwrites an existing file**, printing `kept <path>` for each; works whether or not `.repoboard/` already existed |
 
@@ -504,7 +505,8 @@ STATE shape rules (RCB-55 A3 + A5, owner's letter A, 2026-09-18): **LIVE holds s
 only** — ports and what each serves, the remote, the owner lane, the sibling — never a queue or a
 per-landing status (the queue is the board, landings are LAST LANDINGS, seat status is SEATS).
 **A SEATS bullet is ≤ 3 lines**: `UP/DOWN <stamp>`, what the seat holds (lease + card), where its
-last block is. Anything else goes in the seat's log block.
+last block is. Anything else goes in the seat's log block. A seat restamps its own with
+`repoboard seat <name> --up|--down`.
 
 ### `repoboard check`'s findings
 

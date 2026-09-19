@@ -18,6 +18,7 @@ import {
   type DecisionOption,
   dailyLogHeader,
   defaultBoardConfig,
+  findSeatLine,
   formatCostTable,
   formatLogBlock,
   initialStateText,
@@ -135,6 +136,9 @@ Usage:
   repoboard seat <name> [--json]       the cold-start bundle for one seat: its SEATS line, its last
                                         log block, the coordinator's, its next todo card, the open
                                         decisions — one command instead of the three-file ritual
+  repoboard seat <name> --up "<text>" | --down "<text>"
+                                        replace ONLY this seat's own SEATS bullet and restamp
+                                        STATE.md; appends the bullet if the seat has none
   repoboard check [--json] [--strict]  exit 0 "ok" / 1 with one line per finding: stale-state
                                         (also reads board.yml's logDir, P8.6 — an extra daily-log
                                         directory alongside .repoboard/log/, read-only),
@@ -991,11 +995,43 @@ function selfRepoRoot(io: CliIO): string {
 }
 
 async function cmdSeat(args: string[], io: CliIO): Promise<number> {
-  const { values, positionals } = parse(args, { json: { type: 'boolean', default: false } });
+  const { values, positionals } = parse(args, {
+    json: { type: 'boolean', default: false },
+    up: { type: 'string' },
+    down: { type: 'string' },
+  });
   const [name] = positionals;
-  if (!name) throw new UserError('usage: repoboard seat <name> [--json]');
+  if (!name)
+    throw new UserError('usage: repoboard seat <name> [--json] [--up "<text>" | --down "<text>"]');
   const root = await requireRoot(io);
   const store = await openStore(root, { watch: false, now: io.now });
+
+  // RCB-58: a seat restamps ONLY its own SEATS bullet — a write, kept separate from the bundle
+  // read below (never printed together) so the permission classifier sees one small write.
+  if (values.up !== undefined || values.down !== undefined) {
+    if (values.up !== undefined && values.down !== undefined) {
+      throw new UserError('seat: --up and --down are exclusive');
+    }
+    const status: 'UP' | 'DOWN' = values.up !== undefined ? 'UP' : 'DOWN';
+    const text = values.up ?? values.down ?? '';
+    if (text.trim().length === 0) {
+      throw new UserError('seat --up/--down needs the bullet text');
+    }
+    const res = await store.setSeatBullet(name, status, text);
+    if (!res.ok) throw new UserError(res.error);
+    const stamp = `${res.doc.stamp.slice(0, 10)} ${res.doc.stamp.slice(11, 16)}Z`;
+    const bullet = findSeatLine(res.doc.sections.seats, name) ?? '';
+    if (values.json) {
+      io.stdout.write(`${JSON.stringify({ name, status, stamp, bullet }, null, 2)}\n`);
+    } else {
+      io.stdout.write(`restamped SEATS ${name}: ${status} ${stamp}\n`);
+    }
+    // RCB-60: printed after, same as the read path below — harmless on a write.
+    const staleness = await distStaleness(selfRepoRoot(io));
+    if (staleness) (io.stderr ?? io.stdout).write(`warning: ${staleness}\n`);
+    return 0;
+  }
+
   const bundle = await store.seatBundle(name);
   if (values.json) {
     io.stdout.write(`${JSON.stringify(bundle, null, 2)}\n`);

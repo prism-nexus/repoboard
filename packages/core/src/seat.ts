@@ -23,7 +23,19 @@ export interface SeatBundleInput {
 }
 
 /** Which rule picked `nextCard`, so the render (and a reader) can say so instead of guessing. */
-export type NextCardReason = 'assigned' | 'first-todo' | null;
+export type NextCardReason = 'assigned' | 'priority' | 'first-todo' | null;
+
+/**
+ * RCB-57 (B1): rank for the priority fallback — high wins, unset loses. A plain object (not a
+ * `Map`) so `card.priority` (possibly absent) indexes it directly; `?? 3` covers the absent case
+ * without a branch. The ONLY place this order is encoded — `pickNextCard` never re-sorts by id,
+ * date, or anything else, so this map is the one thing a control has to break to change the rule.
+ */
+const PRIORITY_RANK: Record<Card['priority'] & string, number> = { high: 0, medium: 1, low: 2 };
+
+function priorityRank(c: Card): number {
+  return c.priority !== undefined ? PRIORITY_RANK[c.priority] : 3;
+}
 
 export interface SeatBundle {
   name: string;
@@ -129,15 +141,25 @@ export function seatBundle(input: SeatBundleInput): SeatBundle {
   const wantedAssignee = input.name.trim().toLowerCase();
   const todoCards = input.cards.filter((c) => c.status === 'todo');
   const assigned = todoCards.find((c) => (c.assignee ?? '').toLowerCase() === wantedAssignee);
-  const firstTodo = todoCards[0] ?? null;
+  /**
+   * RCB-57 (B1): among todo cards assigned to NO ONE (a card assigned to another seat is never
+   * this seat's fallback), rank by priority — high, medium, low, unset, in that order — with a
+   * stable sort so list order breaks every tie, including the all-unset case (which makes this
+   * subsume the old "first todo in list order" rule exactly).
+   */
+  const unassignedTodo = todoCards.filter((c) => (c.assignee ?? '').trim() === '');
+  const byPriority = [...unassignedTodo].sort((a, b) => priorityRank(a) - priorityRank(b));
+  const anyPrioritised = unassignedTodo.some((c) => c.priority !== undefined);
+  const picked = byPriority[0] ?? null;
+
   let nextCard: Card | null = null;
   let nextCardReason: NextCardReason = null;
   if (assigned !== undefined) {
     nextCard = assigned;
     nextCardReason = 'assigned';
-  } else if (firstTodo !== null) {
-    nextCard = firstTodo;
-    nextCardReason = 'first-todo';
+  } else if (picked !== null) {
+    nextCard = picked;
+    nextCardReason = anyPrioritised ? 'priority' : 'first-todo';
   }
 
   const openDecisions = input.cards.filter((c) => needsDecision(c));
@@ -186,7 +208,9 @@ export function renderSeatBundle(b: SeatBundle, now: Date): string {
     lines.push(
       b.nextCardReason === 'assigned'
         ? `(assigned to ${b.name})`
-        : '(first todo; nothing assigned)',
+        : b.nextCardReason === 'priority'
+          ? `(first ${b.nextCard.priority}-priority todo)`
+          : '(first todo; nothing assigned, nothing prioritised)',
     );
   } else {
     lines.push('(no todo card)');

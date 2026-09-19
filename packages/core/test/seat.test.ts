@@ -147,6 +147,155 @@ describe('seatBundle: nextCard', () => {
     });
     expect(bundle.nextCardReason).toBe('assigned');
   });
+
+  it(
+    'RCB-57 B1 control fixture: an OLDER low-priority todo listed FIRST loses to a NEWER ' +
+      'high-priority todo listed second (both unassigned)',
+    () => {
+      const cards: Card[] = [
+        card({
+          id: 'RCB-1',
+          status: 'todo',
+          priority: 'low',
+          created: '2026-09-01T00:00:00Z',
+          title: 'older, low priority',
+        }),
+        card({
+          id: 'RCB-2',
+          status: 'todo',
+          priority: 'high',
+          created: '2026-09-18T00:00:00Z',
+          title: 'newer, high priority',
+        }),
+      ];
+      const bundle = seatBundle({
+        name: 'builder',
+        now: NOW,
+        seatsSection: null,
+        ownBlock: null,
+        coordinatorBlock: null,
+        cards,
+      });
+      expect(bundle.nextCard?.id).toBe('RCB-2');
+      expect(bundle.nextCardReason).toBe('priority');
+      const rendered = renderSeatBundle(bundle, NOW);
+      expect(rendered).toContain('(first high-priority todo)');
+    },
+  );
+
+  it('two `high` cards: the first in list order wins (stability)', () => {
+    const cards: Card[] = [
+      card({ id: 'RCB-1', status: 'todo', priority: 'high', title: 'first high' }),
+      card({ id: 'RCB-2', status: 'todo', priority: 'high', title: 'second high' }),
+    ];
+    const bundle = seatBundle({
+      name: 'builder',
+      now: NOW,
+      seatsSection: null,
+      ownBlock: null,
+      coordinatorBlock: null,
+      cards,
+    });
+    expect(bundle.nextCard?.id).toBe('RCB-1');
+    expect(bundle.nextCardReason).toBe('priority');
+  });
+
+  it('a `medium` listed after an unset-priority card wins over it', () => {
+    const cards: Card[] = [
+      card({ id: 'RCB-1', status: 'todo', title: 'unset priority, listed first' }),
+      card({ id: 'RCB-2', status: 'todo', priority: 'medium', title: 'medium, listed second' }),
+    ];
+    const bundle = seatBundle({
+      name: 'builder',
+      now: NOW,
+      seatsSection: null,
+      ownBlock: null,
+      coordinatorBlock: null,
+      cards,
+    });
+    expect(bundle.nextCard?.id).toBe('RCB-2');
+    expect(bundle.nextCardReason).toBe('priority');
+  });
+
+  it('a todo card assigned to ANOTHER seat is skipped even if high priority and listed first', () => {
+    const cards: Card[] = [
+      card({
+        id: 'RCB-1',
+        status: 'todo',
+        priority: 'high',
+        assignee: 'ops',
+        title: 'high priority but assigned to ops',
+      }),
+      card({ id: 'RCB-2', status: 'todo', priority: 'low', title: 'low, unassigned' }),
+    ];
+    const bundle = seatBundle({
+      name: 'builder',
+      now: NOW,
+      seatsSection: null,
+      ownBlock: null,
+      coordinatorBlock: null,
+      cards,
+    });
+    expect(bundle.nextCard?.id).toBe('RCB-2');
+    expect(bundle.nextCardReason).toBe('priority');
+  });
+
+  it('`assigned` still beats a higher-priority unassigned card', () => {
+    const cards: Card[] = [
+      card({
+        id: 'RCB-1',
+        status: 'todo',
+        priority: 'high',
+        title: 'high priority, unassigned',
+      }),
+      card({ id: 'RCB-2', status: 'todo', assignee: 'builder', title: 'assigned to builder' }),
+    ];
+    const bundle = seatBundle({
+      name: 'builder',
+      now: NOW,
+      seatsSection: null,
+      ownBlock: null,
+      coordinatorBlock: null,
+      cards,
+    });
+    expect(bundle.nextCard?.id).toBe('RCB-2');
+    expect(bundle.nextCardReason).toBe('assigned');
+  });
+
+  it('nothing prioritised: reason is `first-todo`, render shows the no-priority string', () => {
+    const cards: Card[] = [
+      card({ id: 'RCB-1', status: 'todo', title: 'first, unset' }),
+      card({ id: 'RCB-2', status: 'todo', title: 'second, unset' }),
+    ];
+    const bundle = seatBundle({
+      name: 'builder',
+      now: NOW,
+      seatsSection: null,
+      ownBlock: null,
+      coordinatorBlock: null,
+      cards,
+    });
+    expect(bundle.nextCard?.id).toBe('RCB-1');
+    expect(bundle.nextCardReason).toBe('first-todo');
+    const rendered = renderSeatBundle(bundle, NOW);
+    expect(rendered).toContain('(first todo; nothing assigned, nothing prioritised)');
+  });
+
+  it('renders the exact "Next card" lines for a `medium`-priority pick', () => {
+    const cards: Card[] = [
+      card({ id: 'RCB-1', status: 'todo', priority: 'medium', title: 'the medium one' }),
+    ];
+    const bundle = seatBundle({
+      name: 'builder',
+      now: NOW,
+      seatsSection: null,
+      ownBlock: null,
+      coordinatorBlock: null,
+      cards,
+    });
+    const rendered = renderSeatBundle(bundle, NOW);
+    expect(rendered).toContain('RCB-1  todo  the medium one\n(first medium-priority todo)');
+  });
 });
 
 describe('seatBundle: coordinator section', () => {
@@ -270,7 +419,7 @@ describe('renderSeatBundle: placeholders for every missing part', () => {
     expect(rendered).toContain('(none)');
   });
 
-  it('a first-todo (unassigned) next card prints "(first todo; nothing assigned)"', () => {
+  it('a first-todo (unassigned) next card prints "(first todo; nothing assigned, nothing prioritised)"', () => {
     const bundle: SeatBundle = {
       name: 'ops',
       seatsLine: null,
@@ -282,6 +431,6 @@ describe('renderSeatBundle: placeholders for every missing part', () => {
     };
     const rendered = renderSeatBundle(bundle, NOW);
     expect(rendered).toContain('RCB-1  todo  do this');
-    expect(rendered).toContain('(first todo; nothing assigned)');
+    expect(rendered).toContain('(first todo; nothing assigned, nothing prioritised)');
   });
 });

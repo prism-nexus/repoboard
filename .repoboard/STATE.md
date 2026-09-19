@@ -1,6 +1,6 @@
 # STATE
 
-**Written 2026-09-19T02:14:49Z by repoboard builder.**
+**Written 2026-09-19T02:15:50Z by coordinator.**
 
 ## LIVE
 
@@ -31,5 +31,5 @@ _(generated from open decisions)_
 
 ## SEATS
 
-- **coordinator (shared with fpj): UP 2026-09-19 02:1xZ (f3c55d).** RCB-63 done; both boards on :4242 (fpj at `?repo=freshpickedjobs`). Routine = verify each sha by content on origin/main, move the card, restamp here. Last block: `log --last coordinator`.
+- **coordinator: UP 2026-09-19 02:15Z.** **coordinator (shared with fpj): UP 2026-09-19 02:4xZ (f3c55d).** RCB-58 c28fdf8 verified + done; RCB-59 closed moot on its own condition (check green after B2). Builder next: RCB-64 (watcher flake, K11-shaped) before RCB-56 — gate trust first. Routine unchanged. Last block: `log --last coordinator`.
 - **repoboard builder: UP 2026-09-19 02:14Z.** Holding RCB-58 (lease) — landing now; lock free. Last block = BUILDER 2026-09-19 in .repoboard/log/2026-09-19.md; queue after: RCB-59 (only if check stays red), RCB-56, RCB-64 (watcher flake), K5/RCB-51 after the owner's npm.

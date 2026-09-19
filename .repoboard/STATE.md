@@ -1,6 +1,6 @@
 # STATE
 
-**Written 2026-09-19T01:49:20Z by hometown.**
+**Written 2026-09-19T01:53:48Z by hometown.**
 
 ## LIVE
 
@@ -31,5 +31,5 @@ _(generated from open decisions)_
 
 ## SEATS
 
-- **coordinator (shared with fpj): UP 2026-09-19 02:0xZ (f3c55d).** Batch 1 (RCB-57/60/61/62) verified + done. Next verify: RCB-63 (one process, :4243 retired → restamp fpj's :4243 pointers). Routine = verify each sha by content on origin/main, move the card, restamp here. Last block: `log --last coordinator`.
-- **repoboard builder: UP 2026-09-19 01:2xZ (a5f12e, Remote Control).** Batch 1 landed; on RCB-63 (owner's A: one serve on :4242 with both roots, :4243 stopped) — gate needs the vitest lock, announced before taking; then RCB-58 (B2), RCB-59 (B3) only if check stays red, RCB-56, K5 after RCB-51. Last block: `log --last builder`.
+- **coordinator (shared with fpj): UP 2026-09-19 02:1xZ (f3c55d).** RCB-63 done; both boards on :4242 (fpj at `?repo=freshpickedjobs`). Routine = verify each sha by content on origin/main, move the card, restamp here. Last block: `log --last coordinator`.
+- **repoboard builder: UP 2026-09-19 01:2xZ (a5f12e, Remote Control).** Batch 1 + RCB-63 landed. Queue: RCB-58 (B2), RCB-59 only if check stays red after it, RCB-56, K5 after the owner's RCB-51. Announces before any lock take. Last block: `log --last builder`.

@@ -25,14 +25,14 @@ in a browser. It is the owner's board and has caught layout bugs :4242 did not.
 
 ## vitest lock
 
-**One runner on the machine, across every session and both repos.**
-
-- **Take:** `mkdir /tmp/fpj-vitest.lock || exit 1`, then write `"$$ <cwd> <ISO time>"` to
-  `/tmp/fpj-vitest.lock/owner`.
-- **Release:** `rm -rf /tmp/fpj-vitest.lock` — but ONLY when the owner line's pid is yours. NEVER
-  remove a foreign lock.
-- **Before a suite**, check fpj's gate windows: `/tmp/fpj-lane-windows` lines in the FUTURE block
-  you (past lines are spent — ignore them); or `repoboard window list` from the fpj root.
+**One runner on the machine, across every session and both repos.** `scripts/vitest-lock.sh
+take|release|status` — the three verbs, nothing else. Owner file `/tmp/fpj-vitest.lock/owner`
+(override with `VITEST_LOCK_DIR`), one line: `<pid> <cwd> <ISO time> <session>`. Release only
+when the owner line's pid is yours; a foreign lock is a human decision (`release --force`
+removes it anyway but prints the foreign line it removed, audited). `take` also refuses (exit 3)
+inside a live fpj gate window — fpj's own `leases.yml` windows (via `window check`, checked on
+both repo roots) and any future-ending line in `/tmp/fpj-lane-windows`. The script is the
+protocol; a brief points here and does not restate it.
 
 ## Seat names and `--as` values
 

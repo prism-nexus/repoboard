@@ -863,10 +863,6 @@ export class CardStore extends EventEmitter<StoreEvents> {
    * difference between "readOnly" and a `.repoboard/board.yml` materialising on a map-only root
    * — store.test.ts's K10 control removes exactly this line to prove it.
    */
-  // RCB-34/P7.3 wire contract: no event this round (`Event`'s type union is fixed and not
-  // widened for this task); `actor` is accepted for parity with every other mutation so a later
-  // event needs no signature change.
-  // biome-ignore lint/correctness/noUnusedFunctionParameters: see above — kept for parity, unused today
   setColumns(columns: Column[], actor: string): Promise<SetColumnsOutcome> {
     return this.mutate(async () => {
       this.refuseWriteWithoutBoard();
@@ -874,6 +870,8 @@ export class CardStore extends EventEmitter<StoreEvents> {
       const parsed = parseBoard(serializeBoard(next));
       if (!parsed.ok) return { ok: false as const, error: parsed.error };
       const text = serializeBoard(parsed.config);
+      const from = this.cfg.columns.map((c) => c.id).join(',');
+      const to = parsed.config.columns.map((c) => c.id).join(',');
       await mkdir(this.repoboardDir, { recursive: true });
       const tmp = `${this.boardPath}.tmp`;
       await writeFile(tmp, text, 'utf8');
@@ -881,6 +879,15 @@ export class CardStore extends EventEmitter<StoreEvents> {
       this.cfg = parsed.config;
       this.boardHash = sha1(text);
       this.emit('config', this.cfg);
+      const event: Event = {
+        ts: toIso(this.now()),
+        actor,
+        type: 'columns',
+        cardId: null,
+        from,
+        to,
+      };
+      await this.appendEvent(event);
       return { ok: true as const, config: parsed.config };
     });
   }
@@ -1307,6 +1314,7 @@ const EVENT_TYPES: ReadonlySet<string> = new Set([
   'lease',
   'window',
   'archive',
+  'columns',
 ]);
 
 function parseEventLines(text: string): Event[] {

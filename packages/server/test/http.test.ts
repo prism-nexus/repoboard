@@ -374,6 +374,18 @@ describe('PATCH /api/board (RCB-34/P7.3)', () => {
     // Measured: one write must not produce two broadcasts (store.test.ts also counts the
     // store-level `config` emit directly). No second `config` message should arrive.
     await expect(nextMessage(ws, (m) => m.type === 'config', 500)).rejects.toThrow(/timed out/);
+
+    // RCB-56: `setColumns` appends one `columns` event, so PATCH /api/board gets it for free.
+    const events = (await json(await fetch(`${r.url}/api/events`))) as {
+      type: string;
+      actor: string;
+      to: string;
+    }[];
+    expect(events.at(-1)).toMatchObject({
+      type: 'columns',
+      actor: 'claude/rcb-34',
+      to: 'backlog,doing',
+    });
   });
 
   it('400 on an empty column list, an unknown body key, or a missing columns field', async () => {

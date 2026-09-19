@@ -1,3 +1,6 @@
+import { readFile } from 'node:fs/promises';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import {
   boardDisplayName,
@@ -292,5 +295,27 @@ describe('mergeSiblings (RCB-42)', () => {
       { name: 'b', url: 'http://localhost:22' },
       { name: 'c', url: 'http://localhost:3' },
     ]);
+  });
+});
+
+// ---- RCB-56: the README §Config example must be the real default, not a stale one -----------
+describe('README.md §Config example', () => {
+  it('parses to a config whose columns deep-equal defaultBoardConfig().columns', async () => {
+    const here = dirname(fileURLToPath(import.meta.url));
+    const readmePath = join(here, '../../..', 'README.md');
+    const readme = await readFile(readmePath, 'utf8');
+    const marker = '`.repoboard/board.yml` (plan §2; `init` writes this):';
+    const markerIndex = readme.indexOf(marker);
+    expect(markerIndex).toBeGreaterThanOrEqual(0);
+    const afterMarker = readme.slice(markerIndex + marker.length);
+    const fenceMatch = /```yaml\n([\s\S]*?)```/.exec(afterMarker);
+    expect(fenceMatch).not.toBeNull();
+    const yamlText = fenceMatch?.[1] ?? '';
+    // Sanity check this is really the fenced block, not an empty match.
+    expect(yamlText).toContain('columns:');
+    const result = parseBoard(yamlText);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.config.columns).toEqual(defaultBoardConfig().columns);
   });
 });

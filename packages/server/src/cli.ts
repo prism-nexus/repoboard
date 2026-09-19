@@ -12,6 +12,7 @@ import { type ParseArgsConfig, parseArgs } from 'node:util';
 import {
   type Card,
   type CardPatch,
+  type Column,
   type CreateCardInput,
   createCard,
   DEFAULT_CLAUDE_MD_BUDGET_BYTES,
@@ -38,6 +39,7 @@ import {
   serializeLeases,
   toIso,
 } from '@repoboard/core';
+import * as YAML from 'yaml';
 import { gatherCost } from './cost.js';
 import { distStaleness } from './dist-stale.js';
 import { type RunningServer, startServer } from './http.js';
@@ -109,6 +111,13 @@ Usage:
                                         no letter)
   repoboard card decide <id> [<letter>] [--words "<verbatim>"] [--as a]
                                         answer the open decision; a letter, --words, or both
+  repoboard columns [--json]           ID TITLE FLAGS COUNT (flags: active, wip:N, done,
+                                        decision); --json prints board.yml's raw columns list
+  repoboard columns set (--stdin | "<text>") [--as a]
+                                        replace the WHOLE column list — YAML or JSON, a bare
+                                        list or {columns: [...]}, exactly PATCH /api/board's
+                                        contract (RCB-34); a schema error (empty list, duplicate
+                                        id) leaves board.yml untouched
   repoboard lease take <resource> [--as h] [--until ts] [--note n] [--force]
                                         take (or renew) a lease on a named resource; ts is ISO or
                                         +90m / +2h relative to now; omit --until to hold until
@@ -713,6 +722,94 @@ async function cmdCardShow(args: string[], io: CliIO): Promise<number> {
     const refs = await resolveCardRefs(store.root, card);
     io.stdout.write(refs.length === 0 ? '\n(no refs)\n' : `\n${formatResolvedRefs(refs)}`);
   }
+  return 0;
+}
+
+// ---- columns (RCB-56: CLI/MCP surface for RCB-34's PATCH /api/board / ColumnEditor) ----------
+
+interface ColumnRow {
+  id: string;
+  title: string;
+  flags: string;
+  count: number;
+}
+
+function columnFlags(c: Column): string {
+  return [
+    c.active ? 'active' : null,
+    c.wip !== undefined ? `wip:${c.wip}` : null,
+    c.done ? 'done' : null,
+    c.decision ? 'decision' : null,
+  ]
+    .filter((f): f is string => f !== null)
+    .join(',');
+}
+
+function toColumnRow(c: Column, count: number): ColumnRow {
+  return { id: c.id, title: c.title ?? c.id, flags: columnFlags(c), count };
+}
+
+export function formatColumnsTable(rows: ColumnRow[]): string {
+  const header = ['ID', 'TITLE', 'FLAGS', 'COUNT'];
+  const body = rows.map((r) => [r.id, r.title, r.flags, String(r.count)]);
+  const widths = header.map((h, i) => Math.max(h.length, ...body.map((r) => (r[i] ?? '').length)));
+  const line = (r: string[]) =>
+    r
+      .map((cell, i) => (i === r.length - 1 ? cell : cell.padEnd(widths[i] ?? 0)))
+      .join('  ')
+      .trimEnd();
+  return [line(header), ...body.map(line)].join('\n');
+}
+
+async function cmdColumns(args: string[], io: CliIO): Promise<number> {
+  const { values } = parse(args, { json: { type: 'boolean', default: false } });
+  const root = await requireRoot(io);
+  const store = await openStore(root, { watch: false, now: io.now });
+  if (values.json) {
+    io.stdout.write(`${formatRows(store.config.columns)}\n`);
+    return 0;
+  }
+  const counts: Record<string, number> = {};
+  for (const c of store.list()) counts[c.status] = (counts[c.status] ?? 0) + 1;
+  const rows = store.config.columns.map((c) => toColumnRow(c, counts[c.id] ?? 0));
+  io.stdout.write(`${formatColumnsTable(rows)}\n`);
+  return 0;
+}
+
+/** The WHOLE new column list — a replace, exactly `PATCH /api/board`'s contract (RCB-34 brief). */
+function extractColumns(data: unknown): unknown[] {
+  if (Array.isArray(data)) return data;
+  if (data !== null && typeof data === 'object' && 'columns' in data) {
+    const columns = (data as { columns: unknown }).columns;
+    if (Array.isArray(columns)) return columns;
+  }
+  throw new UserError(
+    'columns set: input must be a YAML/JSON list of columns, or an object with a "columns" key',
+  );
+}
+
+async function cmdColumnsSet(args: string[], io: CliIO): Promise<number> {
+  const { values, positionals } = parse(args, {
+    stdin: { type: 'boolean', default: false },
+    as: { type: 'string' },
+  });
+  const [textArg] = positionals;
+  if (!values.stdin && textArg === undefined) {
+    throw new UserError('usage: repoboard columns set (--stdin | "<text>") [--as a]');
+  }
+  const raw = values.stdin ? await readStdin(io) : textArg;
+  let data: unknown;
+  try {
+    data = YAML.parse(raw ?? '', { schema: 'core' });
+  } catch (e) {
+    throw new UserError(`columns set: not valid YAML/JSON: ${(e as Error).message}`);
+  }
+  const columns = extractColumns(data);
+  const root = await requireRoot(io);
+  const store = await openStore(root, { watch: false, now: io.now });
+  const res = await store.setColumns(columns as Column[], actorFrom(values.as, io));
+  if (!res.ok) throw new UserError(res.error);
+  io.stdout.write(`updated columns: ${res.config.columns.map((c) => c.id).join(', ')}\n`);
   return 0;
 }
 
@@ -1387,6 +1484,10 @@ export async function run(argv: string[], io: CliIO): Promise<number> {
       if (sub === 'list') return await cmdWindowList(rest, io);
       if (sub === 'check') return await cmdWindowCheck(rest, io);
       throw new UserError(`unknown window command "${sub ?? ''}" (add, list, check)`);
+    }
+    if (cmd === 'columns') {
+      if (sub === 'set') return await cmdColumnsSet(rest, io);
+      return await cmdColumns(argv.slice(1), io);
     }
     if (cmd === 'state') return await cmdState(argv.slice(1), io);
     if (cmd === 'log') {

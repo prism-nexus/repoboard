@@ -74,9 +74,11 @@ const STATE_TOOLS = ['get_state', 'set_state_section', 'append_repo_log', 'check
 const COST_TOOLS = ['cost'];
 /** P8.5: archive + sync-issues, described for a newcomer like the card tools. */
 const ISSUE_TOOLS = ['archive_cards', 'sync_issues'];
+/** RCB-56: the one board/config write tool, terse like the lease/window tools (no CARD_INTRO). */
+const CONFIG_TOOLS = ['set_columns'];
 
 describe('repoboard mcp: handshake and tool list', () => {
-  it('lists exactly the twenty-one tools of the brief, card tools described for a newcomer', async () => {
+  it('lists exactly the twenty-two tools of the brief, card tools described for a newcomer', async () => {
     const r = await rig();
     const { tools } = await r.client.listTools();
     expect(tools.map((t) => t.name).sort()).toEqual([...MCP_TOOL_NAMES].sort());
@@ -85,7 +87,8 @@ describe('repoboard mcp: handshake and tool list', () => {
         LEASE_TOOLS.length +
         STATE_TOOLS.length +
         COST_TOOLS.length +
-        ISSUE_TOOLS.length,
+        ISSUE_TOOLS.length +
+        CONFIG_TOOLS.length,
     );
     for (const t of tools) {
       if (!CARD_TOOLS.includes(t.name)) continue;
@@ -125,7 +128,7 @@ describe('repoboard mcp: handshake and tool list', () => {
     expect(Object.values(bytes).every((b) => b > 0)).toBe(true);
   });
 
-  it('the full schema, all twenty-one tools, is reported here (orchestrator note 1)', async () => {
+  it('the full schema, all twenty-two tools, is reported here (orchestrator note 1)', async () => {
     const r = await rig();
     const { tools } = await r.client.listTools();
     const total = tools.reduce((sum, t) => sum + Buffer.byteLength(JSON.stringify(t)), 0);
@@ -795,5 +798,38 @@ describe('repoboard mcp: cost (P8.4)', () => {
     const finding = res.findings.find((f) => f.kind === 'cost-over-budget');
     expect(finding).toMatchObject({ level: 'error' });
     expect(res.exitCode).toBe(1);
+  });
+});
+
+describe('repoboard mcp: set_columns (RCB-56)', () => {
+  it('ok: replaces the whole column list and returns the re-parsed config', async () => {
+    const r = await rig();
+    const res = await r.json<{ config: { columns: unknown[] } }>('set_columns', {
+      columns: [
+        { id: 'backlog', title: 'Backlog' },
+        { id: 'doing', title: 'Doing', active: true, wip: 2 },
+      ],
+      actor: 'claude/rcb-56',
+    });
+    expect(res.config).toMatchObject({
+      columns: [
+        { id: 'backlog', title: 'Backlog' },
+        { id: 'doing', title: 'Doing', active: true, wip: 2 },
+      ],
+    });
+    expect(r.store.config.columns).toEqual([
+      { id: 'backlog', title: 'Backlog' },
+      { id: 'doing', title: 'Doing', active: true, wip: 2 },
+    ]);
+  });
+
+  it('fail: an empty list is refused by the store’s own schema, board.yml untouched', async () => {
+    const r = await rig();
+    const before = await readFile(join(r.repo.root, '.repoboard', 'board.yml'), 'utf8');
+    const res = await r.call('set_columns', { columns: [] });
+    expect(res.isError).toBe(true);
+    expect(textOf(res)).toContain('at least one column');
+    const after = await readFile(join(r.repo.root, '.repoboard', 'board.yml'), 'utf8');
+    expect(after).toBe(before);
   });
 });

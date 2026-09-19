@@ -124,22 +124,23 @@ activeWindowMinutes: 30
 columns:
   - id: backlog
     title: Backlog
+  - id: decide
+    title: Needs decision
+    decision: true
   - id: todo
     title: To do
   - id: doing
     title: Doing
     active: true
     wip: 3
-  - id: review
-    title: Review
-    active: true
   - id: done
     title: Done
     done: true
 ```
 
 `status:` on a card is a column `id`. `active: true` marks the columns whose cards count as
-"in progress" for the map; `wip` is a soft limit — a move past it warns and still moves.
+"in progress" for the map; `wip` is a soft limit — a move past it warns and still moves; and
+`decision: true` (O11) marks the column `ask` moves a card into and `decide` moves it back out of.
 `name` (RCB-41) is optional — absent means the top bar and tab title show the served folder's
 name instead. `siblings` (RCB-42) is optional too — other running boards, shown as plain top-bar
 links; `serve --sibling <name>=<url>` (repeatable) adds more for that process only, and on a name

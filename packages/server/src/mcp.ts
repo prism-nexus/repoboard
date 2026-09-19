@@ -12,6 +12,7 @@ import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import {
   type Card,
   type CardPatch,
+  type Column,
   computeBoardSummary,
   isStale,
   type Lease,
@@ -35,6 +36,7 @@ export const MCP_TOOL_NAMES = [
   'update_card',
   'append_log',
   'board_summary',
+  'set_columns',
   'ask_owner',
   'record_decision',
   'take_lease',
@@ -475,6 +477,35 @@ export function createMcpServer(opts: McpServerOptions): McpServer {
         wipBreaches: summary.wipBreaches,
         invalid: store.invalid,
       });
+    },
+  );
+
+  server.registerTool(
+    'set_columns',
+    {
+      title: 'Replace the whole column list',
+      description:
+        `Replaces the board's ENTIRE column list in board.yml — a replace, not a merge, the ` +
+        'same contract as HTTP PATCH /api/board and the web ColumnEditor (RCB-34): every column ' +
+        'not included is dropped. Each column is {id, title?, active?, wip?, done?, decision?}; ' +
+        'this tool does NOT validate that shape itself — the store re-parses board.yml through ' +
+        'the same schema a hand edit would get, and refuses (naming the problem: empty list, ' +
+        'duplicate id, etc.) with nothing written. Cards already on disk are never touched; one ' +
+        'left in a column you removed still shows, marked "not in board.yml". Current columns: ' +
+        `${columnIds()}.`,
+      inputSchema: {
+        columns: z
+          .array(z.record(z.string(), z.unknown()))
+          .describe('The WHOLE new column list, in order.'),
+        actor: z.string().optional().describe(ACTOR_SHORT),
+      },
+    },
+    async ({ columns, actor }) => {
+      // The store's own `parseBoard` is the validator (see the tool description above) — this
+      // cast does not duplicate the column schema, it only satisfies `setColumns`'s TS signature.
+      const res = await store.setColumns(columns as Column[], actor ?? defaultActor);
+      if (!res.ok) return fail(res.error);
+      return ok({ config: res.config });
     },
   );
 

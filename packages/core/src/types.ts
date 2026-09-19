@@ -156,11 +156,24 @@ export interface BoardConfig {
  * for `lease`, and `to` the window's name for `window` (`leases.ts`).
  * P8.5: `archive` is one event per card moved to `.repoboard/archive/` -- `from` the
  * column it left, `to` the literal string `"archive"` (there is no column by that name).
+ * RCB-56: `columns` is one event per `store.setColumns` call (CLI `columns set`, MCP
+ * `set_columns`, HTTP `PATCH /api/board`, the web ColumnEditor) — `cardId` is `null` and
+ * `resource` is absent (it is not about a card or a leases.yml resource); `from` is the
+ * previous column ids joined by `,`, `to` the new ones, same order as `board.yml`.
  */
 export interface Event {
   ts: string;
   actor: string;
-  type: 'move' | 'update' | 'create' | 'ask' | 'decide' | 'lease' | 'window' | 'archive';
+  type:
+    | 'move'
+    | 'update'
+    | 'create'
+    | 'ask'
+    | 'decide'
+    | 'lease'
+    | 'window'
+    | 'archive'
+    | 'columns';
   cardId: string | null;
   /** P8.2: present on `lease`/`window` events, absent on card events. */
   resource?: string;

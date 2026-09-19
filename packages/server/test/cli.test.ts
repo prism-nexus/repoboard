@@ -3,7 +3,7 @@ import { existsSync } from 'node:fs';
 import { mkdir, readdir, readFile, rm, utimes, writeFile } from 'node:fs/promises';
 import { basename, dirname, join } from 'node:path';
 import { promisify } from 'node:util';
-import { defaultBoardConfig, serializeBoard } from '@repoboard/core';
+import { defaultBoardConfig, parseBoard, serializeBoard } from '@repoboard/core';
 import { afterEach, describe, expect, it } from 'vitest';
 import { findRoot, formatTable, run } from '../src/cli.js';
 import { cardText, makeTempDir, makeTempRepoboard, makeTempRepoNoBoard, NOW } from './helpers.js';
@@ -1341,6 +1341,94 @@ async function repoboardStdin(cwd: string, stdinText: string, ...argv: string[])
   });
   return { code, out: stdout.text, err: stderr.text };
 }
+
+// ---- columns (RCB-56: CLI surface for RCB-34's PATCH /api/board / ColumnEditor) --------------
+describe('repoboard columns', () => {
+  it('prints the ID TITLE FLAGS COUNT table by default, and the raw list with --json', async () => {
+    const root = await freshRepo({
+      'RB-1.md': cardText('RB-1', 'doing'),
+      'RB-2.md': cardText('RB-2', 'doing'),
+      'RB-3.md': cardText('RB-3', 'done'),
+    });
+    const table = await repoboard(root, 'columns');
+    expect(table.code).toBe(0);
+    const lines = table.out.trimEnd().split('\n');
+    expect(lines[0]?.split(/\s+/)).toEqual(['ID', 'TITLE', 'FLAGS', 'COUNT']);
+    const doingLine = lines.find((l) => l.startsWith('doing'));
+    expect(doingLine).toContain('active,wip:3');
+    expect(doingLine?.endsWith('2')).toBe(true);
+    const decideLine = lines.find((l) => l.startsWith('decide'));
+    expect(decideLine).toContain('decision');
+    expect(decideLine?.endsWith('0')).toBe(true);
+    const doneLine = lines.find((l) => l.startsWith('done'));
+    expect(doneLine).toContain('done');
+    expect(doneLine?.endsWith('1')).toBe(true);
+
+    const json = await repoboard(root, 'columns', '--json');
+    expect(json.code).toBe(0);
+    expect(JSON.parse(json.out)).toEqual(defaultBoardConfig().columns);
+  });
+
+  it('set --stdin accepts YAML and replaces the whole column list', async () => {
+    const root = await freshRepo({});
+    const yamlText = [
+      'columns:',
+      '  - id: backlog',
+      '    title: Backlog',
+      '  - id: doing',
+      '    title: Doing',
+      '    active: true',
+      '    wip: 2',
+      '',
+    ].join('\n');
+    const res = await repoboardStdin(root, yamlText, 'columns', 'set', '--stdin');
+    expect(res.code).toBe(0);
+    expect(res.out).toBe('updated columns: backlog, doing\n');
+    const board = await readFile(join(root, '.repoboard', 'board.yml'), 'utf8');
+    const parsed = parseBoard(board);
+    expect(parsed.ok).toBe(true);
+    if (!parsed.ok) return;
+    expect(parsed.config.columns).toEqual([
+      { id: 'backlog', title: 'Backlog' },
+      { id: 'doing', title: 'Doing', active: true, wip: 2 },
+    ]);
+  });
+
+  it('set "<json>" accepts a bare JSON array as a positional argument', async () => {
+    const root = await freshRepo({});
+    const json = JSON.stringify([{ id: 'backlog', title: 'Backlog' }]);
+    const res = await repoboard(root, 'columns', 'set', json);
+    expect(res.code).toBe(0);
+    expect(res.out).toBe('updated columns: backlog\n');
+  });
+
+  it('a schema error exits 1 with the schema message; board.yml is byte-identical after', async () => {
+    const root = await freshRepo({});
+    const boardPath = join(root, '.repoboard', 'board.yml');
+    const before = await readFile(boardPath, 'utf8');
+    const res = await repoboard(root, 'columns', 'set', '[]');
+    expect(res.code).toBe(1);
+    expect(res.err).toContain('at least one column');
+    const after = await readFile(boardPath, 'utf8');
+    expect(after).toBe(before);
+  });
+
+  it('--as is recorded as the actor on the resulting "columns" event', async () => {
+    const root = await freshRepo({});
+    const res = await repoboard(
+      root,
+      'columns',
+      'set',
+      JSON.stringify([{ id: 'backlog', title: 'Backlog' }]),
+      '--as',
+      'claude/rcb-56-actor',
+    );
+    expect(res.code).toBe(0);
+    const events = await readFile(join(root, '.repoboard', 'events.jsonl'), 'utf8');
+    const last = events.trim().split('\n').at(-1) ?? '{}';
+    expect(JSON.parse(last)).toMatchObject({ type: 'columns', actor: 'claude/rcb-56-actor' });
+  });
+});
 
 describe('repoboard init --practices', () => {
   it("scaffolds STATE.md, today's log, leases.yml and NEXT-AGENT-PROMPT.md on a fresh dir", async () => {

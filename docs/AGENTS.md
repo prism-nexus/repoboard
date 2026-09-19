@@ -39,6 +39,8 @@ published). It finds `.repoboard/` by walking up from the current directory.
 | `repoboard card update <id> [--title t] [--assignee a] [--priority p] [--label l]... [--file f]... [--ref r]... [--clear field]... [--as actor]` | `repoboard card update RB-12 --assignee claude/web-agent --priority high --as claude/web-agent` |
 | `repoboard card list [--status s] [--json [--full]]` | `repoboard card list --status doing` |
 | `repoboard card show <id> [--resolve]` | `repoboard card show RB-12` — prints the card file; `--resolve` appends each `refs:` target's live lines (section 4) |
+| `repoboard columns [--json]` | `repoboard columns` — table `ID TITLE FLAGS COUNT` (flags: `active`, `wip:N`, `done`, `decision`); `--json` prints board.yml's raw columns list |
+| `repoboard columns set (--stdin \| "<text>") [--as actor]` | `repoboard columns set --stdin < new-columns.yml` — replaces the WHOLE column list (YAML or JSON, a bare list or `{columns: [...]}`), exactly `PATCH /api/board`'s contract (RCB-34); a schema error (empty list, duplicate id) leaves `board.yml` untouched |
 | `repoboard state [--set-section s (<text>\|--stdin)]` | `repoboard state` — prints the rendered STATE.md (section 10) |
 | `repoboard log --as <seat> [--title t] (<text>\|--stdin)` / `log show [--date d] [--seat s]` / `log --last <seat>` | `repoboard log --as claude/ops "armed the fires"` (section 10) |
 | `repoboard seat <name> [--json]` | `repoboard seat claude/builder` — the cold-start bundle: SEATS line, own last block, the coordinator's, next todo card, open decisions (section 10) |
@@ -133,8 +135,10 @@ The same thing as a `.mcp.json` at the repo root:
 
 The server finds `.repoboard/` by walking up from its working directory; pass `--root <dir>` when it is
 launched from somewhere else. Tools: `list_cards`, `get_card`, `create_card`, `move_card`,
-`update_card`, `append_log`, `board_summary`, `ask_owner`, `record_decision` (P8.1, section 8),
-`take_lease`, `release_lease`, `list_leases`, `add_window`, `check_window` (P8.2, section 9),
+`update_card`, `append_log`, `board_summary`, `set_columns` (RCB-56, section 2 — the whole-list
+replace behind `repoboard columns set` / `PATCH /api/board`), `ask_owner`, `record_decision`
+(P8.1, section 8), `take_lease`, `release_lease`, `list_leases`, `add_window`, `check_window`
+(P8.2, section 9),
 `get_state`, `set_state_section`, `append_repo_log`, `check` (P8.3, section 10),
 `cost` (P8.4, section 11).
 Call `list_cards` or `board_summary` first: they

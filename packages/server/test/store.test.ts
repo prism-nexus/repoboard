@@ -803,6 +803,47 @@ describe('setColumns (RCB-34/P7.3)', () => {
     expect(seen).toHaveLength(1);
     expect(seen[0]?.columns).toEqual(NEXT_COLUMNS);
   });
+
+  // RCB-56: `setColumns` appends exactly one `columns` event through `appendEvent`.
+  it('appends one "columns" event with from/to the previous/new column ids, comma-joined', async () => {
+    const { store } = await boardWithExtras();
+    const before = store.events().length;
+    const res = await store.setColumns(NEXT_COLUMNS, 'claude/rcb-56');
+    expect(res.ok).toBe(true);
+    const events = store.events();
+    expect(events).toHaveLength(before + 1);
+    expect(events.at(-1)).toEqual({
+      ts: '2026-09-02T22:41:10Z',
+      actor: 'claude/rcb-56',
+      type: 'columns',
+      cardId: null,
+      from: defaultBoardConfig()
+        .columns.map((c) => c.id)
+        .join(','),
+      to: 'backlog,doing',
+    });
+  });
+
+  it('a "columns" event line survives a store restart (RCB-38’s lesson: EVENT_TYPES gates reread)', async () => {
+    const repo = await repoWith({});
+    const first = await openStore(repo.root, { watch: false, now: () => NOW });
+    opened.push(first);
+    const res = await first.setColumns(NEXT_COLUMNS, 'claude/rcb-56');
+    expect(res.ok).toBe(true);
+    await first.close();
+
+    // A fresh store re-reads events.jsonl from disk (`load()` -> `loadEvents(true)`), which runs
+    // every line through the `EVENT_TYPES` filter — the exact reread path RCB-38's comment warns
+    // about (a type missing there is silently dropped, not merely delayed).
+    const second = await openStore(repo.root, { watch: false, now: () => NOW });
+    opened.push(second);
+    const events = second.events();
+    expect(events.at(-1)).toMatchObject({
+      type: 'columns',
+      actor: 'claude/rcb-56',
+      to: 'backlog,doing',
+    });
+  });
 });
 
 // ---- P8.6 `logDir`: `check` reads an extra daily-log directory ------------------------------
@@ -1082,6 +1123,30 @@ describe('K8: one external mutation, one ticker entry', () => {
     await settle();
 
     expect(events.map((e) => `${e.actor}:${e.type}`)).toEqual(['claude/cli:create']);
+  });
+
+  // RCB-56: `setColumns` funnels through the same `appendEvent` as every other mutation — one
+  // call, one line in events.jsonl, one "event" emission on a watching store, never two.
+  it('a second process running `columns set` emits one event, not two', async () => {
+    const repo = await repoWith({});
+    const watching = await open(repo, true);
+    const events: StoreEvent[] = [];
+    watching.on('event', (e) => events.push(e));
+
+    const cli = await open(repo, false);
+    const res = await cli.setColumns(
+      [
+        { id: 'backlog', title: 'Backlog' },
+        { id: 'doing', title: 'Doing', active: true, wip: 2 },
+      ],
+      'claude/cli',
+    );
+    expect(res.ok).toBe(true);
+
+    await waitForEvent<BoardConfig>(watching, 'config', (c) => c.columns.length === 2);
+    await settle();
+
+    expect(events.map((e) => `${e.actor}:${e.type}`)).toEqual(['claude/cli:columns']);
   });
 
   it('a hand edit of status alone still yields exactly one file event', async () => {

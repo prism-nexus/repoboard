@@ -12,16 +12,26 @@ a queue, a count, or a landing — those live in `.repoboard/STATE.md` and `docs
 
 ## Ports
 
-- **:4242** — this repo's own board. Serve it from this root.
-- **:4243** — the fpj board, served by THIS repo's built CLI against the fpj root:
-  `cd ~/Projects/Repos/freshpickedjobs && node <this-repo>/packages/server/dist/cli.js serve --port 4243`
+- **:4242** — BOTH boards, one process (RCB-63, owner letter A, 2026-09-19). Start it from this
+  root, always with both roots, in this order (the first `--root` is the primary):
+  `node packages/server/dist/cli.js serve --root . --root ~/Projects/Repos/freshpickedjobs --port 4242`
+  This repo's board is `http://127.0.0.1:4242/`; the fpj board is
+  `http://127.0.0.1:4242/?repo=freshpickedjobs` (opened on first request, map on demand; nothing
+  is written into the fpj tree). The top-bar `<select>` switches; the RCB-42 `siblings`
+  cross-links are gone from both `board.yml`s.
+- **:4243** — retired 2026-09-19. Nothing listens there; a pointer to it is stale.
 - **:5173** and **:8787** — freshpickedjobs' own dev servers. Never touch, never restart, never
   serve from this repo.
+- Stray `serve` processes (`ps -eo pid,command | grep 'cli.js serve'`): only the :4242 pid
+  above is this rig's. A scratchpad `--root` on another port belongs to whichever session
+  started it — report, do not kill.
 
 ## Restart rule
 
-After any `packages/web` landing: rebuild, restart **both** :4242 and :4243, then look at :4243
-in a browser. It is the owner's board and has caught layout bugs :4242 did not.
+After any `packages/web` landing: rebuild, restart :4242 on the line above (kill the old pid,
+start the new one, `lsof -nP -iTCP:4242 -sTCP:LISTEN` shows exactly one), then look at
+`?repo=freshpickedjobs` in a browser. It is the owner's board and has caught layout bugs the
+repoboard board did not.
 
 ## vitest lock
 

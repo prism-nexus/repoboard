@@ -1,6 +1,6 @@
 # STATE
 
-**Written 2026-09-19T15:47:46Z by coordinator.**
+**Written 2026-09-19T16:47:04Z by coordinator.**
 
 ## LIVE
 
@@ -31,5 +31,5 @@ _(generated from open decisions)_
 
 ## SEATS
 
-- **coordinator: DOWN 2026-09-19 15:47Z.** **coordinator (shared with fpj): DOWN 2026-09-19 15:5xZ (f3c55d) on the owner's word.** Fresh coordinator: `seat coordinator` here AND from the fpj root; `log --last coordinator`. Todo RCB-65; owner's RCB-51.
+- **coordinator: UP 2026-09-19 16:47Z.** UP 16:47Z 2026-09-19 (fresh, session 01DAt8) — todo = RCB-65; RCB-51 owner's
 - **repoboard builder: DOWN 2026-09-19 08:33Z.** STAND-DOWN 2026-09-19 08:4xZ clean (owner's 16:00Z word). Nothing held; :4242 pid 84378 on fb2baff (two-root line). Last block = BUILDER 08:4xZ in .repoboard/log/2026-09-19.md; next builder: `seat builder`, queue = K5 after the owner's RCB-51; RCB-56 awaits the coordinator's content check.

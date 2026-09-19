@@ -1189,6 +1189,42 @@ describe('state/log/check over HTTP (P8.3)', () => {
     expect(body.blocks).toHaveLength(1);
   });
 
+  // RCB-62 (finding 2, test i): the LOG panel's `GET /api/log` must see the configured `logDir`
+  // too, same as `check`/`seat` already do — `board.yml` is read once at `openStore`, so `logDir`
+  // has to be on disk BEFORE the store opens (unlike `rig()`, which opens immediately).
+  it('(i) GET /api/log?date=… returns the merged text on a board with logDir', async () => {
+    const repo = await makeTempRepoboard({});
+    cleanups.push(repo.cleanup);
+    await writeFile(
+      join(repo.root, '.repoboard', 'board.yml'),
+      serializeBoard({ ...defaultBoardConfig(), logDir: 'docs/log' }),
+    );
+    const extraDir = join(repo.root, 'docs', 'log');
+    await mkdir(extraDir, { recursive: true });
+    await writeFile(
+      join(extraDir, '2026-09-02.md'),
+      '# Log — 2026-09-02\n\n##### OPS 2026-09-02 21:4xZ: hand-written by the sibling\n\ntext\n',
+    );
+    const store = await openStore(repo.root, { watch: true, now: () => NOW });
+    cleanups.push(() => store.close());
+    const server = await startServer({ store, port: 0, scan: false });
+    cleanups.push(() => server.close());
+    const url = server.url.replace(/\/$/, '');
+
+    await store.appendRepoLog('claude/p8-3', 'own entry', 'kickoff'); // own dir, same date (NOW)
+
+    const get = await fetch(`${url}/api/log?date=2026-09-02`);
+    expect(get.status).toBe(200);
+    const merged = (await json(get)) as { date: string; text: string; blocks: unknown[] };
+    expect(merged.date).toBe('2026-09-02');
+    expect(merged.blocks).toHaveLength(2);
+    expect(merged.text).toContain('kickoff');
+    expect(merged.text).toContain('hand-written by the sibling');
+    expect(merged.text.indexOf('kickoff')).toBeLessThan(
+      merged.text.indexOf('hand-written by the sibling'),
+    ); // own dir first
+  });
+
   it('POST /api/log: 400 on empty seat/text or an unknown field', async () => {
     const r = await rig({});
     const emptySeat = await fetch(`${r.url}/api/log`, {

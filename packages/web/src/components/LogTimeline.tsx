@@ -28,6 +28,11 @@ export function LogTimeline({ log, now }: Props) {
     <div className="log-timeline" data-testid="log-timeline">
       {newestFirst.map((b) => {
         const { emoji, color } = avatarFor(b.seat);
+        // RCB-62: a hand-written block's `ts` is not guaranteed to be a parseable ISO `Date`
+        // (`repolog.ts`'s `LogBlock.ts` doc comment) — `relTime` returns `''` on that, and the
+        // human wrote e.g. `21:4xZ` on purpose (a redacted minute is a stamp, not an error), so
+        // it is shown VERBATIM here rather than left blank or ever rendered as "Invalid Date".
+        const when = relTime(b.ts, now) || b.ts;
         return (
           <details className="log-timeline__item" key={`${b.ts}-${b.seat}-${b.title}`}>
             <summary className="log-timeline__summary">
@@ -36,7 +41,7 @@ export function LogTimeline({ log, now }: Props) {
               </span>
               <span className="log-timeline__seat">{b.seat}</span>
               <span className="log-timeline__title">{b.title}</span>
-              <span className="log-timeline__when">{relTime(b.ts, now)}</span>
+              <span className="log-timeline__when">{when}</span>
             </summary>
             <pre className="log-timeline__text">{b.text}</pre>
           </details>

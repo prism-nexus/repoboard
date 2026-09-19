@@ -608,17 +608,31 @@ export class CardStore extends EventEmitter<StoreEvents> {
     });
   }
 
-  /** P8.3: read one day's log fresh from disk (never cached). Defaults to today. */
+  /**
+   * P8.3: read one day's log fresh from disk (never cached). Defaults to today.
+   *
+   * RCB-62: merged with `board.yml`'s configured `logDir` (P8.6), the same ADDITIONAL read-only
+   * source `loadAllLogInfo`/`lastRepoLogBlock` already read — the LOG panel (`GET /api/log`, the
+   * WS hello's `log`, and `log show`) must agree with `check`/`seat` on what "the log" is. Own-dir
+   * text comes first, then the extra dir's text for the same date (only when `cfg.logDir` is set
+   * AND that file exists), joined by a blank line; `blocks` is reparsed from the merged text.
+   * `null` only when NEITHER file exists. When only one side exists the OTHER side's exact bytes
+   * are returned untouched (in particular: no `logDir` configured → own-dir text, byte for byte,
+   * exactly as before RCB-62). `repoboard log`/`appendRepoLog` are unaffected and unchanged: they
+   * still only ever WRITE `.repoboard/log/` — this merge is a read, never a write, exactly like
+   * `loadAllLogInfo`.
+   */
   async log(date?: string): Promise<LogFile | null> {
     const day = date ?? toIso(this.now()).slice(0, 10);
-    const path = join(this.logDir, `${day}.md`);
-    let text: string;
-    try {
-      text = await readFile(path, 'utf8');
-    } catch (e) {
-      if ((e as NodeJS.ErrnoException).code !== 'ENOENT') throw e;
-      return null;
-    }
+    const own = await this.readLogDay(this.logDir, day);
+    const extra = this.cfg.logDir
+      ? await this.readLogDay(resolve(this.root, this.cfg.logDir), day)
+      : null;
+    if (own === null && extra === null) return null;
+    const text =
+      own !== null && extra !== null
+        ? `${own.replace(/\s+$/, '')}\n\n${extra}`
+        : (own ?? extra ?? '');
     return { date: day, text, blocks: parseLogBlocks(text) };
   }
 
@@ -968,6 +982,20 @@ export class CardStore extends EventEmitter<StoreEvents> {
     } else {
       // Keep the last good doc rather than losing the page to a bad hand edit.
       this.emit('warning', `${relative(this.root, this.statePath)}: ${res.error}`);
+    }
+  }
+
+  /**
+   * RCB-62: one `<dir>/<day>.md` file's raw text, or `null` when it does not exist (any other
+   * read error still throws). The sibling of `loadLogInfoFrom` for `log()`'s single-day merge —
+   * `loadLogInfoFrom` reads every file in a dir for `check`; this reads exactly one file by name.
+   */
+  private async readLogDay(dir: string, day: string): Promise<string | null> {
+    try {
+      return await readFile(join(dir, `${day}.md`), 'utf8');
+    } catch (e) {
+      if ((e as NodeJS.ErrnoException).code !== 'ENOENT') throw e;
+      return null;
     }
   }
 

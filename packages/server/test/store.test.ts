@@ -465,6 +465,77 @@ describe('state and log (P8.3)', () => {
     expect(await store.log('2020-01-01')).toBeNull();
   });
 
+  // RCB-62 (finding 2): `log()` merges `.repoboard/log/` with `board.yml`'s configured `logDir`,
+  // same additional read-only source `loadAllLogInfo`/`lastRepoLogBlock` already read.
+  describe('store.log(): merged with board.yml logDir (RCB-62)', () => {
+    async function repoWithLogDir(): Promise<TempRepo> {
+      const repo = await repoWith({});
+      await writeFile(
+        join(repo.root, '.repoboard', 'board.yml'),
+        serializeBoard({ ...defaultBoardConfig(), logDir: 'docs/log' }),
+      );
+      return repo;
+    }
+
+    it('(e) a block only in the configured logDir is returned', async () => {
+      const repo = await repoWithLogDir();
+      const extraDir = join(repo.root, 'docs', 'log');
+      await mkdir(extraDir, { recursive: true });
+      await writeFile(
+        join(extraDir, '2026-09-18.md'),
+        '# Log — 2026-09-18\n\n##### OPS 2026-09-18 21:4xZ: hand-written\n\ntext\n',
+      );
+      const store = await open(repo, false);
+      const log = await store.log('2026-09-18');
+      expect(log?.date).toBe('2026-09-18');
+      expect(log?.blocks).toHaveLength(1);
+      expect(log?.blocks[0]?.seat).toBe('OPS');
+      expect(log?.text).toContain('hand-written');
+    });
+
+    it('(f) both dirs present → both blocks, own dir first in `text`', async () => {
+      const repo = await repoWithLogDir();
+      const extraDir = join(repo.root, 'docs', 'log');
+      await mkdir(extraDir, { recursive: true });
+      await writeFile(
+        join(extraDir, '2026-09-18.md'),
+        '# Log — 2026-09-18\n\n##### OPS 2026-09-18 21:4xZ: hand-written\n\ntext\n',
+      );
+      const ownDir = join(repo.root, '.repoboard', 'log');
+      await mkdir(ownDir, { recursive: true });
+      await writeFile(
+        join(ownDir, '2026-09-18.md'),
+        '# Log — 2026-09-18\n\n##### BUILDER 2026-09-18T10:00:00Z: own entry\n\nfirst\n',
+      );
+      const store = await open(repo, false);
+      const log = await store.log('2026-09-18');
+      expect(log?.blocks).toHaveLength(2);
+      expect(log?.blocks[0]?.seat).toBe('BUILDER'); // own dir first
+      expect(log?.blocks[1]?.seat).toBe('OPS');
+      const ownIdx = log?.text.indexOf('own entry') ?? -1;
+      const extraIdx = log?.text.indexOf('hand-written') ?? -1;
+      expect(ownIdx).toBeGreaterThanOrEqual(0);
+      expect(extraIdx).toBeGreaterThan(ownIdx);
+    });
+
+    it('(g) no logDir configured → own dir text only, byte for byte as before', async () => {
+      const repo = await repoWith({});
+      const store = await open(repo, false);
+      const res = await store.appendRepoLog('ops', 'hello', undefined);
+      expect(res.ok).toBe(true);
+      if (!res.ok) return;
+      const log = await store.log();
+      expect(log?.text).toBe(res.text);
+      expect(log?.blocks).toHaveLength(1);
+    });
+
+    it('(h) neither dir has the date → null', async () => {
+      const repo = await repoWithLogDir();
+      const store = await open(repo, false);
+      expect(await store.log('2020-01-01')).toBeNull();
+    });
+  });
+
   it('an external edit of STATE.md is re-read by the watcher', async () => {
     const repo = await repoWith({});
     const path = join(repo.root, '.repoboard', 'STATE.md');

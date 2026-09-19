@@ -234,6 +234,48 @@ describe('lastBlockFor', () => {
     ];
     expect(lastBlockFor('   ', days)).toBeNull();
   });
+
+  // RCB-62 (finding 1): the seat token match is now "leading word", not "whole token" — measured
+  // against the sibling's real heading shapes (`sibling-log-headings.md`).
+  describe('RCB-62: leading-word match for a single-word `wanted`', () => {
+    it('`builder` finds a heading whose seat token is `BUILDER (fresh, f87be1)`', () => {
+      const days: DatedLogBlocks[] = [
+        {
+          date: '2026-09-18',
+          blocks: [block('BUILDER (fresh, f87be1)', '2026-09-18T20:3xZ', 'research')],
+        },
+      ];
+      const res = lastBlockFor('builder', days);
+      expect(res?.block.seat).toBe('BUILDER (FRESH, F87BE1)');
+    });
+
+    it(
+      'CONTROL (card rule): `coordinator` does NOT match `COORDINATOR/SEARCH` — this is the ' +
+        'card\'s "leading word", not "prefix", rule; a prefix rule is a separate, undecided ' +
+        'behaviour and must not be introduced here',
+      () => {
+        const days: DatedLogBlocks[] = [
+          { date: '2026-09-17', blocks: [block('COORDINATOR/SEARCH', '2026-09-17T19:4xZ')] },
+        ];
+        expect(lastBlockFor('coordinator', days)).toBeNull();
+      },
+    );
+
+    it('a multi-word `wanted` still compares whole-to-whole, as before', () => {
+      const days: DatedLogBlocks[] = [
+        { date: '2026-09-16', blocks: [block('REPOBOARD BUILDER', '2026-09-16T10:00:00Z')] },
+      ];
+      expect(lastBlockFor('repoboard builder', days)?.block.seat).toBe('REPOBOARD BUILDER');
+      expect(lastBlockFor('builder', days)).toBeNull(); // leading word is "REPOBOARD", not "BUILDER"
+    });
+
+    it('a multi-word `wanted` does not match a bare seat token equal to only its last word', () => {
+      const days: DatedLogBlocks[] = [
+        { date: '2026-09-16', blocks: [block('BUILDER', '2026-09-16T10:00:00Z')] },
+      ];
+      expect(lastBlockFor('repoboard builder', days)).toBeNull();
+    });
+  });
 });
 
 /**

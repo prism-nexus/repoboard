@@ -107,6 +107,16 @@ export interface DatedLogBlocks {
  * `readdir` order is filesystem-defined — and within a day the LAST matching block (file order)
  * wins, matching the file's own newest-last invariant. A seat name that is empty after trim is
  * an unconfigured rule and stays inert: `null`, never a match.
+ *
+ * RCB-62: a single-word `wanted` (no whitespace, e.g. `builder`) matches a block's seat token on
+ * its LEADING word only — the seat token's first whitespace-delimited word, case-insensitively —
+ * so `builder` finds a hand-written heading like `BUILDER (fresh, f87be1)`. This is deliberately
+ * a "leading word" rule, not a prefix rule: `coordinator` does NOT match `COORDINATOR/SEARCH`,
+ * because `COORDINATOR/SEARCH` has no whitespace in it and so its whole token — not `COORDINATOR`
+ * — is its "leading word" (a `/` is not a word boundary here). A prefix rule is a separate,
+ * undecided behaviour and must not be introduced by accident. A multi-word `wanted` (e.g.
+ * `repoboard builder`) keeps the ORIGINAL behaviour: it is compared whole against the whole seat
+ * token, so it matches only an exact (case-insensitive) heading and not a bare `BUILDER`.
  */
 export function lastBlockFor(
   seat: string,
@@ -114,11 +124,17 @@ export function lastBlockFor(
 ): { date: string; block: LogBlock } | null {
   const wanted = seat.trim().toUpperCase();
   if (wanted.length === 0) return null;
+  const wantedIsWhole = /\s/.test(wanted);
+  const matches = (blockSeat: string): boolean => {
+    if (wantedIsWhole) return blockSeat === wanted;
+    const leading = blockSeat.split(/\s+/, 1)[0] ?? '';
+    return leading === wanted;
+  };
   const sorted = [...days].sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : 0));
   for (const day of sorted) {
     for (let i = day.blocks.length - 1; i >= 0; i--) {
       const block = day.blocks[i];
-      if (block && block.seat === wanted) return { date: day.date, block };
+      if (block && matches(block.seat)) return { date: day.date, block };
     }
   }
   return null;

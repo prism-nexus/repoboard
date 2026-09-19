@@ -1008,9 +1008,15 @@ describe('watcher', () => {
     expect(store.config.columns.map((c) => c.id)).toEqual(['one', 'two']);
   });
 
+  // RCB-64: events.jsonl is pre-created (empty) BEFORE the watcher starts, so the append below
+  // is a `change`, not an `add` — the same K11 fix as the card test below: a brand-new file's
+  // chokidar `add` is unreliable under full-suite load (2 of 3 full runs missed it at the RCB-58
+  // gate, 8/8 green alone). What the product does with an append is unchanged and still tested.
   it('emits events appended to events.jsonl by another process', async () => {
     const repo = await repoWith({});
+    await writeFile(join(repo.root, '.repoboard', 'events.jsonl'), '');
     const store = await open(repo, true);
+    expect(store.events()).toEqual([]);
     const seen = waitForEvent<StoreEvent>(store, 'event');
     const line = {
       ts: '2026-09-02T23:00:00Z',

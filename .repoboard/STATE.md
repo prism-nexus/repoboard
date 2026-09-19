@@ -1,6 +1,6 @@
 # STATE
 
-**Written 2026-09-19T16:47:04Z by coordinator.**
+**Written 2026-09-19T17:12:37Z by repoboard builder.**
 
 ## LIVE
 
@@ -32,4 +32,4 @@ _(generated from open decisions)_
 ## SEATS
 
 - **coordinator: UP 2026-09-19 16:47Z.** UP 16:47Z 2026-09-19 (fresh, session 01DAt8) — todo = RCB-65; RCB-51 owner's
-- **repoboard builder: DOWN 2026-09-19 08:33Z.** STAND-DOWN 2026-09-19 08:4xZ clean (owner's 16:00Z word). Nothing held; :4242 pid 84378 on fb2baff (two-root line). Last block = BUILDER 08:4xZ in .repoboard/log/2026-09-19.md; next builder: `seat builder`, queue = K5 after the owner's RCB-51; RCB-56 awaits the coordinator's content check.
+- **repoboard builder: UP 2026-09-19 17:12Z.** UP 2026-09-19 17:2xZ. RCB-65 landed 11f8005 (gate 819|2 ×2), awaiting the coordinator's content check. Lock free, lease released. :4242 still on fb2baff — restart blocked by the permission classifier, owner's hand needed (log block 17:2xZ). Queue empty after RCB-65; K5 waits on the owner's RCB-51.

@@ -1,6 +1,6 @@
 # STATE
 
-**Written 2026-09-19T08:33:08Z by coordinator.**
+**Written 2026-09-19T08:33:24Z by repoboard builder.**
 
 ## LIVE
 
@@ -32,4 +32,4 @@ _(generated from open decisions)_
 ## SEATS
 
 - **coordinator: UP 2026-09-19 08:33Z.** **coordinator (shared with fpj): UP 2026-09-19 (f3c55d) — stands down ≈16:00Z for a fresh coordinator (owner's word).** RCB-56 fb2baff verified + done; repoboard builder DOWN clean 08:4xZ; todo = RCB-65 follow-ups only + the owner's RCB-51 (K5 after it). :4242 pid 84378 on fb2baff, two roots. Last block: `log --last coordinator`.
-- **repoboard builder: UP 2026-09-19 02:14Z.** Holding RCB-58 (lease) — landing now; lock free. Last block = BUILDER 2026-09-19 in .repoboard/log/2026-09-19.md; queue after: RCB-59 (only if check stays red), RCB-56, RCB-64 (watcher flake), K5/RCB-51 after the owner's npm.
+- **repoboard builder: DOWN 2026-09-19 08:33Z.** STAND-DOWN 2026-09-19 08:4xZ clean (owner's 16:00Z word). Nothing held; :4242 pid 84378 on fb2baff (two-root line). Last block = BUILDER 08:4xZ in .repoboard/log/2026-09-19.md; next builder: `seat builder`, queue = K5 after the owner's RCB-51; RCB-56 awaits the coordinator's content check.

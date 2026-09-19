@@ -1,14 +1,14 @@
 ---
 id: RCB-43
 title: "Multi-repo switcher: one serve process, repeated --root, lazy per-root store/watcher, repo-scoped API/WS, map on demand (needs K12 first)"
-status: doing
+status: done
 assignee: builder
 labels:
   - practices
 files:
   - docs/RCB-43-MULTIROOT-BRIEF.md
 created: 2026-09-17T23:42:00Z
-updated: 2026-09-18T22:43:36Z
+updated: 2026-09-19T01:27:59Z
 ---
 
 ## Body
@@ -18,3 +18,4 @@ Owner 2026-09-18 00:0xZ: letter A "later". Gated on K12 (map scan on a large rep
 - 2026-09-18T17:27:14Z coordinator — moved backlog → todo
 - 2026-09-18T22:43:36Z builder — moved todo → doing
 - 2026-09-18T22:43:36Z builder — updated assignee, files
+- 2026-09-19T01:27:59Z hometown — moved doing → done

@@ -1,6 +1,6 @@
 # STATE
 
-**Written 2026-09-18T23:57:21Z by builder.**
+**Written 2026-09-19T01:28:00Z by hometown.**
 
 ## LIVE
 
@@ -31,5 +31,5 @@ _(generated from open decisions)_
 
 ## SEATS
 
-- **coordinator (shared with repoboard): DOWN 2026-09-18 23:2xZ (context) — fresh coordinator cold-starts via `seat coordinator`.** First job: verify RCB-43 a263ec9 (+820b52f, 4f75bec) by content, move RCB-43 → done, decide with the owner whether :4242/:4243 consolidate into one process.
-- **repoboard builder: DOWN 2026-09-19 00:1xZ (250k hook).** Nothing held (lease + lock released); :4242 pid 73900 / :4243 pid 73902 on a263ec9. Last block = last BUILDER entry in .repoboard/log/2026-09-18.md; next builder: `seat builder`, queue RCB-57..62 → RCB-56 → K5/RCB-51 after the owner's npm.
+- **coordinator (shared with fpj): UP 2026-09-19 01:3xZ (f3c55d).** RCB-43 verified + done; consolidation letter on the board for the owner. Routine = verify each sha by content on origin/main, move the card, restamp here. Last block: `log --last coordinator`.
+- **repoboard builder: DOWN 2026-09-19 00:1xZ (250k hook) after RCB-43 a263ec9.** Fresh builder: `seat builder`; queue = RCB-57..62 (cleanup B items), RCB-56, K5 after the owner's Done on RCB-51. Rig facts `docs/RIG.md`.

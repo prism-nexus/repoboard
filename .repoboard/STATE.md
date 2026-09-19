@@ -1,6 +1,6 @@
 # STATE
 
-**Written 2026-09-19T02:15:50Z by coordinator.**
+**Written 2026-09-19T02:17:23Z by coordinator.**
 
 ## LIVE
 
@@ -31,5 +31,5 @@ _(generated from open decisions)_
 
 ## SEATS
 
-- **coordinator: UP 2026-09-19 02:15Z.** **coordinator (shared with fpj): UP 2026-09-19 02:4xZ (f3c55d).** RCB-58 c28fdf8 verified + done; RCB-59 closed moot on its own condition (check green after B2). Builder next: RCB-64 (watcher flake, K11-shaped) before RCB-56 — gate trust first. Routine unchanged. Last block: `log --last coordinator`.
+- **coordinator: UP 2026-09-19 02:17Z.** **coordinator (shared with fpj): UP 2026-09-19 (f3c55d).** RCB-64 743ea3c verified + done (gate 796|2 ×3 with the pre-create vs 2-of-3 misses without). Builder on RCB-56; then K5 after the owner's RCB-51. Routine unchanged. Last block: `log --last coordinator`.
 - **repoboard builder: UP 2026-09-19 02:14Z.** Holding RCB-58 (lease) — landing now; lock free. Last block = BUILDER 2026-09-19 in .repoboard/log/2026-09-19.md; queue after: RCB-59 (only if check stays red), RCB-56, RCB-64 (watcher flake), K5/RCB-51 after the owner's npm.

@@ -1,6 +1,6 @@
 import { execFile } from 'node:child_process';
 import { existsSync } from 'node:fs';
-import { mkdir, readdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, readdir, readFile, rm, utimes, writeFile } from 'node:fs/promises';
 import { basename, dirname, join } from 'node:path';
 import { promisify } from 'node:util';
 import { defaultBoardConfig, serializeBoard } from '@repoboard/core';
@@ -1859,4 +1859,62 @@ describe('repoboard cost', () => {
       expect(after.stdout).toBe('');
     },
   );
+});
+
+describe('seat: dist staleness (RCB-60)', () => {
+  const OLD = new Date('2020-01-01T00:00:00Z');
+  const NEW = new Date('2030-01-01T00:00:00Z');
+
+  /** Write `path` (creating parent dirs) then pin its mtime — a `writeFile` alone leaves mtime at
+   *  "now", too close in time for these fixtures to order reliably. */
+  async function writeAt(path: string, mtime: Date, text = 'x'): Promise<void> {
+    await mkdir(dirname(path), { recursive: true });
+    await writeFile(path, text);
+    await utimes(path, mtime, mtime);
+  }
+
+  /** A fake monorepo root for `REPOBOARD_SELF_ROOT` — distinct from the `.repoboard` board root
+   *  under test, since RCB-60's check is about THIS CLI's own checkout, never the board's `--root`. */
+  async function makeSelfRoot(stale: boolean): Promise<string> {
+    const selfRoot = await makeTempDir('repoboard-self-root-');
+    dirs.push(selfRoot);
+    if (stale) {
+      await writeAt(join(selfRoot, 'packages', 'core', 'dist', 'index.js'), OLD);
+      await writeAt(join(selfRoot, 'packages', 'core', 'src', 'index.ts'), NEW);
+    } else {
+      await writeAt(join(selfRoot, 'packages', 'core', 'src', 'index.ts'), OLD);
+      await writeAt(join(selfRoot, 'packages', 'core', 'dist', 'index.js'), NEW);
+    }
+    return selfRoot;
+  }
+
+  async function repoboardWithSelfRoot(cwd: string, selfRoot: string, ...argv: string[]) {
+    const stdout = new Sink();
+    const stderr = new Sink();
+    const code = await run(argv, {
+      cwd,
+      stdout,
+      stderr,
+      env: { REPOBOARD_ACTOR: 'test-actor', REPOBOARD_SELF_ROOT: selfRoot },
+      now: () => NOW,
+    });
+    return { code, out: stdout.text, err: stderr.text };
+  }
+
+  it('a stale self-root: stderr carries the warning, stdout is the normal bundle, exit 0', async () => {
+    const root = await freshRepo({});
+    const selfRoot = await makeSelfRoot(true);
+    const res = await repoboardWithSelfRoot(root, selfRoot, 'seat', 'builder');
+    expect(res.code).toBe(0);
+    expect(res.err).toBe('warning: dist is older than src — run pnpm build (core)\n');
+    expect(res.out).toContain('(no SEATS line mentions builder)');
+  });
+
+  it('a fresh self-root: stderr is empty', async () => {
+    const root = await freshRepo({});
+    const selfRoot = await makeSelfRoot(false);
+    const res = await repoboardWithSelfRoot(root, selfRoot, 'seat', 'builder');
+    expect(res.code).toBe(0);
+    expect(res.err).toBe('');
+  });
 });

@@ -38,6 +38,7 @@ import {
   toIso,
 } from '@repoboard/core';
 import { gatherCost } from './cost.js';
+import { distStaleness } from './dist-stale.js';
 import { type RunningServer, startServer } from './http.js';
 import { applySyncPlan, computeSyncPlan } from './issues.js';
 import {
@@ -977,6 +978,18 @@ async function cmdLogLast(args: string[], io: CliIO): Promise<number> {
  * decisions). Exit 0 on any successful read, even when every part is a placeholder — a cold seat
  * on a fresh board is the normal case, not an error.
  */
+/**
+ * RCB-60: THIS CLI's own monorepo root (not the board's `--root`) — `cli.ts` sits one level under
+ * the package dir, same as `http.ts`'s `packageDir()`, so two more `dirname`s up from there is the
+ * repo root. Test-only override: `REPOBOARD_SELF_ROOT` (via `CliIO.env`), since a real checkout's
+ * own path on disk can't otherwise be faked in a fixture.
+ */
+function selfRepoRoot(io: CliIO): string {
+  const override = (io.env ?? process.env).REPOBOARD_SELF_ROOT;
+  if (override) return override;
+  return dirname(dirname(dirname(dirname(fileURLToPath(import.meta.url)))));
+}
+
 async function cmdSeat(args: string[], io: CliIO): Promise<number> {
   const { values, positionals } = parse(args, { json: { type: 'boolean', default: false } });
   const [name] = positionals;
@@ -986,9 +999,12 @@ async function cmdSeat(args: string[], io: CliIO): Promise<number> {
   const bundle = await store.seatBundle(name);
   if (values.json) {
     io.stdout.write(`${JSON.stringify(bundle, null, 2)}\n`);
-    return 0;
+  } else {
+    io.stdout.write(renderSeatBundle(bundle, store.clock));
   }
-  io.stdout.write(renderSeatBundle(bundle, store.clock));
+  // RCB-60: printed after the bundle so a seat's cold-start read is never blocked or reordered.
+  const staleness = await distStaleness(selfRepoRoot(io));
+  if (staleness) (io.stderr ?? io.stdout).write(`warning: ${staleness}\n`);
   return 0;
 }
 

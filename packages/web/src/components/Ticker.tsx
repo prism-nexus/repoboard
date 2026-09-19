@@ -18,20 +18,128 @@ export function shortTitle(title: string, max = 48): string {
   return `${title.slice(0, max - 1)}…`;
 }
 
+/**
+ * RCB-65: one verb (or short verb phrase) per `Event.type` — the contract is the table in
+ * `docs/RCB-65-TICKER-VERBS-BRIEF.md`. The switch has NO `default`: if `Event['type']` ever
+ * grows a tenth member, the `never` assignment below fails to typecheck right here instead of a
+ * new event type silently reading "moved".
+ */
+export function tickerVerb(e: Event): string {
+  switch (e.type) {
+    case 'move':
+      return 'moved';
+    case 'create':
+      return 'created';
+    case 'update':
+      return 'updated';
+    case 'ask':
+      return 'asked on';
+    case 'decide':
+      return 'decided';
+    case 'archive':
+      return 'archived';
+    case 'lease':
+      return e.to === 'released' ? 'released' : 'took';
+    case 'window':
+      return 'added window';
+    case 'columns':
+      return 'set columns';
+  }
+  const exhaustive: never = e.type;
+  return exhaustive;
+}
+
+/**
+ * RCB-65: the per-type line body (everything between the emoji and the "· <relTime>" suffix).
+ * `parts` carries the pre-rendered actor/id/title/resource spans so this switch only decides
+ * shape (arrow or not, which fields, which words). Same exhaustiveness guard as `tickerVerb`:
+ * no `default`, so a tenth `Event.type` fails typecheck here too.
+ */
+function lineBody(
+  e: Event,
+  parts: {
+    actor: React.ReactNode;
+    id: React.ReactNode;
+    title: React.ReactNode;
+    resource: React.ReactNode;
+  },
+): React.ReactNode {
+  const { actor, id, title, resource } = parts;
+  switch (e.type) {
+    case 'move':
+      return (
+        <>
+          {actor} {tickerVerb(e)} {id} {title} → <span className="mono">{e.to}</span>
+        </>
+      );
+    case 'create':
+      return (
+        <>
+          {actor} {tickerVerb(e)} {id} {title} in <span className="mono">{e.to}</span>
+        </>
+      );
+    case 'update':
+    case 'ask':
+    case 'archive':
+      return (
+        <>
+          {actor} {tickerVerb(e)} {id} {title}
+        </>
+      );
+    case 'decide':
+      return (
+        <>
+          {actor} {tickerVerb(e)} {id} {title}
+          {e.letter ? (
+            <>
+              {' '}
+              → <span className="mono">{e.letter}</span>
+            </>
+          ) : null}
+        </>
+      );
+    case 'lease':
+      return (
+        <>
+          {actor} {tickerVerb(e)} {resource}
+        </>
+      );
+    case 'window':
+      return (
+        <>
+          {actor} {tickerVerb(e)} <span className="mono">{e.to}</span> on {resource}
+        </>
+      );
+    case 'columns':
+      return (
+        <>
+          {actor} {tickerVerb(e)} → <span className="mono">{e.to}</span>
+        </>
+      );
+  }
+  const exhaustive: never = e.type;
+  return exhaustive;
+}
+
 function Line({ e, now, titles }: { e: Event; now: number; titles: Map<string, string> }) {
   const { emoji, color } = avatarFor(e.actor);
   // RCB-44: a missing title (no cardId, or the card is gone — archived/removed) renders as
   // nothing, never a placeholder like "untitled".
   const title = e.cardId ? titles.get(e.cardId) : undefined;
+  const parts = {
+    actor: <span className="ticker__actor">{shortActor(e.actor)}</span>,
+    id: <span className="mono">{e.cardId}</span>,
+    // RCB-44's rule, unchanged: absent when there is no cardId or the card is gone.
+    title: title ? <span className="ticker__title">{shortTitle(title)}</span> : null,
+    // `resource` is optional on the type; never let a missing one render the word "undefined".
+    resource: <span className="mono">{e.resource ?? ''}</span>,
+  };
   return (
     <span className="ticker__item">
       <span className="ticker__emoji" style={{ color }} aria-hidden="true">
         {emoji}
       </span>
-      <span className="ticker__actor">{shortActor(e.actor)}</span> moved{' '}
-      <span className="mono">{e.cardId}</span>{' '}
-      {title ? <span className="ticker__title">{shortTitle(title)}</span> : null} →{' '}
-      <span className="mono">{e.to}</span>
+      {lineBody(e, parts)}
       <span className="ticker__when"> · {relTime(e.ts, now)}</span>
     </span>
   );

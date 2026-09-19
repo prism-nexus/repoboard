@@ -140,7 +140,9 @@ replace behind `repoboard columns set` / `PATCH /api/board`), `ask_owner`, `reco
 (P8.1, section 8), `take_lease`, `release_lease`, `list_leases`, `add_window`, `check_window`
 (P8.2, section 9),
 `get_state`, `set_state_section`, `append_repo_log`, `check` (P8.3, section 10),
-`cost` (P8.4, section 11).
+`cost` (P8.4, section 11), `archive_cards`, `sync_issues` (P8.5, section 12).
+All 22 tools' schema, via client.listTools() summing each tool's own JSON.stringify: **24,795 B**
+(2026-09-19, RCB-65).
 Call `list_cards` or `board_summary` first: they
 are cheap and return the column ids. `list_cards` takes optional `status`, `assignee`, `label`
 filters (exact match, AND) and `full: true` to include bodies; without it, rows are the same
@@ -432,7 +434,7 @@ error — it is the answer). The WS `snapshot` message carries `leases` alongsid
 | `GET /api/leases` | 826 B |
 | MCP `list_leases` result | 1,214 B |
 | MCP tool schema, 9 tools (P8.1 baseline, 2026-09-17) | 14,546 B |
-| MCP tool schema, **14 tools** (measured via `client.listTools()`, sum of each tool's own `JSON.stringify`) | **17,411 B** (+2,865 B for the five P8.2 tools) |
+| MCP tool schema, **14 tools** (P8.2, 2026-09-17 — measured via `client.listTools()`, sum of each tool's own `JSON.stringify`; the current count and bytes are in section 3) | **17,411 B** (+2,865 B for the five P8.2 tools) |
 
 Per-tool bytes of the five new tools: `take_lease` 691 B, `release_lease` 509 B, `list_leases`
 400 B, `add_window` 630 B, `check_window` 645 B — every one at or under the 700 B budget a terse
@@ -571,7 +573,7 @@ measured via the MCP client the same way as §8/§9's tables.
 | MCP `get_state` result | 515 B |
 | MCP `check` result (clean fixture, empty findings) | 83 B |
 | MCP tool schema, 14 tools (P8.2 baseline) | 17,411 B |
-| MCP tool schema, **18 tools** (`client.listTools()`, sum of each tool's own `JSON.stringify`) | **19,682 B** (+2,271 B for the four P8.3 tools) |
+| MCP tool schema, **18 tools** (`client.listTools()`, sum of each tool's own `JSON.stringify`; the current count and bytes are in section 3) | **19,682 B** (+2,271 B for the four P8.3 tools) |
 
 Per-tool bytes of the four new tools: `get_state` 432 B, `set_state_section` 645 B,
 `append_repo_log` 628 B, `check` 566 B — every one under the 700 B budget, for the same reason
@@ -689,7 +691,7 @@ this turn" — not as "what gets loaded automatically."
 |---|---|
 | MCP `cost` tool schema | 621 B |
 | MCP tool schema, 18 tools (P8.3 baseline) | 19,682 B |
-| MCP tool schema, **19 tools** (`client.listTools()`, sum of each tool's own `JSON.stringify`) | **20,303 B** (+621 B) |
+| MCP tool schema, **19 tools** (`client.listTools()`, sum of each tool's own `JSON.stringify`; the current count and bytes are in section 3) | **20,303 B** (+621 B) |
 
 621 B is under the 700 B aim, for the same reason P8.2/P8.3's tools are: no `CARD_INTRO`/
 `ACTOR_DESC` reuse — a cost report is not a card.
@@ -804,7 +806,7 @@ create: K1 K7 K8 K9 K11 K12 K13 K14 K17 K18 K19 K21 K64 K66 K71 K72 K73 K74 K76 
 | MCP `archive_cards` tool schema | 913 B |
 | MCP `sync_issues` tool schema | 2,145 B (reuses `CARD_INTRO` — a filed card IS a card, unlike a lease/cost tool) |
 | MCP tool schema, 19 tools (P8.4 baseline) | 20,303 B |
-| MCP tool schema, **21 tools** (`client.listTools()`, sum of each tool's own `JSON.stringify`) | **23,380 B** (+3,077 B) |
+| MCP tool schema, **21 tools** (`client.listTools()`, sum of each tool's own `JSON.stringify`; the current count and bytes are in section 3) | **23,380 B** (+3,077 B) |
 | CLI `sync-issues --dry-run` against freshpickedjobs (64/0/0) | 323 B |
 
 `sync_issues` is over the terse 700 B lease/cost budget on purpose: it is a card-creating tool

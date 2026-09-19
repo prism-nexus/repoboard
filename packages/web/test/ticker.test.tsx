@@ -65,6 +65,180 @@ describe('Ticker', () => {
   });
 });
 
+// ---- RCB-65: a verb per Event.type ------------------------------------------------------------
+describe('Ticker verbs (RCB-65)', () => {
+  function setup() {
+    const store = testStore();
+    store.setFun(false);
+    snapshot(store, [card('RCB-9', 'todo', { title: 'Fix the watcher' })]);
+    renderApp(store);
+    return store;
+  }
+
+  it('a create line reads "created <id> <title> in <to>"', () => {
+    const store = setup();
+    act(() =>
+      store.dispatch({
+        type: 'event',
+        event: moveEvent({ type: 'create', from: null, to: 'backlog' }),
+      }),
+    );
+    const ticker = document.querySelector('.ticker');
+    expect(ticker).toHaveTextContent('created RCB-9 Fix the watcher in backlog');
+  });
+
+  it('an update line reads "updated <id> <title>", no arrow (from === to)', () => {
+    const store = setup();
+    act(() =>
+      store.dispatch({
+        type: 'event',
+        event: moveEvent({ type: 'update', from: 'todo', to: 'todo' }),
+      }),
+    );
+    const ticker = document.querySelector('.ticker');
+    expect(ticker).toHaveTextContent('updated RCB-9 Fix the watcher');
+    expect(ticker).not.toHaveTextContent('→');
+  });
+
+  it('an ask line reads "asked on <id> <title>"', () => {
+    const store = setup();
+    act(() =>
+      store.dispatch({
+        type: 'event',
+        event: moveEvent({ type: 'ask', from: 'todo', to: 'todo' }),
+      }),
+    );
+    const ticker = document.querySelector('.ticker');
+    expect(ticker).toHaveTextContent('asked on RCB-9 Fix the watcher');
+    expect(ticker).not.toHaveTextContent('→');
+  });
+
+  it('a decide line without a letter reads "decided <id> <title>", no arrow', () => {
+    const store = setup();
+    act(() =>
+      store.dispatch({
+        type: 'event',
+        event: moveEvent({ type: 'decide', from: 'todo', to: 'todo' }),
+      }),
+    );
+    const ticker = document.querySelector('.ticker');
+    expect(ticker).toHaveTextContent('decided RCB-9 Fix the watcher');
+    expect(ticker).not.toHaveTextContent('→');
+  });
+
+  it('a decide line with a letter reads "decided <id> <title> → <letter>"', () => {
+    const store = setup();
+    act(() =>
+      store.dispatch({
+        type: 'event',
+        event: moveEvent({ type: 'decide', from: 'todo', to: 'todo', letter: 'A' }),
+      }),
+    );
+    const ticker = document.querySelector('.ticker');
+    expect(ticker).toHaveTextContent('decided RCB-9 Fix the watcher → A');
+  });
+
+  it('an archive line reads "archived <id> <title>"; the literal `to` ("archive") is not printed', () => {
+    const store = setup();
+    act(() =>
+      store.dispatch({
+        type: 'event',
+        event: moveEvent({ type: 'archive', from: 'todo', to: 'archive' }),
+      }),
+    );
+    const ticker = document.querySelector('.ticker');
+    expect(ticker).toHaveTextContent('archived RCB-9 Fix the watcher');
+  });
+
+  it('a lease line for a new holder reads "took <resource>"; no card title', () => {
+    const store = setup();
+    act(() =>
+      store.dispatch({
+        type: 'event',
+        event: moveEvent({
+          type: 'lease',
+          cardId: null,
+          resource: 'vitest-lock',
+          from: null,
+          to: 'claude/builder',
+        }),
+      }),
+    );
+    const ticker = document.querySelector('.ticker');
+    expect(ticker).toHaveTextContent('took vitest-lock');
+    expect(ticker?.querySelector('.ticker__title')).toBeNull();
+  });
+
+  it('a lease line for `to: "released"` reads "released <resource>"; no card title', () => {
+    const store = setup();
+    act(() =>
+      store.dispatch({
+        type: 'event',
+        event: moveEvent({
+          type: 'lease',
+          cardId: null,
+          resource: 'vitest-lock',
+          from: 'claude/builder',
+          to: 'released',
+        }),
+      }),
+    );
+    const ticker = document.querySelector('.ticker');
+    expect(ticker).toHaveTextContent('released vitest-lock');
+    expect(ticker?.querySelector('.ticker__title')).toBeNull();
+  });
+
+  it('a window line reads "added window <to> on <resource>"; no card title', () => {
+    const store = setup();
+    act(() =>
+      store.dispatch({
+        type: 'event',
+        event: moveEvent({
+          type: 'window',
+          cardId: null,
+          resource: 'vitest-lock',
+          from: null,
+          to: 'cold4 gate',
+        }),
+      }),
+    );
+    const ticker = document.querySelector('.ticker');
+    expect(ticker).toHaveTextContent('added window cold4 gate on vitest-lock');
+    expect(ticker?.querySelector('.ticker__title')).toBeNull();
+  });
+
+  it('a columns line reads "set columns → <to>" (comma-joined ids); no card title', () => {
+    const store = setup();
+    act(() =>
+      store.dispatch({
+        type: 'event',
+        event: moveEvent({
+          type: 'columns',
+          cardId: null,
+          from: 'backlog,decide,todo,doing,done',
+          to: 'backlog,decide,todo,doing,done,archive',
+        }),
+      }),
+    );
+    const ticker = document.querySelector('.ticker');
+    expect(ticker).toHaveTextContent('set columns → backlog,decide,todo,doing,done,archive');
+    expect(ticker?.querySelector('.ticker__title')).toBeNull();
+  });
+
+  it('a lease event with no `resource` renders empty, never the literal "undefined"', () => {
+    const store = setup();
+    act(() =>
+      store.dispatch({
+        type: 'event',
+        event: moveEvent({ type: 'lease', cardId: null, from: null, to: 'claude/builder' }),
+      }),
+    );
+    const ticker = document.querySelector('.ticker');
+    expect(ticker).toHaveTextContent('took');
+    expect(ticker).not.toHaveTextContent('undefined');
+  });
+});
+
 describe('shortTitle', () => {
   it('leaves a 48-char title untouched', () => {
     const title = 'x'.repeat(48);

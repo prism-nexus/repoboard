@@ -3,7 +3,8 @@
  * temp `.repoboard/`. The repo's own board is never touched.
  */
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
@@ -97,6 +98,29 @@ describe('repoboard mcp: handshake and tool list', () => {
     }
     const list = tools.find((t) => t.name === 'list_cards');
     expect(list?.description).toMatch(/backlog, decide, todo, doing, done/);
+  });
+
+  /**
+   * RCB-65 pin: docs/AGENTS.md §3's "Tools: …" sentence must name exactly the tools
+   * `MCP_TOOL_NAMES` carries, so a future tool (or a dropped one) fails this test instead of
+   * going stale silently.
+   */
+  it('docs/AGENTS.md §3 tool list matches MCP_TOOL_NAMES exactly (pin)', async () => {
+    const here = dirname(fileURLToPath(import.meta.url));
+    const agentsPath = join(here, '..', '..', '..', 'docs', 'AGENTS.md');
+    const agents = await readFile(agentsPath, 'utf8');
+    expect(agents).toContain('## 3. MCP');
+    const sectionStart = agents.indexOf('## 3. MCP');
+    const toolsMarker = 'Tools: ';
+    const toolsIndex = agents.indexOf(toolsMarker, sectionStart);
+    expect(toolsIndex).toBeGreaterThanOrEqual(0);
+    const afterTools = agents.slice(toolsIndex + toolsMarker.length);
+    const endMarker = 'Call `list_cards`';
+    const endIndex = afterTools.indexOf(endMarker);
+    expect(endIndex).toBeGreaterThanOrEqual(0);
+    const listText = afterTools.slice(0, endIndex);
+    const names = [...listText.matchAll(/`([a-z_]+)`/g)].map((m) => m[1]);
+    expect(names.sort()).toEqual([...MCP_TOOL_NAMES].sort());
   });
 
   it('P8.2: the five lease/window tool descriptions are terse (<=700 B each) and byte-report cleanly', async () => {

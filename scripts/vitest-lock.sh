@@ -7,24 +7,33 @@
 # directory; its presence IS the lock. Protocol is documented in prose in .repoboard/local/RIG.md
 # §"vitest lock" — this script IS the protocol; a brief points there and does not restate it.
 #
-# Lock dir:   ${VITEST_LOCK_DIR:-/tmp/fpj-vitest.lock}
+# Lock dir:   ${VITEST_LOCK_DIR:-${TMPDIR:-/tmp}/repoboard-vitest.lock}
 # Owner file: <lock dir>/owner, ONE line: "<pid> <cwd> <ISO time> <session>"
 #   <session> is $REPOBOARD_SESSION if set, else "-".
 #   <pid> is ${VITEST_LOCK_PID:-$PPID} — the CALLER's shell pid. A script's own $$ dies when the
 #   script exits, so a later `release` invocation (a separate process) could never match it
 #   against a `take` done by the same $$. The parent shell's pid is what persists across the
 #   take and the release, as long as both run from the same shell session.
-# Lane windows: ${FPJ_LANE_WINDOWS:-/tmp/fpj-lane-windows}, suite lead ${REPOBOARD_SUITE_MINUTES:-5} min.
+# Lane windows: ${FPJ_LANE_WINDOWS:-}, unset means no lane-file check. Suite lead
+#   ${REPOBOARD_SUITE_MINUTES:-5} min. This script ships with neutral defaults; a rig that needs
+#   fpj's paths sets them in .repoboard/local/env (sourced below, gitignored, per-machine).
 set -eu
 
-LOCK="${VITEST_LOCK_DIR:-/tmp/fpj-vitest.lock}"
+SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+REPO_ROOT=$(CDPATH= cd -- "$SCRIPT_DIR/.." && pwd)
+
+# Optional rig env file (gitignored, per-machine, RCB-83/RCB-86). Plain `sh`; each line MUST use
+# `export X="${X:-value}"` so an explicit environment (tests, a caller) still wins over the file.
+RIG_ENV="$REPO_ROOT/.repoboard/local/env"
+if [ -f "$RIG_ENV" ]; then . "$RIG_ENV"; fi
+
+# Trailing slash in $TMPDIR is not stripped — "/tmp//x" is a fine path, no need to normalize it.
+LOCK="${VITEST_LOCK_DIR:-${TMPDIR:-/tmp}/repoboard-vitest.lock}"
 OWNER_FILE="$LOCK/owner"
 SELF_PID="${VITEST_LOCK_PID:-$PPID}"
 SESSION="${REPOBOARD_SESSION:--}"
 MIN="${REPOBOARD_SUITE_MINUTES:-5}"  # suite lead in minutes: ours runs ≈1 min; fpj's shim uses 20.
 
-SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
-REPO_ROOT=$(CDPATH= cd -- "$SCRIPT_DIR/.." && pwd)
 CLI="$REPO_ROOT/packages/server/dist/cli.js"
 
 now_iso() {
@@ -63,8 +72,9 @@ cmd_take() {
     exit 3
   fi
 
-  FPJ_ROOT="${FPJ_ROOT:-$HOME/Projects/Repos/freshpickedjobs}"
-  if [ -d "$FPJ_ROOT/.repoboard" ]; then
+  # FPJ_ROOT: a second board root whose windows also gate this lock (this rig: fpj). No default —
+  # unset (or a root with no .repoboard/) means this check is skipped entirely.
+  if [ -n "${FPJ_ROOT:-}" ] && [ -d "$FPJ_ROOT/.repoboard" ]; then
     if ! _fpj_check_out=$(cd "$FPJ_ROOT" && node "$CLI" window check vitest-lock 2>&1); then
       echo "$FPJ_ROOT: $_fpj_check_out"
       exit 3
@@ -77,8 +87,9 @@ cmd_take() {
   # `lane_window_check`) iff a suite started now would still be running $REPOBOARD_SUITE_MINUTES
   # from now AND the window hasn't ended yet — START matters, not just END. A line whose START is
   # unparseable, or whose END is unparseable, is skipped, never a refusal.
-  _lane_file="${FPJ_LANE_WINDOWS:-/tmp/fpj-lane-windows}"
-  if [ -f "$_lane_file" ]; then
+  # No default: unset FPJ_LANE_WINDOWS (or a path that doesn't exist) means this check is skipped.
+  _lane_file="${FPJ_LANE_WINDOWS:-}"
+  if [ -n "$_lane_file" ] && [ -f "$_lane_file" ]; then
     _now=$(date -u +%s)
     _soon=$((_now + MIN * 60))
     while IFS=' ' read -r _lw_start _lw_end _lw_name || [ -n "$_lw_start" ]; do

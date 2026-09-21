@@ -13,7 +13,7 @@
  * check below is the only thing under test.
  */
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -111,5 +111,92 @@ describe('vitest-lock.sh take — lane window START, not just END (RCB-81)', () 
     expect(status).toBe(3);
     expect(stdout).toContain('lane window live:');
     expect(existsSync(lockDir)).toBe(false);
+  });
+});
+
+/**
+ * RCB-86 — the script itself ships neutral defaults; THIS rig's fpj-specific paths
+ * (`/tmp/fpj-vitest.lock`, `$HOME/Projects/Repos/freshpickedjobs`, `/tmp/fpj-lane-windows`) live
+ * only in the gitignored `.repoboard/local/env`, sourced by the script if present, with the
+ * environment always winning over the file's `${X:-value}` defaults.
+ *
+ * Cases (a) and (b) below run against the REAL `REPO_ROOT` (the script always resolves
+ * `.repoboard/local/env` from its own location, not from spawn `cwd`), so on THIS rig — which has
+ * that file, by design (RCB-83) — FPJ_ROOT and FPJ_LANE_WINDOWS fall back to the rig's own values
+ * whenever the test omits them, exactly as a real caller would see. That is intentional: the point
+ * of (a) is that a lane file nothing points to is never consulted, not that no fpj interaction
+ * happens at all. At the time this suite was written, this rig's own `/tmp/fpj-lane-windows`
+ * window (13:30–13:50Z) and `leases.yml` (`windows: []`, both repos) were not live, so the
+ * rig-default fallback does not itself refuse; if that ever changes, (a) would need a live rig,
+ * not the script, to fail — see the note on case (c).
+ */
+describe('vitest-lock.sh — neutral defaults (RCB-86)', () => {
+  /** `process.env` minus FPJ_ROOT/FPJ_LANE_WINDOWS: simulates a caller that never set them, so
+   * either the script's own (now neutral) fallback or the rig's `.repoboard/local/env` decides. */
+  function envWithoutFpjKeys(overrides: Record<string, string>): NodeJS.ProcessEnv {
+    const base: NodeJS.ProcessEnv = { ...process.env };
+    delete base.FPJ_ROOT;
+    delete base.FPJ_LANE_WINDOWS;
+    return { ...base, ...overrides };
+  }
+
+  function run(args: string[], env: NodeJS.ProcessEnv): TakeResult {
+    const res = spawnSync('sh', [SCRIPT, ...args], { cwd: REPO_ROOT, encoding: 'utf8', env });
+    return { status: res.status, stdout: res.stdout };
+  }
+
+  it.skipIf(!hasCli)(
+    '(a) FPJ_ROOT/FPJ_LANE_WINDOWS absent from env: take succeeds, then release succeeds',
+    async () => {
+      const root = await makeTempDir('rcb-86-');
+      cleanups.push(() => rmSync(root, { recursive: true, force: true }));
+      const lockDir = join(root, 'lock');
+      // Would refuse if read (start=now, end=+10m) — but nothing points FPJ_LANE_WINDOWS at it.
+      const laneFile = join(root, 'lane-nobody-points-to');
+      writeLane(laneFile, 0, 10 * MIN);
+
+      const env = envWithoutFpjKeys({
+        VITEST_LOCK_DIR: lockDir,
+        VITEST_LOCK_PID: String(process.pid),
+      });
+
+      const took = run(['take'], env);
+      expect(took.status).toBe(0);
+      expect(took.stdout).toContain('took vitest-lock');
+      expect(existsSync(join(lockDir, 'owner'))).toBe(true);
+
+      const released = run(['release'], env);
+      expect(released.status).toBe(0);
+    },
+  );
+
+  it.skipIf(!hasCli)(
+    '(b) same env but FPJ_LANE_WINDOWS points at that scratch lane file: take refused',
+    async () => {
+      const root = await makeTempDir('rcb-86-');
+      cleanups.push(() => rmSync(root, { recursive: true, force: true }));
+      const lockDir = join(root, 'lock');
+      const laneFile = join(root, 'lane-live');
+      writeLane(laneFile, 0, 10 * MIN);
+
+      const env = envWithoutFpjKeys({
+        VITEST_LOCK_DIR: lockDir,
+        VITEST_LOCK_PID: String(process.pid),
+        FPJ_LANE_WINDOWS: laneFile,
+      });
+
+      const { status, stdout } = run(['take'], env);
+      expect(status).toBe(3);
+      expect(stdout).toContain('lane window live:');
+      expect(existsSync(lockDir)).toBe(false);
+    },
+  );
+
+  it('(c) the script text carries no fpj-specific path — those live only in the rig env file', () => {
+    // Deliberately NOT asserting on an env-file case here: the real `.repoboard/local/env` exists
+    // on this rig and would be sourced by the script — that is by design (RCB-83/RCB-86). This
+    // case checks only the script's own text, independent of what any env file sets.
+    const text = readFileSync(SCRIPT, 'utf8');
+    expect(text).not.toMatch(/fpj-vitest|fpj-lane-windows|Repos\/freshpickedjobs/);
   });
 });

@@ -1,0 +1,271 @@
+/**
+ * RCB-83 step 1: `.repoboard/local/` — a second, local-only git repo nested inside the (public)
+ * one, gitignored by the tool itself. It holds machine facts (`RIG.md`: build, ports, locks, seat
+ * names, other repos on this machine) that must never ship in the public tree, and is where an
+ * owner can `git mv` the running record (`STATE.md`, `log/`) once they want it local too (never
+ * done automatically — `localInit` only prints a notice).
+ *
+ * All git calls run via `spawn('git', …)` with `cwd` = the local dir itself, so once `git init`
+ * has run there every command is scoped to THAT nested repo (git resolves `.git` from `cwd`
+ * upward, and the nested `.git` shadows the parent's) — never the parent repo this tool also
+ * manages. Nothing here ever runs `git` with `cwd` = the parent root.
+ */
+import { spawn } from 'node:child_process';
+import { mkdir, readFile, rename, stat, writeFile } from 'node:fs/promises';
+import { dirname, join } from 'node:path';
+
+/** The minimal shape `scaffoldIfAbsent` needs — structurally satisfied by `CliIO`. */
+export interface LocalIO {
+  stdout: { write(chunk: string): unknown };
+}
+
+/** `created <path>` / `kept <path>` — never overwrites an existing file (locked decision 3). */
+export async function scaffoldIfAbsent(
+  path: string,
+  content: string,
+  io: LocalIO,
+  label: string,
+): Promise<void> {
+  const present = await stat(path).then(
+    () => true,
+    () => false,
+  );
+  if (present) {
+    io.stdout.write(`kept ${label}\n`);
+    return;
+  }
+  await mkdir(dirname(path), { recursive: true });
+  await writeFile(path, content, 'utf8');
+  io.stdout.write(`created ${label}\n`);
+}
+
+export function localDir(root: string): string {
+  return join(root, '.repoboard', 'local');
+}
+
+async function isDirectory(path: string): Promise<boolean> {
+  try {
+    return (await stat(path)).isDirectory();
+  } catch {
+    return false;
+  }
+}
+
+/** Is there a `.repoboard/local/` directory at all — not necessarily a git repo yet. */
+export function hasLocal(root: string): Promise<boolean> {
+  return isDirectory(localDir(root));
+}
+
+interface GitResult {
+  code: number;
+  stdout: string;
+  stderr: string;
+}
+
+/** One `git` invocation, cwd = `dir`. Never throws — a non-zero exit is data, not an exception. */
+function runGit(dir: string, args: string[]): Promise<GitResult> {
+  return new Promise((resolve) => {
+    const child = spawn('git', args, { cwd: dir });
+    let stdout = '';
+    let stderr = '';
+    child.stdout?.on('data', (chunk: Buffer) => {
+      stdout += chunk.toString('utf8');
+    });
+    child.stderr?.on('data', (chunk: Buffer) => {
+      stderr += chunk.toString('utf8');
+    });
+    child.on('error', (e) => {
+      resolve({ code: 1, stdout, stderr: String(e) });
+    });
+    child.on('close', (code) => {
+      resolve({ code: code ?? 1, stdout, stderr });
+    });
+  });
+}
+
+function rigTemplate(): string {
+  return [
+    '# RIG — <this machine>',
+    '',
+    '## Build',
+    '<how to build, typecheck and test on this machine>',
+    '',
+    '## Ports',
+    '<ports this rig binds, and what serves each one>',
+    '',
+    '## Locks',
+    '<lock files / lease resource names this rig uses>',
+    '',
+    '## Seat names',
+    '<the seat names in use on this rig, one per terminal>',
+    '',
+    '## Other repos on this machine',
+    '<other repos this rig touches — read-only unless said otherwise>',
+    '',
+  ].join('\n');
+}
+
+const GITIGNORE_LINE = '.repoboard/local/';
+
+async function ensureGitignored(root: string, io: LocalIO): Promise<void> {
+  const path = join(root, '.gitignore');
+  let text = '';
+  try {
+    text = await readFile(path, 'utf8');
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code !== 'ENOENT') throw e;
+  }
+  const already = text.split('\n').some((line) => line.trim() === GITIGNORE_LINE);
+  if (already) {
+    io.stdout.write('kept .gitignore\n');
+    return;
+  }
+  const sep = text.length > 0 && !text.endsWith('\n') ? '\n' : '';
+  await writeFile(path, `${text}${sep}${GITIGNORE_LINE}\n`, 'utf8');
+  io.stdout.write(`ignored ${GITIGNORE_LINE} in .gitignore\n`);
+}
+
+export interface LocalInitOptions {
+  remote?: string;
+  io: LocalIO;
+  now?: () => Date;
+}
+
+/**
+ * `repoboard local init [--remote <url>]`. Idempotent: mkdir + scaffold RIG.md (never overwrites),
+ * ensure the root `.gitignore` carries the exact `.repoboard/local/` line, `git init -q` only when
+ * `local/.git` is absent, set a REPO-LOCAL `user.name`/`user.email` only when `git config
+ * user.email` is empty inside that repo (never touches global config), point `origin` at
+ * `--remote` when given, then `localSync`. Never pushes beyond what `localSync` itself does.
+ */
+export async function localInit(root: string, opts: LocalInitOptions): Promise<void> {
+  const dir = localDir(root);
+  await mkdir(dir, { recursive: true });
+  await scaffoldIfAbsent(join(dir, 'RIG.md'), rigTemplate(), opts.io, '.repoboard/local/RIG.md');
+  await ensureGitignored(root, opts.io);
+
+  const gitDirPresent = await isDirectory(join(dir, '.git'));
+  if (!gitDirPresent) {
+    await runGit(dir, ['init', '-q']);
+  }
+
+  const email = await runGit(dir, ['config', 'user.email']);
+  if (email.stdout.trim().length === 0) {
+    await runGit(dir, ['config', 'user.name', 'repoboard']);
+    await runGit(dir, ['config', 'user.email', 'repoboard@localhost']);
+  }
+
+  if (opts.remote) {
+    const existing = await runGit(dir, ['remote', 'get-url', 'origin']);
+    if (existing.code === 0) {
+      await runGit(dir, ['remote', 'set-url', 'origin', opts.remote]);
+    } else {
+      await runGit(dir, ['remote', 'add', 'origin', opts.remote]);
+    }
+  }
+
+  // The running record follows the layer: once `.repoboard/local/` exists the store reads and
+  // writes `local/STATE.md` and writes `local/log/`, so a top-level STATE.md/log/ left behind
+  // would silently stop being read. Move them in (a rename, never a rewrite) so the seat's next
+  // read sees the same record; in the parent repo they then show as deletions to commit.
+  await moveIntoLocal(root, 'STATE.md', opts.io);
+  await moveIntoLocal(root, 'log', opts.io);
+
+  const sync = await localSync(root, 'repoboard local: init');
+  // A remote given to a repo that already has its commits: `localSync` found nothing to commit,
+  // so it pushed nothing — push the existing history now, or the backup silently stays empty.
+  if (opts.remote && sync.status === 'clean') {
+    const push = await runGit(dir, ['push', '-q', '-u', 'origin', 'HEAD']);
+    if (push.code !== 0) {
+      opts.io.stdout.write(`warning: local: push failed: ${push.stderr.trim() || 'push failed'}\n`);
+    } else {
+      opts.io.stdout.write('pushed .repoboard/local/ to origin\n');
+    }
+  }
+}
+
+/** Rename `.repoboard/<name>` to `.repoboard/local/<name>` when the former exists and the latter
+ * does not. Prints `moved …`; silent when there is nothing to move. Never merges or overwrites. */
+async function moveIntoLocal(root: string, name: string, io: LocalIO): Promise<void> {
+  const from = join(root, '.repoboard', name);
+  const to = join(localDir(root), name);
+  const fromPresent = await stat(from).then(
+    () => true,
+    () => false,
+  );
+  const toPresent = await stat(to).then(
+    () => true,
+    () => false,
+  );
+  if (!fromPresent || toPresent) return;
+  await rename(from, to);
+  io.stdout.write(`moved .repoboard/${name} → .repoboard/local/${name}\n`);
+}
+
+export interface LocalSyncResult {
+  status: 'no-local' | 'clean' | 'committed';
+  pushed: boolean | null;
+  error?: string;
+}
+
+/**
+ * Stage everything, commit if there is anything staged, push only when `origin` exists.
+ * `pushed: null` means there was nothing to push to (no remote) or nothing to push (clean/no
+ * commit needed); a push failure is returned as data, never thrown, so a caller can warn and
+ * carry on rather than fail the write that triggered the sync.
+ */
+export async function localSync(root: string, message: string): Promise<LocalSyncResult> {
+  if (!(await hasLocal(root))) return { status: 'no-local', pushed: null };
+  const dir = localDir(root);
+
+  await runGit(dir, ['add', '-A']);
+  const diff = await runGit(dir, ['diff', '--cached', '--quiet']);
+  if (diff.code === 0) return { status: 'clean', pushed: null };
+
+  const commit = await runGit(dir, ['commit', '-q', '-m', message]);
+  if (commit.code !== 0) {
+    // Unexpected (there WAS something staged) — surfaced as an error, never thrown.
+    return {
+      status: 'committed',
+      pushed: null,
+      error: commit.stderr.trim() || 'commit failed',
+    };
+  }
+
+  const remote = await runGit(dir, ['remote', 'get-url', 'origin']);
+  if (remote.code !== 0) return { status: 'committed', pushed: null };
+
+  const push = await runGit(dir, ['push', '-q', '-u', 'origin', 'HEAD']);
+  if (push.code !== 0) {
+    return { status: 'committed', pushed: false, error: push.stderr.trim() || 'push failed' };
+  }
+  return { status: 'committed', pushed: true };
+}
+
+export interface LocalStatus {
+  isRepo: boolean;
+  hasRemote: boolean;
+  dirty: boolean;
+  ahead: number | null;
+}
+
+/** `null` when there is no `.repoboard/local/` directory at all. */
+export async function localStatus(root: string): Promise<LocalStatus | null> {
+  if (!(await hasLocal(root))) return null;
+  const dir = localDir(root);
+
+  const isRepo = await isDirectory(join(dir, '.git'));
+  if (!isRepo) return { isRepo: false, hasRemote: false, dirty: false, ahead: null };
+
+  const status = await runGit(dir, ['status', '--porcelain']);
+  const dirty = status.stdout.trim().length > 0;
+
+  const remote = await runGit(dir, ['remote', 'get-url', 'origin']);
+  const hasRemote = remote.code === 0;
+
+  const count = await runGit(dir, ['rev-list', '--count', '@{u}..HEAD']);
+  const parsed = count.code === 0 ? Number.parseInt(count.stdout.trim(), 10) : Number.NaN;
+  const ahead = Number.isNaN(parsed) ? null : parsed;
+
+  return { isRepo, hasRemote, dirty, ahead };
+}

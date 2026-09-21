@@ -1,0 +1,50 @@
+{
+  "name": "repoboard",
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Local-first repo dashboard and agent-driven Kanban board. Cards are markdown files in .repoboard/, git is the history; one bin serves the CLI, the HTTP/WebSocket dashboard, and an MCP server.",
+  "license": "MIT",
+  "keywords": [
+    "kanban",
+    "board",
+    "dashboard",
+    "agents",
+    "mcp",
+    "cli",
+    "git",
+    "markdown",
+    "local-first",
+    "claude-code"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "bin": {
+    "repoboard": "./dist/cli.js"
+  },
+  "main": "./dist/index.js",
+  "exports": {
+    ".": "./dist/index.js"
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "build": "tsup",
+    "dev": "tsup && node dist/cli.js serve"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.30.0",
+    "chokidar": "^5.0.0",
+    "ws": "^8.21.3",
+    "yaml": "^2.9.0",
+    "zod": "^4.5.4"
+  },
+  "devDependencies": {
+    "@repoboard/core": "workspace:*",
+    "@types/node": "^26.4.1",
+    "@types/ws": "^8.18.1",
+    "tsup": "^8.5.1"
+  }
+}

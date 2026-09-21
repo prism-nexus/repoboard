@@ -1,0 +1,47 @@
+---
+id: RCB-83
+title: "Separate 'how to run repoboard' from 'this rig' — the repo goes public and ships only what runs repoboard (owner 2026-09-21). Measured 2026-09-21 on 4d5c6a6: rig-only tracked files = docs/RIG.md (4,528 B: fpj checkout path, :4242 two-root line, /tmp lock, seat names), scripts/vitest-lock.sh (hardcodes /tmp/fpj-vitest.lock + $HOME/Projects/Repos/freshpickedjobs; CI does not use it), docs/briefs/ (39 files, 26 mention fpj), docs/HANDOFF.md (23,540 B frozen history), docs/COLD-START-CLEANUP-PROPOSAL.md, NEXT-AGENT-PROMPT.md, and .repoboard/log + STATE.md (5 logs; two files carry ~ paths: cards/RCB-78.md, log/2026-09-18.md; four mention the owner's Job Seeker repos). KEEP as repoboard: packages/ (fpj mentions there are provenance comments — measurements and root-cause ids, 20 lines), docs/BUILD-PLAN.md, REFERENCE.md, AGENTS.md, BRIEF-TEMPLATE.md, README, CHANGELOG, LICENSE, CONTRIBUTING, SECURITY, CODE_OF_CONDUCT, .github/. .repoboard/cards + board.yml + archive are the tool running on itself (a public demo) — keep, but scrub the two machine-path files. Secrets sweep of full history (197 commits): none found."
+status: doing
+priority: high
+labels:
+  - docs
+  - rig
+files:
+  - docs/RIG.md
+  - scripts/vitest-lock.sh
+  - docs/HANDOFF.md
+  - NEXT-AGENT-PROMPT.md
+  - .repoboard/STATE.md
+decision:
+  question: "Where does the rig material live once it leaves the tree? The working tree can be scrubbed either way, but git HISTORY cannot: all 197 commits (13 subjects name fpj; logs, briefs and STATE with fpj coordination and two ~ paths) become public the moment this repo does. No secrets found in that history."
+  options:
+    - letter: A
+      text: this repo stays the private rig; a NEW public repo (prism-nexus/repoboard) receives a clean first commit of only the KEEP set, and this checkout pushes releases to it from a filtered subtree (history stays private, rig docs stay where they are, least churn) (recommended)
+    - letter: B
+      text: "this repo goes public as-is: move rig-only files to a gitignored rig/ dir (RIG.md, vitest-lock.sh, HANDOFF, briefs, NEXT-AGENT-PROMPT, logs, STATE), scrub the two machine-path files, accept that the old history stays visible"
+    - letter: C
+      text: B plus a history rewrite (filter-repo) to drop the rig files from every past commit — force-push, every clone re-cloned, the fpj checkout's references to old shas break
+  askedBy: builder
+  askedAt: 2026-09-21T17:54:55Z
+  returnTo: todo
+  chosen: A
+  words: null
+  decidedBy: web
+  decidedAt: 2026-09-21T17:57:47Z
+created: 2026-09-21T17:54:46Z
+updated: 2026-09-21T19:24:29Z
+---
+## Notes
+- 2026-09-21T17:55:16Z builder — Owner 2026-09-21 10:5x Pacific, mid-turn: 'this should be a part of any users setup and how to add additional details that should be tracked via the repoboard for their local setup.' So the deliverable is a repoboard FEATURE, not a one-off scrub: (1) a LOCAL layer every user gets — proposed .repoboard/local/ (gitignored by `init`, never by hand), holding RIG.md (their machine: ports, other repos, locks, seat names) and anything else machine-specific; (2) `seat <name>` and `check` read it and print the rig facts a cold seat needs, so the shared tree carries none of them; (3) docs: a 'Your local setup' section in README/AGENTS that says what belongs there and how to add a tracked detail (a heading in local/RIG.md + an optional local/board.local.yml override for logDir/ports); (4) this repo eats its own cooking: docs/RIG.md, vitest-lock.sh's paths, NEXT-AGENT-PROMPT's rig lines move into .repoboard/local/ here, the tracked copies go, and `init --practices` scaffolds the template. The A/B/C decision above is only about this repo's git history; the feature is the same under all three.
+- 2026-09-21T17:56:45Z builder — Builder 2026-09-21 18:0xZ, read from STATE.md line 10: the remote is ALREADY PUBLIC at https://github.com/prism-nexus/repoboard since 2026-09-18 (tag v0.1.0). So the history question in the open decision is not 'what becomes visible' but 'what has been visible for three days'. Option A (a separate clean public repo) would mean this one goes private again; B leaves history as it is; C rewrites it after the fact. No secrets in that history (sweep 2026-09-21); the exposure is rig paths and fpj coordination detail.
+- 2026-09-21T17:58:57Z builder — Owner 2026-09-21 11:0x Pacific: 'for git tracking sounds like I need a private repoboard instance as well to make sure I have a cloud backup of what is going on and changing for my local rig.' Shape this implies: the local layer (.repoboard/local/) is ITS OWN git repo with a private remote — nested inside the public checkout, ignored by the public repo's .gitignore, with its own history. repoboard owns the mechanics: `repoboard local init [--remote <url>]` creates .repoboard/local/ as a git repo (and adds the ignore line), `seat --up/--down` and `log` commit-and-push the local repo after each write (the rig's running record gets its cloud backup with no extra step), `check` reports when local is ahead of its remote or has no remote. Public repo carries the feature + docs; the private repo carries this rig's RIG.md, logs, STATE, briefs. Not a submodule (a public clone must not need private access) and not a second checkout to keep in sync by hand.
+- 2026-09-21T18:05:24Z builder — Owner 2026-09-21 11:2x Pacific, in chat after choosing A on the web at 17:57Z: 'clear the already public history or we should have removed for the new public view.' Read together with A: the private rig repo keeps the full history (that IS the cloud backup); the public repoboard starts from a clean first commit with only the KEEP set; and the currently public history at prism-nexus/repoboard does not stay visible — either that repo is made private and becomes the rig repo, with a fresh public repo taking the name's role, or its default branch is replaced by the clean history (force-push) after the private clone exists. Both are outward-facing, irreversible steps: the builder does them only on an explicit go, after the local layer is built and the private clone is verified by content.
+- 2026-09-21T18:59:25Z repoboard builder — Builder 2026-09-21 19:0xZ — step 1 LANDED d528000 (local.ts: local init|sync|status; STATE/log follow .repoboard/local/; seat prints RIG.md; check: local-unsynced/local-no-remote; 21+11 tests; gate 1003|2 ×2, typecheck/lint/build 0). Step 1b part 1 LANDED 7a6d5b6: local init run HERE — STATE.md + 5 logs moved into .repoboard/local/ (own git repo, commit 5cd188b, 7 files, NO remote yet), .gitignore carries .repoboard/local/, both boards on :4242 pid 14320 read STATE from the new place. BLOCKED on the owner's go (the auto-mode classifier refused it twice as 'modify shared resources', rightly a human's call): moving docs/RIG.md → .repoboard/local/RIG.md (overwriting the template), docs/briefs/ (43 files) → local/briefs/, docs/HANDOFF.md + docs/COLD-START-CLEANUP-PROPOSAL.md → local/docs/, then repointing CLAUDE.md (3 lines), BRIEF-TEMPLATE, README:183, REFERENCE:258, BUILD-PLAN (6 brief links), 6 source comments (cost/refs/repolog/http/repo-context/dist-stale), vitest-lock.sh:7, and scrubbing ~ for ~ in cards RCB-78/RCB-83 — the exact sed list is in the seat's 19:0xZ log block. Decided to KEEP scripts/vitest-lock.sh in the public tree for now: its defaults are this rig's shared lock path with fpj's shim; making them neutral needs a local wrapper + fpj coordination — file as its own card. NEXT-AGENT-PROMPT.md stays: RCB-75 made it generic. Step 2 still needs the private repo URL (then: repoboard local init --remote <url>); steps 3–4 the explicit go.
+- 2026-09-21T19:24:29Z repoboard builder — Builder 2026-09-21 19:2xZ — step 1b part 2 LANDED 96efdc7 on the owner's go (RIG.md/briefs/HANDOFF/proposal → .repoboard/local/, pointers repointed, home paths 0). STEP 2 DONE: owner gave https://github.com/prism-nexus/repoboard-local (anonymous GET 404 = private); local origin set to the SSH form (this rig's outer remote is SSH; https had no credential in a non-interactive shell) and pushed — remote HEAD = local HEAD 053d653 at the time; 'local status' 0 ahead, clean, remote; check clean. Tool gap found and fixed (d335323): init --remote on a clean repo now pushes. Remaining: step 3 (public repo private + fresh public from a clean first commit) and step 4 (re-point seats, tell the coordinator, re-cut v0.1.0) on the owner's explicit go; STATE LIVE still names docs/RIG.md; vitest-lock.sh neutral defaults = own card.
+
+## Log
+- 2026-09-21T17:54:55Z builder — moved todo → decide
+- 2026-09-21T17:54:55Z builder — asked: Where does the rig material live once it leaves the tree? The working tree can be scrubbed either way, but git HISTORY cannot: all 197 commits (13 subjects name fpj; logs, briefs and STATE with fpj coordination and two ~ paths) become public the moment this repo does. No secrets found in that history. [A|B|C]
+- 2026-09-21T17:57:47Z web — decided A
+- 2026-09-21T17:57:47Z web — moved decide → todo
+- 2026-09-21T18:29:23Z repoboard builder — moved todo → doing

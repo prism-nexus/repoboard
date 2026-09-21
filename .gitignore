@@ -1,0 +1,22 @@
+node_modules/
+dist/
+coverage/
+*.tsbuildinfo
+
+.env
+.env.*
+!.env.example
+
+.claude/settings.local.json
+.claude/settings.json
+.claude/worktrees/
+.claude/scheduled_tasks.lock
+
+.DS_Store
+
+# build / tool output
+.vitest/
+
+# repoboard runtime event log (ephemeral, see plan §2)
+.repoboard/events.jsonl
+.repoboard/local/

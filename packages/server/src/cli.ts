@@ -239,6 +239,7 @@ Usage:
   repoboard --help | --version
 
 Actor for --as defaults to $REPOBOARD_ACTOR, then $USER, then "cli"; for mcp: $REPOBOARD_ACTOR, then "mcp".
+Exception: log takes no $USER/"cli" fallback — it needs --as or $REPOBOARD_ACTOR (RCB-71).
 `;
 
 const PRIORITIES: ReadonlySet<string> = new Set(['high', 'medium', 'low']);
@@ -1103,9 +1104,16 @@ async function cmdLogAppend(args: string[], io: CliIO): Promise<number> {
     if (!text)
       throw new UserError('usage: repoboard log --as <seat> [--title "…"] (<text> | --stdin)');
   }
+  // RCB-71: a log block is found by its seat name, so an unset --as must be refused, not
+  // defaulted to $USER/'cli' the way actorFrom does for every other command.
+  const env = io.env ?? process.env;
+  const seat = values.as || env.REPOBOARD_ACTOR;
+  if (!seat)
+    throw new UserError(
+      'repoboard log needs --as <seat> (or REPOBOARD_ACTOR); a log block is found by its seat name, so $USER is not a seat',
+    );
   const root = await requireRoot(io);
   const store = await openStore(root, { watch: false, now: io.now });
-  const seat = actorFrom(values.as, io);
   const res = await store.appendRepoLog(seat, text, values.title);
   if (!res.ok) throw new UserError(res.error);
   // RCB-83: same rule as `seat --up/--down` — sync .repoboard/local/ after the write, a no-op

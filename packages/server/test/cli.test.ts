@@ -1900,6 +1900,37 @@ describe('repoboard log', () => {
     expect(res.code).toBe(1);
   });
 
+  it('RCB-71: no --as and no REPOBOARD_ACTOR is refused before anything is written', async () => {
+    const root = await freshRepo({});
+    const stdout = new Sink();
+    const stderr = new Sink();
+    const code = await run(['log', 'entry with no seat'], {
+      cwd: root,
+      stdout,
+      stderr,
+      env: { USER: 'hometown' },
+      now: () => NOW,
+    });
+    expect(code).toBe(1);
+    expect(stderr.text).toMatch(/needs --as <seat>/);
+    expect(existsSync(join(root, '.repoboard', 'log', '2026-09-02.md'))).toBe(false);
+  });
+
+  it('RCB-71: no --as but REPOBOARD_ACTOR set resolves the seat from the env', async () => {
+    const root = await freshRepo({});
+    const stdout = new Sink();
+    const stderr = new Sink();
+    const code = await run(['log', 'entry via env actor'], {
+      cwd: root,
+      stdout,
+      stderr,
+      env: { USER: 'hometown', REPOBOARD_ACTOR: 'ops' },
+      now: () => NOW,
+    });
+    expect(code).toBe(0);
+    expect(stdout.text).toBe('logged 2026-09-02 ops\n');
+  });
+
   it('--last prints the SECOND builder block, not the first, and not an ops block after it', async () => {
     const root = await freshRepo({});
     await repoboard(root, 'log', '--as', 'builder', 'first builder entry');

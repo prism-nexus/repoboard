@@ -1,3 +1,4 @@
+import { existsSync } from 'node:fs';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { type Card, defaultBoardConfig, serializeBoard } from '@repoboard/core';
@@ -1352,7 +1353,9 @@ describe('state/log/check over HTTP (P8.3)', () => {
     cleanups.push(() => server.close());
     const url = server.url.replace(/\/$/, '');
 
-    await store.appendRepoLog('claude/p8-3', 'own entry', 'kickoff'); // own dir, same date (NOW)
+    // RCB-71 A (owner 2026-09-21): with `logDir` set the append WRITES there too, so both blocks
+    // sit in docs/log/2026-09-02.md in append order and `.repoboard/log/` is never created.
+    await store.appendRepoLog('claude/p8-3', 'own entry', 'kickoff'); // same date (NOW)
 
     const get = await fetch(`${url}/api/log?date=2026-09-02`);
     expect(get.status).toBe(200);
@@ -1361,9 +1364,10 @@ describe('state/log/check over HTTP (P8.3)', () => {
     expect(merged.blocks).toHaveLength(2);
     expect(merged.text).toContain('kickoff');
     expect(merged.text).toContain('hand-written by the sibling');
-    expect(merged.text.indexOf('kickoff')).toBeLessThan(
-      merged.text.indexOf('hand-written by the sibling'),
-    ); // own dir first
+    expect(merged.text.indexOf('hand-written by the sibling')).toBeLessThan(
+      merged.text.indexOf('kickoff'),
+    ); // the hand-written block came first; the append followed it in the same file
+    expect(existsSync(join(repo.root, '.repoboard', 'log', '2026-09-02.md'))).toBe(false);
   });
 
   it('POST /api/log: 400 on empty seat/text or an unknown field', async () => {

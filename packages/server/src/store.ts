@@ -234,8 +234,10 @@ export class CardStore extends EventEmitter<StoreEvents> {
   /** RCB-83: `local/STATE.md` when `.repoboard/local/` exists, else `.repoboard/STATE.md` — set
    * in `load()`, so not ctor-`readonly` (see `hasLocalLayer`). */
   statePath: string;
-  /** RCB-83: the WRITE target — `local/log/` when `.repoboard/local/` exists, else
-   * `.repoboard/log/`. Reads merge more sources; see `logReadDirs`. */
+  /** RCB-71 A: the WRITE target — `board.yml`'s `logDir` (resolved against `this.root`) when
+   * set, else `local/log/` when `.repoboard/local/` exists, else `.repoboard/log/`. Computed by
+   * `resolveLogDir()`, which needs `this.cfg`, so this is set AFTER `loadConfig()`, not in the
+   * constructor. Reads merge more sources; see `logReadDirs`. */
   logDir: string;
 
   private cfg: BoardConfig = defaultBoardConfig();
@@ -348,10 +350,9 @@ export class CardStore extends EventEmitter<StoreEvents> {
     this.statePath = this.hasLocalLayer
       ? join(localDir(this.root), 'STATE.md')
       : join(this.repoboardDir, 'STATE.md');
-    this.logDir = this.hasLocalLayer
-      ? join(localDir(this.root), 'log')
-      : join(this.repoboardDir, 'log');
+    // RCB-71 A: `resolveLogDir()` reads `this.cfg`, so this must come AFTER `loadConfig()`.
     await this.loadConfig();
+    this.logDir = this.resolveLogDir();
     await this.loadLeases();
     await this.loadState();
     let names: string[] = [];
@@ -631,9 +632,10 @@ export class CardStore extends EventEmitter<StoreEvents> {
   }
 
   /**
-   * P8.3: append one block to today's `.repoboard/log/<date>.md`, creating the file (with its
+   * P8.3: append one block to today's `<this.logDir>/<date>.md`, creating the file (with its
    * `# Log — <date>` header) if this is the first entry of the day. Append-only: there is no
-   * store method that rewrites a log file.
+   * store method that rewrites a log file. RCB-71 A: `this.logDir` is `board.yml`'s `logDir` when
+   * set — see `resolveLogDir()`.
    */
   appendRepoLog(
     seat: string,
@@ -671,14 +673,26 @@ export class CardStore extends EventEmitter<StoreEvents> {
   }
 
   /**
-   * RCB-83: every directory a log READ merges, in order — `.repoboard/log/` (the legacy
+   * RCB-71 A: the log WRITE target, precedence high to low — `board.yml`'s `cfg.logDir`
+   * (resolved against `this.root`) when set, then `.repoboard/local/log/` when a local layer
+   * exists, else `.repoboard/log/`. Called from `load()` (after `loadConfig()`) and from the
+   * watcher's `board.yml` handler, so a `logDir` added or removed while `serve` runs takes effect
+   * on the next `board.yml` change without a restart. Reversed from P8.6 decision 1, which had
+   * `logDir` as an additional READ-only source; reads are unaffected, see `logReadDirs()`.
+   */
+  private resolveLogDir(): string {
+    if (this.cfg.logDir) return resolve(this.root, this.cfg.logDir);
+    return this.hasLocalLayer ? join(localDir(this.root), 'log') : join(this.repoboardDir, 'log');
+  }
+
+  /**
+   * RCB-83/RCB-71 A: every directory a log READ merges, in order — `.repoboard/log/` (the legacy
    * location, always read so entries written before a local layer existed are never lost),
-   * `.repoboard/local/log/` (only when `hasLocalLayer`, RCB-83's WRITE target), then
-   * `board.yml`'s configured `logDir` (P8.6, an additional read-only source, unrelated to the
-   * local layer). Shared by `log()`, `loadAllLogInfo`, and — through it — `lastRepoLogBlock`,
-   * so every reader of "the log" agrees on what it is. WRITES never move: `appendRepoLog` always
-   * targets `this.logDir` alone (`.repoboard/local/log/` once a local layer exists, else
-   * `.repoboard/log/`).
+   * `.repoboard/local/log/` (only when `hasLocalLayer`), then `board.yml`'s configured `logDir`
+   * when set. Unchanged by RCB-71 A: reads still merge all three regardless of which one is the
+   * WRITE target. Shared by `log()`, `loadAllLogInfo`, and — through it — `lastRepoLogBlock`,
+   * so every reader of "the log" agrees on what it is. WRITES never merge: `appendRepoLog` always
+   * targets `this.logDir` alone — see `resolveLogDir()` for that precedence.
    */
   private logReadDirs(): string[] {
     const dirs = [join(this.repoboardDir, 'log')];
@@ -696,7 +710,9 @@ export class CardStore extends EventEmitter<StoreEvents> {
    * it, that source's exact bytes are returned untouched (in particular: no local layer and no
    * `cfg.logDir` → `.repoboard/log/`'s text, byte for byte, exactly as before RCB-62/RCB-83).
    * `repoboard log`/`appendRepoLog` are unaffected: they still only ever WRITE `this.logDir` —
-   * this merge is a read, never a write, exactly like `loadAllLogInfo`.
+   * this merge is a read, never a write, exactly like `loadAllLogInfo`. RCB-71 A: `this.logDir`
+   * itself now prefers `cfg.logDir` as the WRITE target (`resolveLogDir()`); this read-side merge
+   * is unchanged.
    */
   async log(date?: string): Promise<LogFile | null> {
     const day = date ?? toIso(this.now()).slice(0, 10);
@@ -714,8 +730,9 @@ export class CardStore extends EventEmitter<StoreEvents> {
 
   /**
    * RCB-47: the newest block `seat` wrote, searching back across every day in `.repoboard/log/`
-   * AND, when configured, `board.yml`'s `logDir` (P8.6 locked decision 1 — `logDir` is an
-   * ADDITIONAL read-only source; `repoboard log` itself still only ever writes `.repoboard/log/`).
+   * AND, when configured, `board.yml`'s `logDir` (reads merge both regardless of which one is the
+   * WRITE target — RCB-71 A reversed the WRITE side of P8.6 decision 1, see `resolveLogDir()`;
+   * this read merge is unaffected).
    * RCB-54: the original doc comment here argued OWN-dir-only was correct by definition ("a
    * seat's own last block is one it wrote with `repoboard log`") — false in the field, because a
    * seat can also write its blocks by hand straight into the configured `logDir` (as fpj's seats
@@ -1154,9 +1171,9 @@ export class CardStore extends EventEmitter<StoreEvents> {
 
   /**
    * Every file's date, mtime and parsed blocks across `logReadDirs()` — `.repoboard/log/`,
-   * `.repoboard/local/log/` (RCB-83, when a local layer exists) and `board.yml`'s `logDir`
-   * (P8.6, locked decision 1) when configured. All read-only sources; `repoboard log` only ever
-   * WRITES `this.logDir`. `check`'s pure input.
+   * `.repoboard/local/log/` (RCB-83, when a local layer exists) and `board.yml`'s `logDir` when
+   * configured — read here regardless of which one is `this.logDir`, the WRITE target (RCB-71 A,
+   * see `resolveLogDir()`). `check`'s pure input.
    */
   private async loadAllLogInfo(): Promise<LogFileInfo[]> {
     const perDir = await Promise.all(this.logReadDirs().map((dir) => this.loadLogInfoFrom(dir)));
@@ -1322,7 +1339,14 @@ export class CardStore extends EventEmitter<StoreEvents> {
   }
 
   private async startWatcher(): Promise<void> {
-    const watcher = chokidarWatch(this.repoboardDir, {
+    // RCB-71 A: `this.logDir` can now be `board.yml`'s `cfg.logDir`, resolved anywhere under
+    // `this.root` — not necessarily under `this.repoboardDir`. chokidar takes an array of paths;
+    // a missing dir is fine (it just watches nothing there yet). `logRel`/`logMatch` below
+    // already key off `relative(this.repoboardDir, this.logDir)`, so a `logDir` outside
+    // `this.repoboardDir` (e.g. `../docs/log`) still matches once its own path is watched too.
+    const logDirOutside = relative(this.repoboardDir, this.logDir).startsWith('..');
+    const watchPaths = logDirOutside ? [this.repoboardDir, this.logDir] : this.repoboardDir;
+    const watcher = chokidarWatch(watchPaths, {
       ignoreInitial: true,
       awaitWriteFinish: { stabilityThreshold: 100, pollInterval: 20 },
       // RCB-83: `.repoboard/local/` is its own git repo — its `.git/` churns on every sync and
@@ -1343,7 +1367,12 @@ export class CardStore extends EventEmitter<StoreEvents> {
           // RCB-34: `setColumns` already emitted `config` synchronously; skip the echo (see
           // `loadConfig`'s hash check) so one `setColumns` call produces exactly one emit.
           return this.loadConfig().then(({ changed }) => {
-            if (changed) this.emit('config', this.cfg);
+            if (changed) {
+              // RCB-71 A: a `logDir` added, changed, or removed in `board.yml` while `serve`
+              // runs takes effect immediately — no restart needed for the WRITE target to move.
+              this.logDir = this.resolveLogDir();
+              this.emit('config', this.cfg);
+            }
           });
         }
         if (rel === 'events.jsonl') return this.loadEvents();

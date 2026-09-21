@@ -342,6 +342,8 @@ dashboard, its bytes on the wire measured before it ships (O3).** Core stays I/O
   Lets a repo whose seats already keep their own daily log (fpj's `docs/log/`, headed
   `##### SEAT YYYY-MM-DD HH:MMZ: TITLE` — not ISO, so `newestMomentOf` falls back to the file's
   mtime) be seen by `check` without a second copy of the same text.
+  **Reversed 2026-09-21 (RCB-71, owner chose A):** `repoboard log` WRITES to `logDir` when it is
+  set; reads unchanged.
 
 **Exit criterion for P8:** in freshpickedjobs, `repoboard init --practices` + `sync-issues
 README.md#Known issues` produces a board with one card per open K-entry and no second copy of any

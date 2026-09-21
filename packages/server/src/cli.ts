@@ -154,7 +154,8 @@ Usage:
   repoboard state --set-section LIVE|LAST-LANDINGS|SEATS (<text> | --stdin) [--as a]
                                         replace one section's body and restamp
   repoboard log --as <seat> [--title "…"] (<text> | --stdin)
-                                        append one block to today's .repoboard/log/<date>.md
+                                        append one block to today's log — board.yml logDir when
+                                        set, else .repoboard/local/log/, else .repoboard/log/
   repoboard log show [--date YYYY-MM-DD] [--seat s]
                                         print a day's log (default today), optionally one seat's blocks
   repoboard log --last <seat>           print that seat's newest block, searching back across days

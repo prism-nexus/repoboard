@@ -284,7 +284,7 @@ terse (no `CARD_INTRO`, matching P8.2's five lease tools) and each measures unde
 
 `GET /api/state` (same shape as MCP `get_state`), `PUT /api/state/section`
 `{section, body, actor?}` — 200 with the refreshed state, 400 for a bad section/empty body, 409
-map-only. `GET /api/log?date=` → `{date, text, blocks}` — merged with `board.yml`'s configured `logDir` for that date when set (RCB-62; the same additional read-only source `check`/`seat` read — `.repoboard/log/` is still the only directory ever WRITTEN), 404 only when neither file exists for that date;
+map-only. `GET /api/log?date=` → `{date, text, blocks}` — merged with `board.yml`'s configured `logDir` for that date when set (RCB-62; the same source `check`/`seat` read), 404 only when neither file exists for that date. **Reversed 2026-09-21 (RCB-71, owner chose A):** `repoboard log` WRITES to `logDir` when it is set; reads unchanged.
 `POST /api/log` `{seat, text, title?}` — 200 with `{date, text, block}`, 400/409 as above.
 `GET /api/check?strict=1` is a pure read, always 200 (`{findings, exitCode}` — exitCode is data,
 not a status code, the same reasoning as `GET /api/leases/check/:resource`). The WS `snapshot`

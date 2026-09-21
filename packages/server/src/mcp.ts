@@ -745,7 +745,8 @@ export function createMcpServer(opts: McpServerOptions): McpServer {
     {
       title: "Append one block to today's log",
       description:
-        'Append `text` under a `##### <SEAT> <ts>: <title>` heading to .repoboard/log/<today>.md ' +
+        "Append `text` under a `##### <SEAT> <ts>: <title>` heading to today's log — " +
+        'board.yml logDir when set, else .repoboard/local/log/, else .repoboard/log/ ' +
         '(creates the file if this is the first entry). Append-only — there is no rewrite.',
       inputSchema: {
         seat: z.string().min(1).describe('Who is writing, e.g. claude/p8-3.'),

@@ -1,4 +1,4 @@
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { mkdir, readFile, rm, stat, utimes, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -626,6 +626,29 @@ describe('state and log (P8.3)', () => {
       const repo = await repoWithLogDir();
       const store = await open(repo, false);
       expect(await store.log('2020-01-01')).toBeNull();
+    });
+
+    it('(i) RCB-71 A: appendRepoLog with logDir configured writes docs/log/<date>.md and NOT .repoboard/log/', async () => {
+      const repo = await repoWithLogDir();
+      const store = await open(repo, false);
+      const res = await store.appendRepoLog('ops', 'hello', undefined);
+      expect(res.ok).toBe(true);
+      expect(existsSync(join(repo.root, 'docs', 'log', '2026-09-02.md'))).toBe(true);
+      expect(existsSync(join(repo.root, '.repoboard', 'log', '2026-09-02.md'))).toBe(false);
+      const log = await store.log();
+      expect(log?.blocks).toHaveLength(1); // no double read
+    });
+
+    it('(j) RCB-71 A: local layer + logDir → logDir wins', async () => {
+      const repo = await repoWithLogDir();
+      await mkdir(join(repo.root, '.repoboard', 'local'), { recursive: true });
+      const store = await open(repo, false);
+      const res = await store.appendRepoLog('ops', 'hello', undefined);
+      expect(res.ok).toBe(true);
+      expect(existsSync(join(repo.root, 'docs', 'log', '2026-09-02.md'))).toBe(true);
+      expect(existsSync(join(repo.root, '.repoboard', 'local', 'log', '2026-09-02.md'))).toBe(
+        false,
+      );
     });
   });
 

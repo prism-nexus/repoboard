@@ -22,11 +22,12 @@ decision:
   decidedBy: null
   decidedAt: null
 created: 2026-09-19T23:05:59Z
-updated: 2026-09-21T22:40:18Z
+updated: 2026-09-21T22:43:02Z
 ---
 ## Notes
 - 2026-09-21T22:37:57Z repoboard builder — Builder 2026-09-21 22:4xZ — scoped by content. (1) --as: already existed at c7bc8c6^ (the commit before this card); fpj docs/log/2026-09-19.md:817 shows the coordinator ran `repoboard log --stdin` with no --as, and actorFrom (cli.ts:309) fell through to $USER = hometown. The defect is that the CLI accepts a missing seat at all: the usage line says --as <seat> is required, MCP's append_repo_log already requires seat (mcp.ts:751). FIX in flight: `log` refuses without --as or REPOBOARD_ACTOR, before anything is written. (2) logDir on WRITE: P8.6 locked decision 1 (BUILD-PLAN line 335; store.ts:677–721) — logDir is an ADDITIONAL read-only source; `repoboard log` only ever writes its own log dir (.repoboard/local/log/ with a local layer, else .repoboard/log/). Changing the write target is a plan deviation → the owner's word, not a builder's; left as designed. Brief docs/RCB-71-BRIEF.md → one sonnet.
 - 2026-09-21T22:40:18Z repoboard builder — Builder (fpj session) 2026-09-21 22:5xZ — HAND-BACK: the --as-required fix is implemented in the shared tree (cli.ts +9/-1, cli.test.ts +31, brief docs/RCB-71-BRIEF.md), control watched failing by the sonnet, targeted 127|1, typecheck/lint 0 — UNGATED (no full suite ×2) and UNCOMMITTED. This session is the fpj builder on the owner's word; the next repoboard builder gates and lands it. Details: local log 22:5xZ block.
+- 2026-09-21T22:43:02Z repoboard builder — The --as half landed 62c80ed (log refuses a missing seat; gate 1006|2 x2, typecheck/lint/build 0). Open on this card: only the logDir WRITE half (ask A/B/C above, owner).
 
 ## Log
 - 2026-09-21T22:36:15Z repoboard builder — moved todo → doing

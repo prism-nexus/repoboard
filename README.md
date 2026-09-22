@@ -246,3 +246,8 @@ owner's.
   `layoutSystems` (core) routes every edge as a three-segment path at the mid-row y and never
   checks for a box on the vertical run; plan §3.5 defers real edge routing. Seen 2026-09-22 in
   the browser on the RCB-98 landing; fix = a column-aware detour in core with a test on that pair.
+- **K15** `systems detect` proposes `env: [dev, prod]` for every candidate even when the file's
+  `environments.prod` is `{ none: … }`, so on a prod-none repo every detected row needs a hand
+  correction (RCB-99 dogfood: 3 of 3 candidates on this repo). `applyDetected` (core) could drop
+  an env whose environment is `none` before merging, with a test on the none-prod fixture. Filed
+  2026-09-22 from the first dogfood run.

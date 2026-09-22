@@ -1,0 +1,103 @@
+environments:
+  dev:
+    note: pnpm build, then node packages/server/dist/cli.js serve --root . --root ~/Projects/Repos/freshpickedjobs --port 4242 — one process serves both boards
+  prod:
+    none: local-only by design — speed and tokens
+systems:
+  - id: repoboard
+    name: repoboard
+    kind: tool
+    layer: ops
+    env:
+      - dev
+    runtime:
+      dev: node packages/server/dist/cli.js — CLI, MCP (stdio), HTTP+WS :4242, one process
+    pointers:
+      - packages/server/src/cli.ts
+      - packages/server/src/mcp.ts
+      - packages/server/src/http.ts
+      - packages/server/src/repo-context.ts
+    docs:
+      - docs/BUILD-PLAN.md#§2
+    why: the CLI, the MCP server and the :4242 server are one package, so one row
+    source:
+      hand: repoboard builder
+      at: 2026-09-22T08:48:54Z
+  - id: web
+    name: web
+    kind: client
+    layer: client
+    env:
+      - dev
+    runtime:
+      dev: vite build → packages/server/dist/web, served by repoboard on :4242
+    pointers:
+      - packages/web/src/main.tsx
+      - packages/web/src/App.tsx
+    source:
+      hand: repoboard builder
+      at: 2026-09-22T08:48:54Z
+  - id: board-files
+    name: board files
+    kind: storage
+    layer: data
+    env:
+      - dev
+    runtime:
+      dev: "the git tree: .repoboard/ cards, STATE.md, leases.yml; local/ is a gitignored sibling repo (RCB-83)"
+    pointers:
+      - packages/server/src/store.ts
+      - packages/server/src/local.ts
+    source:
+      hand: repoboard builder
+      at: 2026-09-22T08:48:54Z
+  - id: freshpickedjobs
+    name: freshpickedjobs
+    kind: external
+    layer: external
+    env:
+      - dev
+    runtime: {}
+    pointers: []
+    why: the owner's other repo, served read-only as the second --root; never written (CLAUDE.md non-negotiable 1)
+    source:
+      hand: repoboard builder
+      at: 2026-09-22T08:48:54Z
+  - id: ci
+    name: CI
+    kind: ci
+    layer: ops
+    env:
+      - dev
+    runtime:
+      dev: "GitHub Actions: the gate (test, typecheck, lint, build) from an empty migration"
+    pointers:
+      - .github/workflows/ci.yml
+    source:
+      hand: repoboard builder
+      at: 2026-09-22T08:48:54Z
+connections:
+  - from: web
+    to: repoboard
+    via: HTTP + WS on :4242 (snapshot, systems, moves)
+    env:
+      - dev
+    source:
+      hand: repoboard builder
+      at: 2026-09-22T08:48:54Z
+  - from: repoboard
+    to: board-files
+    via: fs read/write + chokidar watcher
+    env:
+      - dev
+    source:
+      hand: repoboard builder
+      at: 2026-09-22T08:48:54Z
+  - from: repoboard
+    to: freshpickedjobs
+    via: second --root, read-only
+    env:
+      - dev
+    source:
+      hand: repoboard builder
+      at: 2026-09-22T08:48:54Z

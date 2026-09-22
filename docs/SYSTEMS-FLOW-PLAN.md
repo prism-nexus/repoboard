@@ -216,9 +216,20 @@ measurement says the gap is real.
 
 - Bundle: 145.4 KB gzipped today; the Flow view's delta, measured by `check:size`, target ≤ 15 KB.
 - `systems.yml` bytes on repoboard and on the fpj detect report; `cost` before and after.
+  **Measured 2026-09-22 (RCB-99):** repoboard `systems.yml` 2,693 B (5 systems, 3 connections,
+  all hand; budget 4,096); `cost` total 84,866 → 87,559 B (+2,693, the file itself); fpj detect
+  report 3,580 B, 27 candidates (`.repoboard/local/reports/`).
 - Detect on freshpickedjobs: candidates found / unclassified / hand corrections needed — the
   three numbers that say whether detection is worth its code.
+  **Measured 2026-09-22 (RCB-99, read-only dry run):** 14 systems + 13 connections found / 7
+  unclassified (4 true-negative libraries, 2 durable_objects the detector has no shape for, 1 root
+  package) / ≈ 3 hand corrections (hyperdrive = postgres, hasher duplicate, DO bindings). On
+  repoboard: 3 found / 2 unclassified (both correct) / 3 corrections, all the same one — `env`
+  includes `prod` on a prod-none repo (K15).
 - `seat` bundle bytes before and after the one line.
+  **Measured 2026-09-22 (RCB-99):** "repoboard builder" 9,740 B before (line: "no systems.yml
+  yet") → 8,529 B after (line: "5 systems, 3 connections, prod none"); the drop is the log block,
+  not the line — the line itself is 69 B before, 66 B after.
 - Layout: time to lay out the fpj model (target < 5 ms, pure function, measured in a test).
 - PH.7: the five numbers in §4.
 

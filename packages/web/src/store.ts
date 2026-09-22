@@ -31,7 +31,7 @@ import type {
 } from './wire.js';
 
 export type Theme = 'dark' | 'light';
-export type View = 'board' | 'map' | 'flow';
+export type View = 'board' | 'map' | 'flow' | 'dashboard';
 /** RCB-98: the Flow view's env switch (plan §3.4); default `'both'`. */
 export type FlowEnv = 'dev' | 'prod' | 'both';
 

@@ -6,7 +6,7 @@
  * `RepoSnapshot` alongside the config.
  */
 import { defaultBoardConfig, type RepoSnapshot } from '@repoboard/core';
-import { act, fireEvent, screen } from '@testing-library/react';
+import { act, fireEvent, screen, within } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
 import { card, renderApp, testStore } from './helpers.jsx';
 
@@ -166,5 +166,24 @@ describe('TopBar Flow tab (RCB-98)', () => {
     fireEvent.click(flowTab);
     expect(store.getState().view).toBe('flow');
     expect(flowTab.getAttribute('aria-pressed')).toBe('true');
+  });
+});
+
+describe('TopBar Repo tab (RCB-112 B)', () => {
+  it('renders a fourth tab, "Repo", after Flow, and clicking it sets view: "dashboard"', () => {
+    const store = testStore();
+    store.dispatch({
+      type: 'snapshot',
+      board: { config: defaultBoardConfig(), cards: [] },
+      repo: repo('/repos/freshpickedjobs'),
+    });
+    renderApp(store);
+    const tabs = within(screen.getByRole('navigation', { name: 'View' })).getAllByRole('button');
+    expect(tabs.map((t) => t.textContent)).toEqual(['Board', 'Map', 'Flow', 'Repo']);
+    const repoTab = screen.getByRole('button', { name: 'Repo' });
+    expect(repoTab.getAttribute('aria-pressed')).toBe('false');
+    fireEvent.click(repoTab);
+    expect(store.getState().view).toBe('dashboard');
+    expect(repoTab.getAttribute('aria-pressed')).toBe('true');
   });
 });

@@ -111,6 +111,14 @@ export function TopBar({
         >
           Flow
         </button>
+        <button
+          type="button"
+          className={`tab ${view === 'dashboard' ? 'tab--on' : ''}`}
+          onClick={() => onView('dashboard')}
+          aria-pressed={view === 'dashboard'}
+        >
+          Repo
+        </button>
       </nav>
       <div className="topbar__tools">
         <span

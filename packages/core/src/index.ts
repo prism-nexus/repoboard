@@ -121,6 +121,18 @@ export {
   resolveRefText,
   splitLines,
 } from './refs.js';
+export type {
+  CommitRow,
+  GateCheckName,
+  GateCheckResult,
+  GateRecord,
+  GateTestsRecord,
+  ParseGateLedgerResult,
+  RepoCommits,
+  RepoDashboard,
+  RepoHealth,
+} from './repo-health.js';
+export { byWho, latestChecks, parseCommitLog, parseGateLedger, perDay } from './repo-health.js';
 export type { DatedLogBlocks, LogBlock, LogBlockInput } from './repolog.js';
 export {
   appendLogBlock,

@@ -39,6 +39,7 @@ import { watch as chokidarWatch, type FSWatcher } from 'chokidar';
 import { type WebSocket, WebSocketServer } from 'ws';
 import { applySyncPlan, computeSyncPlan } from './issues.js';
 import { resolveCardRefs, resolveRefSpec } from './refs.js';
+import { repoDashboard } from './repo-health.js';
 import { isGitRepo, type ScanResult, scanRepo } from './scanner.js';
 import { type CardStore, openStore } from './store.js';
 import { runDetect } from './systems-detect.js';
@@ -1036,6 +1037,14 @@ export async function openRepoContext(key: string, opts: RepoContextOptions): Pr
       const system = doc?.systems.find((s) => s.id === id);
       if (!doc || !system) throw new HttpError(404, `unknown system "${id}"`);
       return sendJson(res, 200, await systemTests(root, system.pointers));
+    }
+    // RCB-112 A: health (a recorded gate ledger, never re-run) + commits (git, live) + coverage
+    // (RCB-110's per-system line, corpus loaded once) — always 200, same "well-formed answer even
+    // when everything is null" reasoning as `/api/cost` and `/api/systems`.
+    if (method === 'GET' && path === '/api/dashboard') {
+      const { doc } = systemsPayload();
+      const now = new Date();
+      return sendJson(res, 200, await repoDashboard(root, doc, now));
     }
     // P8.5: archive/sync-issues. Both are POST-only (they can write) and both accept a `dryRun`
     // that never calls a store writer at all — the same "pure read, always 200" reasoning as

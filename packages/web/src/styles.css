@@ -1606,6 +1606,171 @@ button {
   stroke-width: 1.5;
 }
 
+/* ---- repo dashboard (RCB-112 B) ---- */
+.dash {
+  min-height: 0;
+  height: 100%;
+  overflow: auto;
+  padding: 16px;
+  box-sizing: border-box;
+}
+.dash__toolbar {
+  display: flex;
+  justify-content: flex-end;
+  margin-bottom: 12px;
+}
+.dash__loading {
+  margin: 24px;
+}
+.dash__error {
+  margin: 12px 0;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--bg);
+  overflow: hidden;
+}
+.dash__error-head {
+  padding: 4px 8px;
+  font-size: 11px;
+  color: var(--coral);
+  border-bottom: 1px solid var(--line);
+  background: var(--surface-2);
+}
+.dash__error-message {
+  padding: 6px 8px;
+  font-size: 12px;
+  color: var(--coral);
+}
+.dash__bands {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  max-width: 960px;
+}
+.dash__band {
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface);
+  padding: 12px 14px;
+}
+.dash__band h2 {
+  margin: 0 0 10px;
+  font-size: 13px;
+  color: var(--ink);
+}
+.dash__health-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.dash__health-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 8px;
+  padding: 3px 0;
+  border-bottom: 1px solid var(--line);
+}
+.dash__health-row:last-child {
+  border-bottom: none;
+}
+.dash__health-name {
+  width: 68px;
+  flex: 0 0 auto;
+  color: var(--muted);
+}
+.dash__mark {
+  font-weight: 700;
+}
+.dash__mark--ok {
+  color: var(--ok);
+}
+.dash__mark--fail {
+  color: var(--danger);
+}
+.dash__health-errors {
+  margin: 8px 0 0;
+  padding-left: 18px;
+  color: var(--danger);
+  font-size: 12px;
+}
+.dash__commit-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.dash__commit-row {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 3px 0;
+  border-bottom: 1px solid var(--line);
+}
+.dash__commit-row:last-child {
+  border-bottom: none;
+}
+.dash__commit-sha {
+  flex: 0 0 auto;
+  color: var(--muted);
+}
+.dash__commit-subject {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.dash__commit-who {
+  flex: 0 0 auto;
+  white-space: nowrap;
+  max-width: 16ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.dash__commit-age {
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+.dash__origin-label {
+  margin: 10px 0 2px;
+}
+.dash__bars-label {
+  margin: 10px 0 4px;
+}
+.dash__bars {
+  display: flex;
+  align-items: flex-end;
+  gap: 3px;
+  height: 56px;
+}
+.dash__bar {
+  flex: 1 1 0;
+  min-height: 2px;
+  background: var(--accent);
+  border-radius: 1px;
+}
+.dash__bywho {
+  list-style: none;
+  margin: 8px 0 0;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 14px;
+  color: var(--muted);
+}
+.dash__coverage-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.dash__coverage-list li {
+  padding: 3px 0;
+  border-bottom: 1px solid var(--line);
+}
+.dash__coverage-list li:last-child {
+  border-bottom: none;
+}
+
 /* treemap */
 .treemap {
   position: absolute;
@@ -1905,6 +2070,25 @@ button {
     border-left: 0;
     border-top: 1px solid var(--line);
     max-height: 40vh;
+  }
+  .dash {
+    padding: 12px;
+  }
+  .dash__bands {
+    max-width: none;
+  }
+  .dash__health-row {
+    gap: 6px;
+  }
+  .dash__health-name {
+    width: auto;
+  }
+  .dash__commit-row {
+    flex-wrap: wrap;
+  }
+  .dash__commit-subject {
+    flex-basis: 100%;
+    order: 1;
   }
 }
 

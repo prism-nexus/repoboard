@@ -3,7 +3,7 @@ import { existsSync } from 'node:fs';
 import { mkdir, readdir, readFile, rm, utimes, writeFile } from 'node:fs/promises';
 import { basename, dirname, join } from 'node:path';
 import { promisify } from 'node:util';
-import { type Card, defaultBoardConfig, parseBoard, serializeBoard } from '@repoboard/core';
+import { type Card, defaultBoardConfig, parseBoard, serializeBoard, toIso } from '@repoboard/core';
 import { afterEach, describe, expect, it } from 'vitest';
 import { findRoot, formatStepsTable, formatTable, run } from '../src/cli.js';
 import { cardText, makeTempDir, makeTempRepoboard, makeTempRepoNoBoard, NOW } from './helpers.js';
@@ -2962,6 +2962,154 @@ describe('repoboard systems / systems show / check systems findings (RCB-97): he
     const help = await repoboard(root, '--help');
     expect(help.out).toContain('systems show');
     expect(help.out).toContain('systems-stale');
+  });
+});
+
+describe('repoboard gate (RCB-112 A)', () => {
+  it('needs --as (exit 1, no ledger written)', async () => {
+    const root = await freshRepo();
+    const res = await repoboard(root, 'gate', 'record', '--typecheck', '0');
+    expect(res.code).toBe(1);
+    expect(res.err).toMatch(/--as/);
+    expect(existsSync(join(root, '.repoboard', 'gate.jsonl'))).toBe(false);
+  });
+
+  it('CONTROL: no check given → exit 1, ledger unchanged', async () => {
+    const root = await freshRepo();
+    const first = await repoboard(root, 'gate', 'record', '--as', 'builder', '--typecheck', '0');
+    expect(first.code).toBe(0);
+    const before = await readFile(join(root, '.repoboard', 'gate.jsonl'), 'utf8');
+
+    const res = await repoboard(root, 'gate', 'record', '--as', 'builder');
+    expect(res.code).toBe(1);
+    expect(res.err).toMatch(/at least one check/);
+    const after = await readFile(join(root, '.repoboard', 'gate.jsonl'), 'utf8');
+    expect(after).toBe(before);
+  });
+
+  it('appends one JSONL line: tests (passed|skipped, --failed, --files), typecheck/lint/build, --note, sha null outside git', async () => {
+    const root = await freshRepo();
+    const res = await repoboard(
+      root,
+      'gate',
+      'record',
+      '--as',
+      'builder',
+      '--tests',
+      '1271|4',
+      '--failed',
+      '0',
+      '--files',
+      '212',
+      '--typecheck',
+      '0',
+      '--lint',
+      '0',
+      '--build',
+      '0',
+      '--note',
+      'clean run',
+    );
+    expect(res.code).toBe(0);
+    expect(res.out).toMatch(/recorded builder/);
+    const text = await readFile(join(root, '.repoboard', 'gate.jsonl'), 'utf8');
+    const lines = text.trim().split('\n');
+    expect(lines).toHaveLength(1);
+    expect(JSON.parse(lines[0] ?? '')).toEqual({
+      at: toIso(NOW),
+      sha: null,
+      as: 'builder',
+      tests: { passed: 1271, skipped: 4, failed: 0, files: 212 },
+      typecheck: 0,
+      lint: 0,
+      build: 0,
+      note: 'clean run',
+    });
+  });
+
+  it('--sha overrides the git default; a malformed --tests value is a usage error', async () => {
+    const root = await freshRepo();
+    const ok = await repoboard(
+      root,
+      'gate',
+      'record',
+      '--as',
+      'builder',
+      '--typecheck',
+      '1',
+      '--sha',
+      'deadbee',
+    );
+    expect(ok.code).toBe(0);
+    const text = await readFile(join(root, '.repoboard', 'gate.jsonl'), 'utf8');
+    expect(JSON.parse(text.trim())).toMatchObject({ sha: 'deadbee' });
+
+    const bad = await repoboard(
+      root,
+      'gate',
+      'record',
+      '--as',
+      'builder',
+      '--tests',
+      'not-a-number',
+    );
+    expect(bad.code).toBe(1);
+    expect(bad.err).toMatch(/--tests must be/);
+  });
+
+  it('appends to .repoboard/local/gate.jsonl once .repoboard/local/ exists (gateLedgerPath, shared with the reader)', async () => {
+    const root = await freshRepo();
+    const init = await repoboard(root, 'local', 'init');
+    expect(init.code).toBe(0);
+    const res = await repoboard(root, 'gate', 'record', '--as', 'builder', '--build', '0');
+    expect(res.code).toBe(0);
+    expect(existsSync(join(root, '.repoboard', 'gate.jsonl'))).toBe(false);
+    expect(existsSync(join(root, '.repoboard', 'local', 'gate.jsonl'))).toBe(true);
+  });
+
+  it('gate show: "no gate recorded" per check with nothing written; the recorded result once written; --json mirrors GET /api/dashboard\'s health band', async () => {
+    const root = await freshRepo();
+    const empty = await repoboard(root, 'gate', 'show');
+    expect(empty.code).toBe(0);
+    expect(empty.out).toBe(
+      'tests: no gate recorded\ntypecheck: no gate recorded\nlint: no gate recorded\nbuild: no gate recorded\n',
+    );
+
+    await repoboard(
+      root,
+      'gate',
+      'record',
+      '--as',
+      'builder',
+      '--typecheck',
+      '1',
+      '--sha',
+      'abc1234',
+    );
+    const shown = await repoboard(root, 'gate', 'show');
+    expect(shown.out).toContain('typecheck: FAIL — exit 1');
+    expect(shown.out).toContain('tests: no gate recorded');
+
+    const asJson = await repoboard(root, 'gate', 'show', '--json');
+    const health = JSON.parse(asJson.out);
+    expect(health).toEqual({
+      checks: {
+        tests: null,
+        typecheck: { ok: false, value: 'exit 1', at: toIso(NOW), sha: 'abc1234', as: 'builder' },
+        lint: null,
+        build: null,
+      },
+      ledger: '.repoboard/gate.jsonl',
+      errors: [],
+      source: '.repoboard/gate.jsonl',
+    });
+  });
+
+  it('--help mentions "gate record" and "gate show"', async () => {
+    const root = await freshRepo();
+    const help = await repoboard(root, '--help');
+    expect(help.out).toContain('gate record');
+    expect(help.out).toContain('gate show');
   });
 });
 

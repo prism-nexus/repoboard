@@ -8,6 +8,7 @@ import { TopBar } from './components/TopBar.jsx';
 import { StoreContext, useBoardState, useNow, useStore } from './hooks.js';
 import { columnsWithCards, type Store } from './store.js';
 import { Board } from './views/Board.jsx';
+import { DashboardView } from './views/Dashboard.jsx';
 import { FlowView } from './views/Flow.jsx';
 import { MapView } from './views/Map.jsx';
 
@@ -72,7 +73,15 @@ function Shell() {
         </div>
       ) : null}
       <main className="main">
-        {state.view === 'board' ? <Board /> : state.view === 'flow' ? <FlowView /> : <MapView />}
+        {state.view === 'board' ? (
+          <Board />
+        ) : state.view === 'flow' ? (
+          <FlowView />
+        ) : state.view === 'dashboard' ? (
+          <DashboardView />
+        ) : (
+          <MapView />
+        )}
       </main>
       {selected && state.config ? (
         <Drawer

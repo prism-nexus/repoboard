@@ -5,7 +5,7 @@
  */
 import { spawn } from 'node:child_process';
 import { realpathSync } from 'node:fs';
-import { mkdir, readFile, stat, writeFile } from 'node:fs/promises';
+import { appendFile, mkdir, readFile, stat, writeFile } from 'node:fs/promises';
 import { dirname, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { type ParseArgsConfig, parseArgs } from 'node:util';
@@ -29,6 +29,9 @@ import {
   formatLogBlock,
   formatSystemRow,
   formatSystemsTable,
+  type GateCheckName,
+  type GateCheckResult,
+  type GateRecord,
   initialStateText,
   isOwnerTask,
   isSiblingUrl,
@@ -72,6 +75,8 @@ import {
 } from './mcp.js';
 import { formatResolvedRefs, resolveCardRefs, resolveRefSpec } from './refs.js';
 import { assignRepoKeys, hasBoardDir } from './repo-context.js';
+import { gateLedgerPath, loadGateHealth } from './repo-health.js';
+import { git } from './scanner.js';
 import { openStore } from './store.js';
 import { runDetect } from './systems-detect.js';
 import { systemTests } from './systems-tests.js';
@@ -222,6 +227,17 @@ Usage:
                                         .repoboard/systems.yml that fails to parse), systems-stale
                                         (warning; blocks only with --strict — a detected system no
                                         longer matches its source file)
+  repoboard gate record --as <seat> [--tests <passed>|<skipped>] [--failed n] [--files n]
+                        [--typecheck n] [--lint n] [--build n] [--sha s] [--note t]
+                                        append one line to the gate ledger (RCB-112 A) — a
+                                        SEAT'S OWN RECORD of a check it already ran, never a
+                                        re-run; --sha defaults to \`git rev-parse --short HEAD\`
+                                        (null outside a repo); needs at least one of --tests,
+                                        --typecheck, --lint, --build — none given is exit 1,
+                                        nothing written
+  repoboard gate show [--json]         the newest recorded result per check (tests, typecheck,
+                                        lint, build); \`no gate recorded\` for any check with no
+                                        line yet
   repoboard local init [--remote <url>] [--move-record]
                                         create .repoboard/local/ — a gitignored, separate git repo
                                         for machine facts (scaffolds RIG.md, adds the exact line
@@ -1523,6 +1539,132 @@ async function cmdCheck(args: string[], io: CliIO): Promise<number> {
   return exitCode;
 }
 
+// ---- gate ledger (RCB-112 A) ----------------------------------------------------------------
+
+function parseIntFlag(name: string, v: string | undefined): number | null {
+  if (v === undefined) return null;
+  const n = Number.parseInt(v, 10);
+  if (!Number.isInteger(n) || String(n) !== v.trim()) {
+    throw new UserError(`--${name} must be an integer (got "${v}")`);
+  }
+  return n;
+}
+
+/** `--tests <passed>|<skipped>` — both integers, pipe-separated (the CLI-friendly form of the
+ * two numbers `pnpm vitest` prints). */
+function parseTestsFlag(v: string | undefined): { passed: number | null; skipped: number | null } {
+  if (v === undefined) return { passed: null, skipped: null };
+  const parts = v.split('|');
+  if (parts.length !== 2) {
+    throw new UserError('--tests must be <passed>|<skipped> (e.g. --tests 1271|4)');
+  }
+  return {
+    passed: parseIntFlag('tests (passed)', parts[0]),
+    skipped: parseIntFlag('tests (skipped)', parts[1]),
+  };
+}
+
+/**
+ * RCB-112 A: `repoboard gate record --as <seat> [--tests p|s] [--failed n] [--files n]
+ * [--typecheck n] [--lint n] [--build n] [--sha s] [--note t]` — one JSONL line appended to the
+ * gate ledger (`gateLedgerPath`). `sha` defaults to `git rev-parse --short HEAD` (null outside a
+ * git repo, or with no commits); CLAUDE.md non-negotiable 2: this NEVER runs the checks it
+ * records — it only writes down a number the caller already produced. No check given (none of
+ * `--tests`/`--typecheck`/`--lint`/`--build`) is a usage error: exit 1, nothing written.
+ */
+async function cmdGateRecord(args: string[], io: CliIO): Promise<number> {
+  const { values } = parse(args, {
+    as: { type: 'string' },
+    tests: { type: 'string' },
+    failed: { type: 'string' },
+    files: { type: 'string' },
+    typecheck: { type: 'string' },
+    lint: { type: 'string' },
+    build: { type: 'string' },
+    sha: { type: 'string' },
+    note: { type: 'string' },
+  });
+  if (!values.as || values.as.trim().length === 0) {
+    throw new UserError('gate record needs --as <seat>');
+  }
+  const failed = parseIntFlag('failed', values.failed);
+  const files = parseIntFlag('files', values.files);
+  const { passed, skipped } = parseTestsFlag(values.tests);
+  const hasTests = values.tests !== undefined || failed !== null || files !== null;
+  const typecheck = parseIntFlag('typecheck', values.typecheck);
+  const lint = parseIntFlag('lint', values.lint);
+  const build = parseIntFlag('build', values.build);
+
+  if (!hasTests && typecheck === null && lint === null && build === null) {
+    throw new UserError(
+      'gate record needs at least one check: --tests, --typecheck, --lint or --build',
+    );
+  }
+
+  const root = await requireRoot(io);
+  let sha = values.sha ?? null;
+  if (sha === null) {
+    try {
+      const out = await git(root, ['rev-parse', '--short', 'HEAD']);
+      const trimmed = out.trim();
+      sha = trimmed.length > 0 ? trimmed : null;
+    } catch {
+      sha = null;
+    }
+  }
+
+  const record: GateRecord = {
+    at: toIso(io.now?.() ?? new Date()),
+    sha,
+    as: values.as,
+    tests: hasTests ? { passed, skipped, failed, files } : null,
+    typecheck,
+    lint,
+    build,
+    note: values.note ?? null,
+  };
+
+  const path = await gateLedgerPath(root);
+  await mkdir(dirname(path), { recursive: true });
+  await appendFile(path, `${JSON.stringify(record)}\n`, 'utf8');
+  io.stdout.write(`recorded ${values.as} @ ${record.at}${sha ? ` (${sha})` : ''}\n`);
+  return 0;
+}
+
+const GATE_CHECK_ORDER: readonly GateCheckName[] = ['tests', 'typecheck', 'lint', 'build'];
+
+function gateCheckLine(name: GateCheckName, result: GateCheckResult | null): string {
+  if (!result) return `${name}: no gate recorded`;
+  const status = result.ok ? 'ok' : 'FAIL';
+  const sha = result.sha ? ` ${result.sha}` : '';
+  return `${name}: ${status} — ${result.value} (${result.at}${sha}, as ${result.as})`;
+}
+
+/** `repoboard gate show [--json]` — the ledger's newest result per check (RCB-112 A); never
+ * re-runs anything, just reads `gateLedgerPath` the way `GET /api/dashboard` does. */
+async function cmdGateShow(args: string[], io: CliIO): Promise<number> {
+  const { values } = parse(args, { json: { type: 'boolean', default: false } });
+  const root = await requireRoot(io);
+  const health = await loadGateHealth(root);
+  if (values.json) {
+    io.stdout.write(`${JSON.stringify(health, null, 2)}\n`);
+    return 0;
+  }
+  for (const name of GATE_CHECK_ORDER)
+    io.stdout.write(`${gateCheckLine(name, health.checks[name])}\n`);
+  if (health.errors.length > 0) {
+    const err = io.stderr ?? io.stdout;
+    for (const e of health.errors) err.write(`${health.ledger ?? 'gate ledger'}: ${e}\n`);
+  }
+  return 0;
+}
+
+async function cmdGate(sub: string | undefined, args: string[], io: CliIO): Promise<number> {
+  if (sub === 'record') return cmdGateRecord(args, io);
+  if (sub === 'show') return cmdGateShow(args, io);
+  throw new UserError(`unknown gate command "${sub ?? ''}" (record, show)`);
+}
+
 /**
  * RCB-83: `repoboard local init|sync|status` — the local-only layer, `.repoboard/local/`, a
  * separate gitignored git repo for machine facts (RIG.md). RCB-93: the running record (STATE.md,
@@ -2020,6 +2162,7 @@ export async function run(argv: string[], io: CliIO): Promise<number> {
     }
     if (cmd === 'seat') return await cmdSeat(argv.slice(1), io);
     if (cmd === 'check') return await cmdCheck(argv.slice(1), io);
+    if (cmd === 'gate') return await cmdGate(sub, rest, io);
     if (cmd === 'local') return await cmdLocal(sub, rest, io);
     if (cmd === 'cost') return await cmdCost(argv.slice(1), io);
     if (cmd === 'systems') {

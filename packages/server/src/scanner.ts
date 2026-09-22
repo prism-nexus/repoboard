@@ -256,7 +256,8 @@ function countNewlinesIn(buf: Buffer): number {
   return n;
 }
 
-async function git(root: string, args: string[]): Promise<string> {
+/** RCB-112: exported for the repo dashboard's commit log — same spawn, no `cwd` other than `root`. */
+export async function git(root: string, args: string[]): Promise<string> {
   const { stdout } = await execFileAsync('git', args, {
     cwd: root,
     maxBuffer: GIT_MAX_BUFFER,

@@ -903,6 +903,73 @@ connections: []
   );
 });
 
+describe('GET /api/dashboard (RCB-112 A)', () => {
+  interface DashboardBody {
+    now: string;
+    health: {
+      checks: Record<'tests' | 'typecheck' | 'lint' | 'build', unknown>;
+      ledger: string | null;
+      errors: string[];
+      source: string;
+    };
+    commits: { branch: string | null; head: unknown; originMain: unknown; source: string };
+    coverage: Array<{ id: string; line: string }> | null;
+    coverageSource: string;
+  }
+
+  it('200, always present: no .git under a temp dir, no systems.yml — every band null/empty', async () => {
+    const r = await rig({ 'RB-1.md': cardText('RB-1', 'todo') });
+    const res = await fetch(`${r.url}/api/dashboard`);
+    expect(res.status).toBe(200);
+    const body = (await json(res)) as DashboardBody;
+    expect(typeof body.now).toBe('string');
+    expect(body.health.checks).toEqual({ tests: null, typecheck: null, lint: null, build: null });
+    expect(body.health.ledger).toBeNull();
+    expect(body.health.errors).toEqual([]);
+    expect(body.commits.branch).toBeNull();
+    expect(body.commits.head).toBeNull();
+    expect(body.coverage).toBeNull();
+  });
+
+  it('coverage mirrors GET /api/systems: a system with a covering test file reports it', async () => {
+    const repo = await makeTempRepoboard({ 'RB-1.md': cardText('RB-1', 'todo') });
+    cleanups.push(repo.cleanup);
+    await mkdir(join(repo.root, 'src'), { recursive: true });
+    await writeFile(join(repo.root, 'src', 'a.ts'), 'export const A = 1;\n');
+    await mkdir(join(repo.root, 'test'), { recursive: true });
+    await writeFile(join(repo.root, 'test', 'a.test.ts'), "import '../src/a.ts';\n");
+    await writeFile(
+      join(repo.root, '.repoboard', 'systems.yml'),
+      `environments:
+  dev:  { note: "local dev" }
+  prod: { note: "cloud" }
+systems:
+  - id: api
+    name: api service
+    kind: service
+    layer: app
+    env: [dev]
+    runtime: {}
+    owner: null
+    pointers: ["src/a.ts"]
+    docs: []
+    why: null
+    source: { hand: "owner", at: "2026-09-22T00:00:00Z" }
+connections: []
+`,
+    );
+    const store = await openStore(repo.root, { watch: true, now: () => NOW });
+    cleanups.push(() => store.close());
+    const server = await startServer({ store, port: 0, scan: false });
+    cleanups.push(() => server.close());
+
+    const res = await fetch(`${server.url.replace(/\/$/, '')}/api/dashboard`);
+    expect(res.status).toBe(200);
+    const body = (await json(res)) as DashboardBody;
+    expect(body.coverage).toEqual([{ id: 'api', line: 'tests: 1 file' }]);
+  });
+});
+
 // ---- P7.2: hasBoard on the wire (plan §3) ----------------------------------------------------
 
 describe('hasBoard (P7.2)', () => {

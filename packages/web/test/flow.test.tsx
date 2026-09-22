@@ -475,4 +475,38 @@ describe('Flow view (RCB-98)', () => {
     // A failure in the tests fetch must not take the rest of the drawer down.
     expect(within(drawer).getByTestId('flow-drawer-backlinks')).toBeInTheDocument();
   });
+
+  it('12. CONTROL (RCB-112 B wart): a pointer with an empty tests array reads "— none", not "— 0:"', async () => {
+    const fetchMock = stubFetch({
+      '/api/systems/gateway/refs': [
+        {
+          spec: 'apps/gateway/src/index.ts',
+          path: 'apps/gateway/src/index.ts',
+          start: 1,
+          end: 1,
+          text: 'export {};',
+          truncated: false,
+          error: null,
+        },
+      ],
+      '/api/systems/gateway/tests': {
+        pointers: [{ pointer: 'apps/gateway/src/index.ts', tests: [], reason: null }],
+        files: 0,
+        source: 'static: test files that import or name the pointer, read live',
+        line: 'tests: none found',
+      },
+    });
+    openFlow({ doc: TWO_ENV(), errors: [], exists: true });
+
+    fireEvent.click(
+      screen.getByTestId('flow-svg').querySelector('[data-box="gateway"]') as Element,
+    );
+    const testsSection = await screen.findByTestId('flow-drawer-tests');
+    await within(testsSection).findByText('tests: none found');
+
+    fireEvent.click(within(testsSection).getByRole('button', { name: 'show' }));
+    await within(testsSection).findByText('apps/gateway/src/index.ts — none');
+    expect(testsSection).not.toHaveTextContent('— 0:');
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
 });

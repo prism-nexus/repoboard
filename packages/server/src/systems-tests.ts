@@ -15,9 +15,16 @@ import {
 import { readRepoText, resolveRepoPath } from './refs.js';
 import { findImportSpecifiers, listRepoFiles, resolveImport } from './scanner.js';
 
-export async function systemTests(root: string, pointers: readonly string[]): Promise<SystemTests> {
-  if (pointers.length === 0) return testsForPointers([], [], new Set());
+/** RCB-112: the tree-read half of `systemTests`, pulled out so a caller answering for MANY
+ * systems (the repo dashboard's coverage band) reads every test file in the repo exactly ONCE,
+ * not once per system. `known` is every repo-relative path (`listRepoFiles`); `testFiles` is only
+ * the subset `isTestFile` selected, each already read and import-resolved. */
+export interface TestCorpus {
+  testFiles: TestFileInput[];
+  known: ReadonlySet<string>;
+}
 
+export async function loadTestCorpus(root: string): Promise<TestCorpus> {
   const files = await listRepoFiles(root);
   const known = new Set(files);
   const testPaths = files.filter(isTestFile);
@@ -34,5 +41,17 @@ export async function systemTests(root: string, pointers: readonly string[]): Pr
     testFiles.push({ path, imports, text: read.text });
   }
 
+  return { testFiles, known };
+}
+
+/** `corpus`, when given, is used as-is (RCB-112: the dashboard loads it once for every system);
+ * omitted, this reads the tree itself — unchanged from before RCB-112. */
+export async function systemTests(
+  root: string,
+  pointers: readonly string[],
+  corpus?: TestCorpus,
+): Promise<SystemTests> {
+  if (pointers.length === 0) return testsForPointers([], [], new Set());
+  const { testFiles, known } = corpus ?? (await loadTestCorpus(root));
   return testsForPointers(pointers, testFiles, known);
 }

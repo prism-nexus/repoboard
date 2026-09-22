@@ -155,7 +155,11 @@ function useSystemTests(systemId: string, pointers: readonly string[]): SystemTe
 /** One `<li>` per pointer, per the wire contract: a non-null `tests` gives its count and file
  * list, a null `tests` with a `reason` gives the reason, otherwise `none`. */
 function testsLine(p: SystemTestsPayload['pointers'][number]): string {
-  if (p.tests !== null) return `${p.pointer} — ${p.tests.length}: ${p.tests.join(', ')}`;
+  if (p.tests !== null) {
+    return p.tests.length === 0
+      ? `${p.pointer} — none`
+      : `${p.pointer} — ${p.tests.length}: ${p.tests.join(', ')}`;
+  }
   if (p.reason !== null) return `${p.pointer} — ${p.reason}`;
   return `${p.pointer} — none`;
 }

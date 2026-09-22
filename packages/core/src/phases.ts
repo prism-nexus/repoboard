@@ -30,17 +30,25 @@ export type GateState =
  * `--task`'s close counts too); otherwise `blocked`. A gate that LOOKS like a card id
  * (`CARD_ID_SHAPE`) but names no card on this board is `blocked`, never a silent clear — the safe
  * direction: an unknown gate must never look free. Anything else is read as a free-text sentence,
- * always `blocked`, cleared only by removing the field by hand.
+ * `blocked`, cleared by removing the field by hand — OR, RCB-105: a card that itself sits in a
+ * `done: true` column reads its own gate as history, `clear` with `by: "<gate> — card done"`
+ * (a gate naming an already-clear card keeps today's `by` unchanged, e.g. `"RCB-9 (done)"`).
  */
 export function gateState(card: Card, cards: readonly Card[], config: BoardConfig): GateState {
   const gate = card.gate;
   if (gate === undefined) return { kind: 'none' };
+  const cardIsDone = findColumn(config, card.status)?.done === true;
   const target = cards.find((c) => c.id === gate);
   if (target) {
     const column = findColumn(config, target.status);
     if (column?.done === true || isDecided(target)) {
       return { kind: 'clear', by: `${target.id} (${target.status})` };
     }
+  }
+  if (cardIsDone) {
+    return { kind: 'clear', by: `${gate} — card done` };
+  }
+  if (target) {
     return { kind: 'blocked', reason: `blocked on ${target.id} (${target.status})` };
   }
   if (CARD_ID_SHAPE.test(gate)) {

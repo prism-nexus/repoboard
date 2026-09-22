@@ -71,7 +71,8 @@ export interface Card {
   /** RCB-68: a free short label (e.g. `PH.3`), sorted naturally, marking which step this is. */
   phase?: string;
   /** RCB-68: what blocks this card — a card id (clears when that card is done/decided) or a
-   * free-text sentence (cleared only by hand). See `phases.ts`'s `gateState`/`blockedReason`. */
+   * free-text sentence (cleared only by hand, or by the card itself reaching a done column
+   * (RCB-105)). See `phases.ts`'s `gateState`/`blockedReason`. */
   gate?: string;
   /** P8.1: an open or answered decision. `ask`/`decide` in `decisions.ts` are the only writers. */
   decision?: Decision;

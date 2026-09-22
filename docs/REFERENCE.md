@@ -604,7 +604,7 @@ plain URL for the primary) — every scoped fetch and the WS go through the one 
 - `repoboard serve [--root <dir>]... [--port 4242] [--open] [--no-fun] [--watch-cap 20000] [--sibling <name>=<url>]...`: `repoboard serve --open` — the dashboard on 127.0.0.1; `--root` repeats (RCB-43): the first is primary and opens immediately, later ones open lazily on first request, and `GET /api/repos` lists all of them
 
 `card list --json` row shape detail: (RCB-68: `parent`/`phase`/`gate` mirror the frontmatter,
-`blocked` is the computed reason or `null`); RCB-67: `size` is one of `S | M | L | XL` — S ≤2h ·
+`blocked` is the computed reason or `null`; RCB-105: a card that itself sits in a `done: true` column is never blocked — `gateState` reads its gate as history, `clear` with `by: "<gate> — card done"`, a gate naming an already-clear card keeping `"<id> (<status>)"` — so a finished step never drags its parent's rollup, lane head or chip); RCB-67: `size` is one of `S | M | L | XL` — S ≤2h ·
 M half a day · L days, investigate first · XL plan-sized — or `null`, shown as a chip on the card
 and sortable/filterable on the web board. On this repo's 31 cards, measured 2026-09-07: 2,529 B
 (table), 7,639 B (`--json`), 20,758 B (`--json --full`).

@@ -111,6 +111,90 @@ describe('gateState / blockedReason', () => {
       reason: 'blocked on RB-9 (done)',
     });
   });
+
+  it("a board whose columns have NO done:true column → a sentence gate never clears via the card's own done-looking status either", () => {
+    const noDone: BoardConfig = {
+      ...config,
+      columns: config.columns.map((c) => ({ ...c, done: undefined })),
+    };
+    const card = makeCard({ id: 'RB-1', status: 'done', gate: 'owner buys the domain' });
+    expect(gateState(card, [card], noDone)).toEqual({
+      kind: 'blocked',
+      reason: 'blocked: owner buys the domain',
+    });
+  });
+});
+
+describe('a gate on a DONE card is history (RCB-105)', () => {
+  const config = defaultBoardConfig(); // columns: backlog, decide, todo, doing, done{done:true}
+
+  it('sentence gate, card in done → clear "<sentence> — card done"; same card in todo → still blocked', () => {
+    const doneCard = makeCard({ id: 'RB-1', status: 'done', gate: 'owner buys the domain' });
+    expect(gateState(doneCard, [doneCard], config)).toEqual({
+      kind: 'clear',
+      by: 'owner buys the domain — card done',
+    });
+    expect(blockedReason(doneCard, [doneCard], config)).toBeNull();
+
+    const todoCard = makeCard({ id: 'RB-1', status: 'todo', gate: 'owner buys the domain' });
+    expect(gateState(todoCard, [todoCard], config)).toEqual({
+      kind: 'blocked',
+      reason: 'blocked: owner buys the domain',
+    });
+  });
+
+  it('id gate naming a todo card, this card in done → clear "RB-9 — card done"', () => {
+    const target = makeCard({ id: 'RB-9', status: 'todo' });
+    const card = makeCard({ id: 'RB-1', status: 'done', gate: 'RB-9' });
+    expect(gateState(card, [card, target], config)).toEqual({
+      kind: 'clear',
+      by: 'RB-9 — card done',
+    });
+    expect(blockedReason(card, [card, target], config)).toBeNull();
+  });
+
+  it('id gate naming a done card, this card in done → by = "RB-9 (done)" (unchanged shape)', () => {
+    const target = makeCard({ id: 'RB-9', status: 'done' });
+    const card = makeCard({ id: 'RB-1', status: 'done', gate: 'RB-9' });
+    expect(gateState(card, [card, target], config)).toEqual({
+      kind: 'clear',
+      by: 'RB-9 (done)',
+    });
+  });
+
+  it('id-shaped gate naming NO card, this card in done → clear "NOPE-1 — card done"; same card in todo → still blocked (no such card)', () => {
+    const doneCard = makeCard({ id: 'RB-1', status: 'done', gate: 'NOPE-1' });
+    expect(gateState(doneCard, [doneCard], config)).toEqual({
+      kind: 'clear',
+      by: 'NOPE-1 — card done',
+    });
+
+    const todoCard = makeCard({ id: 'RB-1', status: 'todo', gate: 'NOPE-1' });
+    expect(gateState(todoCard, [todoCard], config)).toEqual({
+      kind: 'blocked',
+      reason: 'blocked on NOPE-1 (no such card)',
+    });
+  });
+
+  it('rollup: PH.0 done + sentence gate, PH.1 backlog gates on PH.0 → blockedOn null, done 1 of 2', () => {
+    const parent = makeCard({ id: 'RCB-1' });
+    const ph0 = makeCard({
+      id: 'RCB-2',
+      parent: 'RCB-1',
+      phase: 'PH.0',
+      status: 'done',
+      gate: 'owner buys the domain', // before this change, this sentence would have set blockedOn
+    });
+    const ph1 = makeCard({
+      id: 'RCB-3',
+      parent: 'RCB-1',
+      phase: 'PH.1',
+      status: 'backlog',
+      gate: 'RCB-2', // gates on PH.0
+    });
+    const all = [parent, ph0, ph1];
+    expect(rollup(parent, all, config)).toEqual({ total: 2, done: 1, blockedOn: null });
+  });
 });
 
 describe('stepsOf', () => {

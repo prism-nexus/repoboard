@@ -185,13 +185,14 @@ describe('repoboard card', () => {
   it('RCB-68: list has NO BLOCKED column when nothing is blocked (byte-identical), has it when one card is', async () => {
     const root = await freshRepo({
       'RB-1.md': cardText('RB-1', 'todo', { title: 'First', assignee: 'a' }),
-      'RB-2.md': cardText('RB-2', 'done', { title: 'Second' }),
+      // RCB-105: the gated card sits in todo — a card in a done column reads its gate as history.
+      'RB-2.md': cardText('RB-2', 'todo', { title: 'Second' }),
     });
     const clean = await repoboard(root, 'card', 'list');
     expect(clean.out.split('\n')).toEqual([
       'ID    STATUS  ASSIGNEE  TITLE',
       'RB-1  todo    a         First',
-      'RB-2  done    -         Second',
+      'RB-2  todo    -         Second',
       '',
     ]);
 
@@ -201,7 +202,7 @@ describe('repoboard card', () => {
     expect(withBlocked.out.split('\n')).toEqual([
       'ID    STATUS  ASSIGNEE  BLOCKED                 TITLE',
       'RB-1  todo    a                                 First',
-      'RB-2  done    -         blocked on RB-1 (todo)  Second',
+      'RB-2  todo    -         blocked on RB-1 (todo)  Second',
       '',
     ]);
 

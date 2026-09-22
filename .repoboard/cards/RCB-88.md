@@ -1,7 +1,7 @@
 ---
 id: RCB-88
 title: "seat --up cannot refresh the seat's OWN standing bullet without --force (RCB-87 follow-up): a seat that lands a card mid-session and wants its SEATS line to say so hits the second-UP guard and must --force, which appends an audit block each time. Options: an --update flag that rewrites the body but keeps the stamp, or a session token (env REPOBOARD_SESSION) that lets the same session re-UP. Owner picks; until then the practice is restamp at stand-up and stand-down only."
-status: doing
+status: done
 priority: low
 size: S
 labels:
@@ -23,8 +23,10 @@ decision:
   decidedBy: web
   decidedAt: 2026-09-22T03:27:44Z
 created: 2026-09-22T03:03:22Z
-updated: 2026-09-22T03:31:03Z
+updated: 2026-09-22T06:21:14Z
 ---
+## Notes
+- 2026-09-22T06:21:14Z repoboard builder — Reconciled: 258656c verified by the coordinator; RCB-89 built on it. Closing.
 
 ## Log
 - 2026-09-22T03:08:26Z repoboard builder — moved backlog → decide
@@ -34,3 +36,4 @@ updated: 2026-09-22T03:31:03Z
 - 2026-09-22T03:27:44Z web — moved decide → backlog
 - 2026-09-22T03:27:57Z web — moved backlog → todo
 - 2026-09-22T03:31:03Z repoboard builder — moved todo → doing
+- 2026-09-22T06:21:14Z repoboard builder — moved doing → done

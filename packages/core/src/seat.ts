@@ -204,6 +204,64 @@ export function formatSeatBullet(
 }
 
 /**
+ * RCB-87: matches the first line of a bullet written by `formatSeatBullet` —
+ * `- **<name>: <UP|DOWN> <YYYY-MM-DD> <HH:MM>Z.**` — the trailing `.` and closing `**` optional
+ * (hand-written fpj bullets omit them), and the `<HH:MM>` half tolerated even when it is not all
+ * digits (`18:0xZ`), since that shape has to be recognised as "a stamp that fails to parse", not
+ * "not a seat bullet at all". No `$`/end anchor: everything after the stamp (the bullet's prose)
+ * is irrelevant to the match.
+ */
+const SEAT_BULLET_RE = /^-\s+\*\*([^*:]+):\s+(UP|DOWN)\s+(\S+)\s+(\S+?)Z\.?\*{0,2}/;
+const SEAT_STAMP_DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+const SEAT_STAMP_TIME_RE = /^\d{2}:\d{2}$/;
+
+/**
+ * RCB-87: pure — parses a SEATS bullet's own status and stamp, first line only (continuation
+ * lines are the bullet's prose, never the stamp). `null` when the first line is not a seat bullet
+ * at all (`SEAT_BULLET_RE` does not match — e.g. a plain `- Owner tasks elsewhere: …` bullet).
+ * `at` is `null` specifically when the bullet IS a seat bullet but its date or time half has a
+ * non-digit or is missing — a parse failure on the stamp, not on the bullet shape.
+ */
+export function parseSeatStamp(bullet: string): { status: 'UP' | 'DOWN'; at: Date | null } | null {
+  const firstLine = bullet.split('\n')[0] ?? '';
+  const m = SEAT_BULLET_RE.exec(firstLine);
+  if (!m) return null;
+  const status = m[2] as 'UP' | 'DOWN';
+  const date = m[3] ?? '';
+  const time = m[4] ?? '';
+  if (!SEAT_STAMP_DATE_RE.test(date) || !SEAT_STAMP_TIME_RE.test(time)) {
+    return { status, at: null };
+  }
+  const at = new Date(`${date}T${time}:00.000Z`);
+  return { status, at: Number.isNaN(at.getTime()) ? null : at };
+}
+
+/**
+ * RCB-87: pure — non-null iff `bullet` (the seat's own standing SEATS bullet, or `null` when it
+ * has none) parses as `UP` with a stamp, AND that stamp is within `windowMinutes` of `now`. A
+ * future `at` (clock skew) counts as a conflict too — `now - at` is then negative, still `<=` the
+ * window — same rule `presence.ts`'s `isActive` uses for a card's `updated`. `stamp` is rendered
+ * `YYYY-MM-DD HH:MMZ` from the PARSED `at` (not the raw bullet text), so it is always well-formed
+ * even though the caller only reaches this function when parsing already succeeded.
+ */
+export function seatUpConflict(
+  bullet: string | null,
+  now: Date,
+  windowMinutes: number,
+): { stamp: string; minutesAgo: number } | null {
+  if (bullet === null) return null;
+  const parsed = parseSeatStamp(bullet);
+  if (parsed?.status !== 'UP' || parsed.at === null) return null;
+  const diffMs = now.getTime() - parsed.at.getTime();
+  if (diffMs > windowMinutes * 60_000) return null;
+  const iso = toIso(parsed.at);
+  return {
+    stamp: `${iso.slice(0, 10)} ${iso.slice(11, 16)}Z`,
+    minutesAgo: Math.round(diffMs / 60_000),
+  };
+}
+
+/**
  * The cold-start bundle for one seat: its SEATS line, its own last log block, the coordinator's,
  * its next todo card, and the open decisions. A read only — nothing here writes or throws; a
  * cold seat on a fresh board (no STATE.md, no log history, no cards) is the normal case, and

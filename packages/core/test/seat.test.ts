@@ -7,10 +7,12 @@ import { describe, expect, it } from 'vitest';
 import {
   findSeatLine,
   formatSeatBullet,
+  parseSeatStamp,
   renderSeatBundle,
   replaceSeatBullet,
   type SeatBundle,
   seatBundle,
+  seatUpConflict,
 } from '../src/seat.js';
 import { SECTION_PLACEHOLDER } from '../src/state.js';
 import type { Card } from '../src/types.js';
@@ -562,5 +564,50 @@ describe('replaceSeatBullet / formatSeatBullet (RCB-58)', () => {
     );
     const replaced = replaceSeatBullet(THREE, 'builder', bullet);
     expect(findSeatLine(replaced, 'builder')).toBe(bullet);
+  });
+});
+
+describe('parseSeatStamp / seatUpConflict (RCB-87)', () => {
+  const NOW87 = new Date('2026-09-21T22:37:00Z');
+
+  it('(1) a formatted UP bullet 5 min old, window 30 -> conflict, minutesAgo 5', () => {
+    const at = new Date(NOW87.getTime() - 5 * 60_000);
+    const bullet = formatSeatBullet('ops', 'UP', 'watching things', at);
+    expect(parseSeatStamp(bullet)).toEqual({ status: 'UP', at });
+    expect(seatUpConflict(bullet, NOW87, 30)).toEqual({
+      stamp: '2026-09-21 22:32Z',
+      minutesAgo: 5,
+    });
+  });
+
+  it('(2) UP 31 min old, window 30 -> no conflict', () => {
+    const at = new Date(NOW87.getTime() - 31 * 60_000);
+    const bullet = formatSeatBullet('ops', 'UP', 'watching things', at);
+    expect(seatUpConflict(bullet, NOW87, 30)).toBeNull();
+  });
+
+  it('(3) DOWN 1 min old -> no conflict, --down is never guarded', () => {
+    const at = new Date(NOW87.getTime() - 60_000);
+    const bullet = formatSeatBullet('ops', 'DOWN', 'stood down', at);
+    expect(parseSeatStamp(bullet)).toEqual({ status: 'DOWN', at });
+    expect(seatUpConflict(bullet, NOW87, 30)).toBeNull();
+  });
+
+  it('(4) a stamp with a non-digit (18:0xZ) parses with at null; conflict null', () => {
+    const bullet = '- **ops: UP 2026-09-21 18:0xZ.** watching things';
+    expect(parseSeatStamp(bullet)).toEqual({ status: 'UP', at: null });
+    expect(seatUpConflict(bullet, NOW87, 30)).toBeNull();
+  });
+
+  it('(5) a non-seat bullet is not a seat bullet at all', () => {
+    expect(parseSeatStamp('- Owner tasks elsewhere: whatever')).toBeNull();
+  });
+
+  it('(6) a future stamp (clock skew) still counts as a conflict', () => {
+    const at = new Date(NOW87.getTime() + 5 * 60_000);
+    const bullet = formatSeatBullet('ops', 'UP', 'watching things', at);
+    const conflict = seatUpConflict(bullet, NOW87, 30);
+    expect(conflict).not.toBeNull();
+    expect(conflict?.stamp).toBe('2026-09-21 22:42Z');
   });
 });

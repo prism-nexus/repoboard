@@ -37,6 +37,7 @@ import {
   type Sibling,
   type Size,
   type StateSectionName,
+  seatUpConflict,
   serializeBoard,
   serializeCard,
   serializeLeases,
@@ -163,9 +164,11 @@ Usage:
   repoboard seat <name> [--json]       the cold-start bundle for one seat: its SEATS line, its last
                                         log block, the coordinator's, its next todo card, the open
                                         decisions — one command instead of the three-file ritual
-  repoboard seat <name> --up "<text>" | --down "<text>"
+  repoboard seat <name> --up "<text>" [--force] | --down "<text>"
                                         replace ONLY this seat's own SEATS bullet and restamp
-                                        STATE.md; appends the bullet if the seat has none
+                                        STATE.md; appends the bullet if the seat has none; --up
+                                        refuses a second UP inside activeWindowMinutes unless
+                                        --force (RCB-87, audited in the log)
   repoboard check [--json] [--strict]  exit 0 "ok" / 1 with one line per finding: stale-state
                                         (also reads board.yml's logDir, P8.6 — an extra daily-log
                                         directory alongside .repoboard/log/, read-only),
@@ -1196,10 +1199,13 @@ async function cmdSeat(args: string[], io: CliIO): Promise<number> {
     json: { type: 'boolean', default: false },
     up: { type: 'string' },
     down: { type: 'string' },
+    force: { type: 'boolean', default: false },
   });
   const [name] = positionals;
   if (!name)
-    throw new UserError('usage: repoboard seat <name> [--json] [--up "<text>" | --down "<text>"]');
+    throw new UserError(
+      'usage: repoboard seat <name> [--json] [--up "<text>" [--force] | --down "<text>"]',
+    );
   const root = await requireRoot(io);
   const store = await openStore(root, { watch: false, now: io.now });
 
@@ -1214,6 +1220,33 @@ async function cmdSeat(args: string[], io: CliIO): Promise<number> {
     if (text.trim().length === 0) {
       throw new UserError('seat --up/--down needs the bullet text');
     }
+
+    // RCB-87: --up refuses a second UP inside activeWindowMinutes unless --force. --down is never
+    // guarded (the rule only protects against two sessions both believing they hold the seat).
+    if (status === 'UP') {
+      const now = io.now?.() ?? new Date();
+      const seatsSection = store.state()?.sections.seats ?? null;
+      const standingLine = seatsSection !== null ? findSeatLine(seatsSection, name) : null;
+      const conflict = seatUpConflict(standingLine, now, store.config.activeWindowMinutes);
+      if (conflict) {
+        const standingBullet = standingLine ?? '';
+        if (!values.force) {
+          (io.stderr ?? io.stdout).write(
+            `seat ${name} is already UP (stamped ${conflict.stamp}, ${conflict.minutesAgo} min ` +
+              `ago, window ${store.config.activeWindowMinutes} min):\n` +
+              `  ${standingBullet}\n` +
+              'another session holds this seat. If it is dead, re-run with --force (audited in the log).\n',
+          );
+          return 1;
+        }
+        await store.appendRepoLog(
+          name,
+          standingBullet,
+          'seat --up --force over a standing UP bullet',
+        );
+      }
+    }
+
     const res = await store.setSeatBullet(name, status, text);
     if (!res.ok) throw new UserError(res.error);
     // RCB-83: keep .repoboard/local/ in step with every SEATS write — a no-op when there is no

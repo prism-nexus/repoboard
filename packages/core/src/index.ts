@@ -119,9 +119,11 @@ export type { NextCardReason, SeatBundle, SeatBundleInput } from './seat.js';
 export {
   findSeatLine,
   formatSeatBullet,
+  parseSeatStamp,
   renderSeatBundle,
   replaceSeatBullet,
   seatBundle,
+  seatUpConflict,
 } from './seat.js';
 export type {
   CheckInput,

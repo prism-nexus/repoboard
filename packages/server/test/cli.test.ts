@@ -2179,6 +2179,74 @@ describe('repoboard seat --up/--down (RCB-58)', () => {
     expect(res.code).toBe(1);
     expect(res.err).toMatch(/needs the bullet text/);
   });
+
+  describe('--up refuses a second UP inside activeWindowMinutes (RCB-87)', () => {
+    it('(7) a second --up 5 min later is refused; STATE.md still carries the first bullet', async () => {
+      const root = await freshRepo({});
+      const first = await repoboardWithClock(root, NOW, 'seat', 'ops', '--up', 'a');
+      expect(first.code).toBe(0);
+
+      const fiveLater = new Date(NOW.getTime() + 5 * 60_000);
+      const second = await repoboardWithClock(root, fiveLater, 'seat', 'ops', '--up', 'b');
+      expect(second.code).toBe(1);
+      expect(second.err).toMatch(/already UP/);
+
+      const state = await readFile(join(root, '.repoboard', 'STATE.md'), 'utf8');
+      expect(state).toContain('a');
+      expect(state).not.toContain('- **ops: UP 2026-09-02 22:46Z.** b');
+    });
+
+    it('(8) a second --up 31 min later is accepted (stale UP, no guard)', async () => {
+      const root = await freshRepo({});
+      const first = await repoboardWithClock(root, NOW, 'seat', 'ops', '--up', 'a');
+      expect(first.code).toBe(0);
+
+      const laterStill = new Date(NOW.getTime() + 31 * 60_000);
+      const second = await repoboardWithClock(root, laterStill, 'seat', 'ops', '--up', 'b');
+      expect(second.code).toBe(0);
+
+      const state = await readFile(join(root, '.repoboard', 'STATE.md'), 'utf8');
+      expect(state).toContain('b');
+    });
+
+    it('(9) --force over a standing UP: accepted, restamps, and audits the old bullet in the log', async () => {
+      const root = await freshRepo({});
+      const first = await repoboardWithClock(root, NOW, 'seat', 'ops', '--up', 'a');
+      expect(first.code).toBe(0);
+
+      const fiveLater = new Date(NOW.getTime() + 5 * 60_000);
+      const second = await repoboardWithClock(
+        root,
+        fiveLater,
+        'seat',
+        'ops',
+        '--up',
+        'b',
+        '--force',
+      );
+      expect(second.code).toBe(0);
+
+      const state = await readFile(join(root, '.repoboard', 'STATE.md'), 'utf8');
+      expect(state).toContain('- **ops: UP 2026-09-02 22:46Z.** b');
+
+      const last = await repoboardWithClock(root, fiveLater, 'log', '--last', 'ops');
+      expect(last.code).toBe(0);
+      expect(last.out).toContain('seat --up --force over a standing UP bullet');
+      expect(last.out).toContain('- **ops: UP 2026-09-02 22:41Z.** a');
+    });
+
+    it('(10) --down right after an UP is accepted — --down is never guarded', async () => {
+      const root = await freshRepo({});
+      const up = await repoboardWithClock(root, NOW, 'seat', 'ops', '--up', 'a');
+      expect(up.code).toBe(0);
+
+      const down = await repoboardWithClock(root, NOW, 'seat', 'ops', '--down', 'x');
+      expect(down.code).toBe(0);
+
+      const state = await readFile(join(root, '.repoboard', 'STATE.md'), 'utf8');
+      expect(state).toContain('- **ops: DOWN 2026-09-02 22:41Z.** x');
+    });
+  });
 });
 
 describe('repoboard check', () => {

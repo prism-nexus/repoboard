@@ -182,7 +182,11 @@ Usage:
                                         local-unsynced (warning; blocks only with --strict —
                                         uncommitted changes or unpushed commits in
                                         .repoboard/local/), local-no-remote (informational, never
-                                        fails — .repoboard/local/ has no origin, RCB-83)
+                                        fails — .repoboard/local/ has no origin, RCB-83),
+                                        future-stamp (warning; blocks only with --strict — a log
+                                        block's header time is more than a minute ahead of the
+                                        clock, so it was ignored for stale-state; hand-typed header
+                                        or clock skew, RCB-90)
   repoboard local init [--remote <url>]
                                         create .repoboard/local/ — a gitignored, separate git repo
                                         for machine facts (scaffolds RIG.md, adds the exact line
@@ -376,6 +380,7 @@ function nextAgentPromptText(): string {
     '2. Take the card: `repoboard card move <id> doing --as <seat>`; log as you go',
     '   (`repoboard log --as <seat>`); `repoboard check` before you start and before you stop.',
     '3. Stand down: log block first, then `repoboard seat <seat> --down "<≤3 lines>"` LAST.',
+    '   Blocks come from `repoboard log --as <seat>` (the CLI stamps them); never hand-type a `#####` header.',
     '',
   ].join('\n');
 }

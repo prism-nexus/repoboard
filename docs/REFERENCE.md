@@ -268,6 +268,7 @@ values, subagent policy, the per-landing gate — live in one place, written onc
 | `needs-decision` | info | count of cards with an open decision; only emitted when > 0 | never |
 | `needs-ask` | warning | a card in a `decision: true` column with no OPEN ask — never asked, or already decided and moved back | only with `--strict` |
 | `cost-over-budget` | error | the root `CLAUDE.md` exceeds its budget (default 8192 B, or `board.yml`'s `claudeMdBudgetBytes`) — P8.4, §4 | yes |
+| `future-stamp` | warning | a log block's `#####` header time is more than 60 s ahead of `now` — hand-typed or clock-skewed, and ignored for `stale-state` rather than letting it wedge every other seat's `check` — RCB-90 | only with `--strict` |
 
 Findings are pure data (`{kind, level, message}`); `exitCodeForFindings(findings, strict)` is the
 one function every surface (CLI, HTTP, MCP) calls to turn them into the 0/1 contract, so the

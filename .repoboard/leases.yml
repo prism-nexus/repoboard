@@ -1,2 +1,6 @@
-leases: []
+leases:
+  - resource: RCB-116
+    holder: repoboard builder
+    since: 2026-09-22T23:09:00Z
+    note: gate ledger tie + null failed
 windows: []

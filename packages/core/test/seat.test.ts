@@ -21,6 +21,7 @@ import {
   seatUpConflict,
 } from '../src/seat.js';
 import { SECTION_PLACEHOLDER } from '../src/state.js';
+import type { SystemsSummary } from '../src/systems-surface.js';
 import type { Card } from '../src/types.js';
 
 const NOW = new Date('2026-09-18T21:00:00Z');
@@ -598,6 +599,7 @@ describe('renderSeatBundle: placeholders for every missing part', () => {
       rig: null,
       inFlight: null,
       owes: null,
+      systems: null,
     };
     const rendered = renderSeatBundle(bundle, NOW);
     expect(rendered).toContain('## In flight / owes');
@@ -630,6 +632,7 @@ describe('renderSeatBundle: placeholders for every missing part', () => {
       rig: null,
       inFlight: null,
       owes: null,
+      systems: null,
     };
     const rendered = renderSeatBundle(bundle, NOW);
     expect(rendered).toContain('RCB-1  todo  do this');
@@ -954,5 +957,68 @@ describe('RCB-89 in-flight/owes + listSeats', () => {
       expect(rendered).toContain('in-flight: none');
       expect(rendered).toContain('owes: RCB-1');
     });
+  });
+});
+
+describe('systems line (RCB-97)', () => {
+  const summary: SystemsSummary = {
+    systems: 3,
+    connections: 2,
+    envs: 'dev+prod',
+    line: 'Systems: 3 systems, 2 connections, dev+prod — repoboard systems',
+  };
+
+  it('seatBundle carries input.systems through, null when absent', () => {
+    const withSummary = seatBundle({
+      name: 'builder',
+      now: NOW,
+      seatsSection: null,
+      ownBlock: null,
+      coordinatorBlock: null,
+      cards: [],
+      systems: summary,
+    });
+    expect(withSummary.systems).toEqual(summary);
+
+    const without = seatBundle({
+      name: 'builder',
+      now: NOW,
+      seatsSection: null,
+      ownBlock: null,
+      coordinatorBlock: null,
+      cards: [],
+    });
+    expect(without.systems).toBeNull();
+  });
+
+  it('with a summary: exactly one line, starting "Systems:", right after "owes:"', () => {
+    const bundle = seatBundle({
+      name: 'builder',
+      now: NOW,
+      seatsSection: null,
+      ownBlock: null,
+      coordinatorBlock: null,
+      cards: [],
+      systems: summary,
+    });
+    const rendered = renderSeatBundle(bundle, NOW);
+    const lines = rendered.split('\n');
+    const owesIdx = lines.findIndex((l) => l.startsWith('owes:'));
+    expect(owesIdx).toBeGreaterThanOrEqual(0);
+    expect(lines[owesIdx + 1]).toBe(summary.line);
+    expect(lines.filter((l) => l.startsWith('Systems:'))).toEqual([summary.line]);
+  });
+
+  it('without a summary: output contains no "Systems:" line', () => {
+    const bundle = seatBundle({
+      name: 'builder',
+      now: NOW,
+      seatsSection: null,
+      ownBlock: null,
+      coordinatorBlock: null,
+      cards: [],
+    });
+    const rendered = renderSeatBundle(bundle, NOW);
+    expect(rendered).not.toContain('Systems:');
   });
 });

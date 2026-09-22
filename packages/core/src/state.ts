@@ -211,7 +211,9 @@ export interface Finding {
     | 'cost-over-budget'
     | 'local-unsynced'
     | 'local-no-remote'
-    | 'future-stamp';
+    | 'future-stamp'
+    | 'systems-invalid'
+    | 'systems-stale';
   level: FindingLevel;
   message: string;
 }
@@ -239,6 +241,11 @@ export interface CheckInput {
    * when there is no local layer at all — an unconfigured local layer is inert, not dangerous, so
    * no finding fires for it. */
   local?: { isRepo: boolean; hasRemote: boolean; dirty: boolean; ahead: number | null } | null;
+  /** RCB-97: `.repoboard/systems.yml`'s parse errors and stale detected-row ids, gathered (with
+   * I/O) by the caller — core stays I/O-free (§0.5). `null`/absent when the caller gathered
+   * nothing (no systems.yml at all, or it gathered no stale check) — an unconfigured systems.yml
+   * is inert, not dangerous, so no finding fires for it. */
+  systems?: { errors: readonly string[]; stale: readonly string[] } | null;
 }
 
 /**
@@ -254,6 +261,34 @@ export function costFinding(report: CostReport | null | undefined): Finding | nu
     level: 'error',
     message: `cost-over-budget: CLAUDE.md ${report.claudeMdBytes} B > budget ${report.budget} B`,
   };
+}
+
+/**
+ * RCB-97 (plan §3.3): error-grade for an invalid file — "a file that will not parse is worse than
+ * none" (§3.2) — warning-grade for a stale detected row. `null`/absent `input.systems` is inert
+ * (§3.1: unconfigured yields nothing, never a finding); each half fires independently of the
+ * other, so a file with only stale rows (no parse errors) still reports them.
+ */
+export function systemsFindings(systems: CheckInput['systems']): Finding[] {
+  if (!systems) return [];
+  const findings: Finding[] = [];
+  if (systems.errors.length > 0) {
+    const k = systems.errors.length;
+    const more = k > 1 ? ` (+${k - 1} more)` : '';
+    findings.push({
+      kind: 'systems-invalid',
+      level: 'error',
+      message: `systems-invalid: .repoboard/systems.yml: ${systems.errors[0]}${more}`,
+    });
+  }
+  if (systems.stale.length > 0) {
+    findings.push({
+      kind: 'systems-stale',
+      level: 'warning',
+      message: `systems-stale: ${systems.stale.length} detected row(s) no longer yielded by their source: ${systems.stale.join(', ')}`,
+    });
+  }
+  return findings;
 }
 
 /** A block stamped further ahead of `now` than this is a hand-typed or clock-skewed header, not a
@@ -424,6 +459,8 @@ export function checkFindings(input: CheckInput): Finding[] {
 
   const cf = costFinding(input.cost);
   if (cf) findings.push(cf);
+
+  findings.push(...systemsFindings(input.systems));
 
   return findings;
 }

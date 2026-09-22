@@ -322,3 +322,27 @@ describe('summarizeCost / formatCostTable — a frozen entry is billed out of th
     expect(formatCostTable(report)).not.toContain('frozen');
   });
 });
+
+describe("summarizeCost / formatCostTable — a 'systems' entry (RCB-97: .repoboard/systems.yml)", () => {
+  it('bills into totalBytes like root/agents, not frozenBytes', () => {
+    const report = summarizeCost([{ file: '.repoboard/systems.yml', bytes: 512, why: 'systems' }], {
+      budget: 8192,
+      claudeMdBytes: 100,
+      mcpServers: [],
+    });
+    expect(report.totalBytes).toBe(512);
+    expect(report.frozenBytes).toBe(0);
+  });
+
+  it('formatCostTable shows the file with why "systems"', () => {
+    const report = summarizeCost([{ file: '.repoboard/systems.yml', bytes: 512, why: 'systems' }], {
+      budget: 8192,
+      claudeMdBytes: 100,
+      mcpServers: [],
+    });
+    const text = formatCostTable(report);
+    expect(text).toContain('.repoboard/systems.yml');
+    expect(text).toContain('systems');
+    expect(text).toContain(`total  512  ≈${approxTokens(512)}`);
+  });
+});

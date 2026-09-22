@@ -2296,6 +2296,7 @@ describe('repoboard seat', () => {
     const parsed = JSON.parse(res.out) as Record<string, unknown>;
     // RCB-89: SeatBundle gained inFlight/owes — updated here, per the brief, rather than left stale.
     // RCB-103: SeatBundle gained nextCardStep — updated here too, same reason.
+    // RCB-97: SeatBundle gained systems (the one-line summary) — updated here, same reason.
     expect(Object.keys(parsed).sort()).toEqual(
       [
         'coordinatorBlock',
@@ -2309,6 +2310,7 @@ describe('repoboard seat', () => {
         'ownBlock',
         'rig',
         'seatsLine',
+        'systems',
       ].sort(),
     );
     expect(parsed.name).toBe('builder');

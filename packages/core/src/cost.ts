@@ -11,10 +11,12 @@
  * (§0.5). `packages/server/src/cost.ts` does the `stat`/`readFile` and hands entries here.
  */
 
-/** The four categories `repoboard cost`'s table names in its WHY column (locked decision 2; RCB-91
- * adds `'frozen'` — a linked path whose CLAUDE.md line says FROZEN, billed separately and left out
- * of the total: a cold agent obeying CLAUDE.md never loads it whole). */
-export type CostWhy = 'root' | 'agents' | 'linked from CLAUDE.md' | 'frozen';
+/** The categories `repoboard cost`'s table names in its WHY column (locked decision 2; RCB-91 adds
+ * `'frozen'` — a linked path whose CLAUDE.md line says FROZEN, billed separately and left out of
+ * the total: a cold agent obeying CLAUDE.md never loads it whole; RCB-97 adds `'systems'` —
+ * `.repoboard/systems.yml`, billed into the ordinary total like `'root'`/`'agents'`, never
+ * frozen). */
+export type CostWhy = 'root' | 'agents' | 'linked from CLAUDE.md' | 'frozen' | 'systems';
 
 export interface CostEntry {
   /** Repo-relative path (or, for a variant that is conventionally root-only, its bare name). */

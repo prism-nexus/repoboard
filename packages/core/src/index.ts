@@ -168,6 +168,7 @@ export {
   SECTION_PLACEHOLDER,
   setStateSection,
   splitLandings,
+  systemsFindings,
   trimLandings,
 } from './state.js';
 export type {
@@ -221,6 +222,13 @@ export {
   toSystemId,
   workspaceGlobs,
 } from './systems-detect.js';
+export type { SystemsEnvs, SystemsSummary } from './systems-surface.js';
+export {
+  formatSystemRow,
+  formatSystemsTable,
+  SYSTEMS_ROW_MAX_BYTES,
+  systemsSummary,
+} from './systems-surface.js';
 export { toIso } from './time.js';
 export type {
   CardPatch,

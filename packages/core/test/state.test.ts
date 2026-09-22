@@ -18,6 +18,7 @@ import {
   SECTION_PLACEHOLDER,
   setStateSection,
   splitLandings,
+  systemsFindings,
   trimLandings,
 } from '../src/state.js';
 import type { Card, LeasesDoc } from '../src/types.js';
@@ -915,6 +916,86 @@ describe('exitCodeForFindings', () => {
     const findings = [{ kind: 'needs-decision', level: 'info', message: 'x' } as const];
     expect(exitCodeForFindings(findings, false)).toBe(0);
     expect(exitCodeForFindings(findings, true)).toBe(0);
+  });
+});
+
+describe('systems findings (RCB-97)', () => {
+  const config = defaultBoardConfig();
+  const base = {
+    state: stateAt('2026-09-17T21:00:00Z'),
+    logs: [],
+    cards: [],
+    config,
+    leases: emptyLeases(),
+    now: NOW,
+  };
+
+  it('input.systems absent — no systems-* finding', () => {
+    const findings = checkFindings(base);
+    expect(findings.some((f) => f.kind === 'systems-invalid' || f.kind === 'systems-stale')).toBe(
+      false,
+    );
+  });
+
+  it('input.systems null — no systems-* finding (unconfigured is inert)', () => {
+    const findings = checkFindings({ ...base, systems: null });
+    expect(findings.some((f) => f.kind === 'systems-invalid' || f.kind === 'systems-stale')).toBe(
+      false,
+    );
+  });
+
+  it('1 parse error — exact message, error level', () => {
+    const findings = systemsFindings({ errors: ['bad row'], stale: [] });
+    expect(findings).toEqual([
+      {
+        kind: 'systems-invalid',
+        level: 'error',
+        message: 'systems-invalid: .repoboard/systems.yml: bad row',
+      },
+    ]);
+  });
+
+  it('1 parse error via checkFindings — exitCodeForFindings 1 without --strict', () => {
+    const findings = checkFindings({ ...base, systems: { errors: ['bad row'], stale: [] } });
+    expect(findings).toContainEqual({
+      kind: 'systems-invalid',
+      level: 'error',
+      message: 'systems-invalid: .repoboard/systems.yml: bad row',
+    });
+    expect(exitCodeForFindings(findings, false)).toBe(1);
+  });
+
+  it('3 parse errors — message names only the first, "(+2 more)" for the rest', () => {
+    const findings = systemsFindings({ errors: ['first', 'second', 'third'], stale: [] });
+    expect(findings).toEqual([
+      {
+        kind: 'systems-invalid',
+        level: 'error',
+        message: 'systems-invalid: .repoboard/systems.yml: first (+2 more)',
+      },
+    ]);
+  });
+
+  it('2 stale detected ids — exact warning message', () => {
+    const findings = systemsFindings({ errors: [], stale: ['worker', 'sendgrid'] });
+    expect(findings).toEqual([
+      {
+        kind: 'systems-stale',
+        level: 'warning',
+        message:
+          'systems-stale: 2 detected row(s) no longer yielded by their source: worker, sendgrid',
+      },
+    ]);
+  });
+
+  it('stale-only via checkFindings — exit 0 without --strict, 1 with --strict', () => {
+    const findings = checkFindings({
+      ...base,
+      systems: { errors: [], stale: ['worker', 'sendgrid'] },
+    });
+    expect(findings.some((f) => f.kind === 'systems-stale')).toBe(true);
+    expect(exitCodeForFindings(findings, false)).toBe(0);
+    expect(exitCodeForFindings(findings, true)).toBe(1);
   });
 });
 

@@ -9,6 +9,7 @@ import { needsDecision } from './decisions.js';
 import { blockedReason, gateState, stepsOf } from './phases.js';
 import { formatLogBlock, type LogBlock } from './repolog.js';
 import { ownerQueueLine } from './state.js';
+import type { SystemsSummary } from './systems-surface.js';
 import { toIso } from './time.js';
 import type { BoardConfig, Card } from './types.js';
 
@@ -27,6 +28,9 @@ export interface SeatBundleInput {
   /** RCB-103: board config for `findColumn`/`blockedReason` against — `defaultBoardConfig()` when
    *  absent, so every existing caller/test (no phases in play) keeps working unchanged. */
   config?: BoardConfig;
+  /** RCB-97: `systemsSummary(...)`, gathered by the caller — `null`/absent when there is no
+   *  systems.yml to summarise (§3.1: unconfigured is inert — the line is simply omitted). */
+  systems?: SystemsSummary | null;
 }
 
 /** Which rule picked `nextCard`, so the render (and a reader) can say so instead of guessing. */
@@ -65,6 +69,9 @@ export interface SeatBundle {
   inFlight: string | null;
   /** RCB-89: `parseSeatFields(seatsLine)` when `seatsLine` is non-null, else `null`. */
   owes: string | null;
+  /** RCB-97: `input.systems ?? null` — `repoboard seat`'s one Systems line, a pointer not the
+   *  table (§3.3: O3, standing cost). */
+  systems: SystemsSummary | null;
 }
 
 const escapeRegExp = (s: string): string => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -498,6 +505,7 @@ export function seatBundle(input: SeatBundleInput): SeatBundle {
     rig: input.rig ?? null,
     inFlight: fields.inFlight,
     owes: fields.owes,
+    systems: input.systems ?? null,
   };
 }
 
@@ -514,7 +522,9 @@ export function renderSeatBundle(b: SeatBundle, now: Date): string {
   lines.push(`# seat ${b.name} — ${toIso(now)}`, '');
   lines.push('## In flight / owes');
   lines.push(`in-flight: ${b.inFlight ?? '(none recorded)'}`);
-  lines.push(`owes: ${b.owes ?? '(none recorded)'}`, '');
+  lines.push(`owes: ${b.owes ?? '(none recorded)'}`);
+  if (b.systems !== null) lines.push(b.systems.line);
+  lines.push('');
 
   lines.push('## SEATS line');
   lines.push(b.seatsLine ?? `(no SEATS line mentions ${b.name})`, '');

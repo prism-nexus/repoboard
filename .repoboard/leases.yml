@@ -1,6 +1,2 @@
-leases:
-  - resource: RCB-109
-    holder: repoboard builder
-    since: 2026-09-22T17:48:07Z
-    note: RCB-109 Flow drawer
+leases: []
 windows: []

@@ -2,6 +2,7 @@
 id: RCB-98
 title: "PH.4 Flow view: third top-level view, rows by layer, dev|prod|both switch, one-env dashes, none-note, drawer with pointers + backlinks; bundle delta ≤ 15 KB"
 status: doing
+assignee: repoboard builder
 size: L
 labels:
   - web
@@ -11,8 +12,9 @@ parent: RCB-80
 phase: PH.4
 gate: RCB-97
 created: 2026-09-22T03:53:07Z
-updated: 2026-09-22T08:16:03Z
+updated: 2026-09-22T08:33:23Z
 ---
 
 ## Log
 - 2026-09-22T08:16:03Z repoboard builder — moved backlog → doing
+- 2026-09-22T08:33:23Z coordinator — updated assignee

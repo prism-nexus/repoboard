@@ -1,6 +1,2 @@
-leases:
-  - resource: RCB-108
-    holder: repoboard builder
-    since: 2026-09-22T23:15:33Z
-    note: plan phase order + WIP parents
+leases: []
 windows: []

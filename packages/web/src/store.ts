@@ -143,6 +143,13 @@ export interface Store {
    */
   archiveDone(): Promise<void>;
   /**
+   * RCB-111: the Flow view's "Plan the systems map" confirm — `POST /api/systems/plan`. Shaped
+   * like `archiveDone`: toasts on failure with the server's `error`. On success (201) selects the
+   * new parent card and switches to the board, so the owner lands on what was just created;
+   * never resolves to a rejection.
+   */
+  planSystemsMap(): Promise<boolean>;
+  /**
    * RCB-34/P7.3: `PATCH /api/board` with the WHOLE new column list (a replace, like every list
    * in `CardPatch`). Modelled on `archiveDone`: toasts on failure, and on success does NOT set
    * `config` from the response — the WS `config` broadcast the write triggers is the only thing
@@ -465,6 +472,31 @@ export function createStore(factory: TransportFactory, opts: StoreOptions = {}):
       const data = (await res.json()) as { archived: string[] };
       const n = data.archived.length;
       toast(n === 0 ? 'Nothing to archive' : `Archived ${n} card${n === 1 ? '' : 's'}`);
+    },
+    async planSystemsMap() {
+      if (typeof fetch !== 'function') return false;
+      let res: Response;
+      try {
+        res = await fetch(apiPath('/api/systems/plan', repoKey), {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ actor: 'web' }),
+        });
+      } catch (e) {
+        toast(`Plan systems map failed: ${e instanceof Error ? e.message : String(e)}`);
+        return false;
+      }
+      if (!res.ok) {
+        const body: unknown = await res.json().catch(() => ({}));
+        const message =
+          body && typeof body === 'object' && 'error' in body ? String(body.error) : res.status;
+        toast(`Plan systems map failed: ${message}`);
+        return false;
+      }
+      const data = (await res.json()) as { parent: Card; steps: Card[] };
+      toast(`Created ${data.parent.id} + 3 steps`);
+      set({ selectedId: data.parent.id, view: 'board' });
+      return true;
     },
     async saveColumns(columns) {
       if (typeof fetch !== 'function') return false;

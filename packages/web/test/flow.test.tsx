@@ -170,11 +170,12 @@ const NONE_PROD = () => parsedDoc(NONE_PROD_YML);
 function openFlow(
   systems: { doc: SystemsDoc | null; errors: string[]; exists: boolean },
   cards = [card('RB-1', 'todo')],
+  hasBoard = true,
 ): { store: Store } {
   const store = testStore();
   store.dispatch({
     type: 'snapshot',
-    board: { config: defaultBoardConfig(), cards },
+    board: { config: defaultBoardConfig(), cards, hasBoard },
     repo: null,
     systems,
   });
@@ -332,5 +333,48 @@ describe('Flow view (RCB-98)', () => {
     expect(within(drawer).getAllByText('api', { selector: 'strong' })).toHaveLength(3);
     expect(within(drawer).getAllByText(/^via /)).toHaveLength(3);
     expect(drawer).toHaveTextContent('hand: owner');
+  });
+
+  it('8. no systems.yml + hasBoard: the "Plan the systems map" button confirms inline, then creates via POST /api/systems/plan', async () => {
+    const fetchMock = stubFetch({
+      '/api/systems/plan': { parent: card('RB-9', 'todo'), steps: [] },
+    });
+    const { store } = openFlow(
+      { doc: null, errors: [], exists: false },
+      [card('RB-1', 'todo')],
+      true,
+    );
+    expect(screen.getByTestId('flow-no-file')).toBeInTheDocument();
+    const planButton = screen.getByTestId('flow-plan');
+    expect(planButton).toHaveTextContent('Plan the systems map');
+
+    fireEvent.click(planButton);
+    const confirm = screen.getByTestId('flow-plan-confirm');
+    expect(confirm).toHaveTextContent('Create 4 cards');
+    expect(fetchMock).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+    expect(screen.queryByTestId('flow-plan-confirm')).toBeNull();
+    expect(screen.getByTestId('flow-plan')).toBeInTheDocument();
+    expect(fetchMock).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByTestId('flow-plan'));
+    fireEvent.click(screen.getByRole('button', { name: 'Create 4 cards' }));
+    await screen.findByTestId('board');
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/api/systems/plan',
+      expect.objectContaining({ method: 'POST' }),
+    );
+    expect(store.getState().view).toBe('board');
+    expect(store.getState().selectedId).toBe('RB-9');
+  });
+
+  it('9. CONTROL: no systems.yml + no board offers no "Plan the systems map" button', () => {
+    openFlow({ doc: null, errors: [], exists: false }, [card('RB-1', 'todo')], false);
+    expect(screen.getByTestId('flow-no-file')).toBeInTheDocument();
+    expect(screen.queryByTestId('flow-plan')).toBeNull();
+    expect(screen.queryByTestId('flow-plan-confirm')).toBeNull();
   });
 });

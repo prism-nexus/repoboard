@@ -18,7 +18,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { RefsList } from '../components/RefsList.jsx';
 import { useBoardState, useStore } from '../hooks.js';
 import { apiPath } from '../repo-key.js';
-import type { FlowEnv } from '../store.js';
+import type { FlowEnv, State } from '../store.js';
 
 const ENVS: readonly FlowEnv[] = ['dev', 'prod', 'both'];
 
@@ -319,10 +319,21 @@ function Diagram({ doc, env, selectedSystem, onSelect }: DiagramProps) {
   );
 }
 
+/** RCB-111: the confirm's `<repoName>` — `state.repos`' entry for `repoKey ?? repos.primary`,
+ * or `'this'` when repos have not loaded yet (mirrors the rest of the store's "absent means
+ * inert, never a crash" reasoning). */
+function planRepoName(repos: State['repos'], repoKey: State['repoKey']): string {
+  if (!repos) return 'this';
+  const key = repoKey ?? repos.primary;
+  return repos.repos.find((r) => r.key === key)?.name ?? 'this';
+}
+
 export function FlowView() {
   const store = useStore();
-  const { systems, flowEnv, cards } = useBoardState();
+  const { systems, flowEnv, cards, hasBoard, repos, repoKey } = useBoardState();
   const [selectedSystem, setSelectedSystem] = useState<string | null>(null);
+  const [planConfirming, setPlanConfirming] = useState(false);
+  const [planPending, setPlanPending] = useState(false);
 
   if (systems === null) {
     return (
@@ -362,9 +373,43 @@ export function FlowView() {
       </div>
       <div className="flow__canvas">
         {!systems.exists ? (
-          <p className="flow-note" data-testid="flow-no-file">
-            {systemsSummary(null, []).line}
-          </p>
+          <>
+            <p className="flow-note" data-testid="flow-no-file">
+              {systemsSummary(null, []).line}
+            </p>
+            {hasBoard ? (
+              planConfirming ? (
+                <div data-testid="flow-plan-confirm">
+                  <p className="muted">
+                    {`Create 4 cards on the ${planRepoName(repos, repoKey)} board: a parent and three steps (detect → hand-correct → connect)?`}
+                  </p>
+                  <button
+                    type="button"
+                    className="toggle"
+                    disabled={planPending}
+                    onClick={() => {
+                      setPlanPending(true);
+                      void store.planSystemsMap().finally(() => setPlanPending(false));
+                    }}
+                  >
+                    Create 4 cards
+                  </button>
+                  <button type="button" className="toggle" onClick={() => setPlanConfirming(false)}>
+                    Cancel
+                  </button>
+                </div>
+              ) : (
+                <button
+                  type="button"
+                  className="toggle"
+                  data-testid="flow-plan"
+                  onClick={() => setPlanConfirming(true)}
+                >
+                  Plan the systems map
+                </button>
+              )
+            ) : null}
+          </>
         ) : doc === null ? (
           <div className="flow-errors" data-testid="flow-errors">
             {systems.errors.map((e) => (

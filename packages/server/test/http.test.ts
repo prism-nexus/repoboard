@@ -1600,3 +1600,64 @@ describe('cost over HTTP (P8.4)', () => {
     expect(((await json(res)) as { claudeMdBytes: number }).claudeMdBytes).toBe(50);
   });
 });
+
+describe('POST /api/systems/plan (RCB-111)', () => {
+  const MINIMAL_SYSTEMS_YML = `environments:
+  dev: { note: null }
+  prod: { note: null }
+systems: []
+connections: []
+`;
+
+  it('201s a dry-run detect turned into a parent + three PH.1..PH.3 steps; writes no systems.yml', async () => {
+    const r = await rig({});
+    const res = await fetch(`${r.url}/api/systems/plan`, {
+      method: 'POST',
+      body: JSON.stringify({ actor: 'web' }),
+    });
+    expect(res.status).toBe(201);
+    const body = (await json(res)) as { parent: Card; steps: Card[] };
+    expect(body.parent.title).toMatch(/^Systems map for /);
+    expect(body.steps).toHaveLength(3);
+    expect(r.store.list()).toHaveLength(4);
+    const phases = body.steps.map((s) => s.phase);
+    expect(phases).toEqual(['PH.1', 'PH.2', 'PH.3']);
+    for (const step of body.steps) expect(step.parent).toBe(body.parent.id);
+    const ph1 = body.steps[0] as Card;
+    expect(ph1.body).toMatch(/\d+ systems \/ \d+ connections \/ \d+ unclassified/);
+    // The dry run must never write — a `--apply` creeping in would leave this true.
+    expect(existsSync(join(r.repo.root, '.repoboard', 'systems.yml'))).toBe(false);
+  });
+
+  it('409s with 0 cards created when the served root has no .repoboard/ (map-only)', async () => {
+    const repo = await makeTempRepoNoBoard({ 'src/a.ts': 'export const a = 1;\n' });
+    cleanups.push(repo.cleanup);
+    const store = await openStore(repo.root, { watch: true, now: () => NOW });
+    cleanups.push(() => store.close());
+    const server = await startServer({ store, port: 0, scan: false });
+    cleanups.push(() => server.close());
+    const res = await fetch(`${server.url.replace(/\/$/, '')}/api/systems/plan`, {
+      method: 'POST',
+      body: JSON.stringify({}),
+    });
+    expect(res.status).toBe(409);
+    expect(store.list()).toHaveLength(0);
+  });
+
+  it('409s with 0 cards created when .repoboard/systems.yml already exists', async () => {
+    const repo = await makeTempRepoboard({ 'RB-1.md': cardText('RB-1', 'todo') });
+    cleanups.push(repo.cleanup);
+    await writeFile(join(repo.root, '.repoboard', 'systems.yml'), MINIMAL_SYSTEMS_YML);
+    const store = await openStore(repo.root, { watch: true, now: () => NOW });
+    cleanups.push(() => store.close());
+    const server = await startServer({ store, port: 0, scan: false });
+    cleanups.push(() => server.close());
+    const res = await fetch(`${server.url.replace(/\/$/, '')}/api/systems/plan`, {
+      method: 'POST',
+      body: JSON.stringify({}),
+    });
+    expect(res.status).toBe(409);
+    // Only the seeded RB-1, none of the four plan cards.
+    expect(store.list()).toHaveLength(1);
+  });
+});

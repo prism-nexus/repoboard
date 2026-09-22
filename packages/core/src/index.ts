@@ -222,6 +222,8 @@ export {
   toSystemId,
   workspaceGlobs,
 } from './systems-detect.js';
+export type { SystemsPlan, SystemsPlanCounts, SystemsPlanInput } from './systems-plan.js';
+export { planSystemsMap } from './systems-plan.js';
 export type { SystemsEnvs, SystemsSummary } from './systems-surface.js';
 export {
   formatSystemRow,

@@ -16,6 +16,7 @@ import type { IncomingMessage, ServerResponse } from 'node:http';
 import { basename, join, relative, sep } from 'node:path';
 import type { Duplex } from 'node:stream';
 import {
+  boardDisplayName,
   type Card,
   type CardPatch,
   type Column,
@@ -25,6 +26,7 @@ import {
   mergeSiblings,
   needsDecision,
   type Priority,
+  planSystemsMap,
   renderState,
   resolveOlderThan,
   type Sibling,
@@ -39,6 +41,7 @@ import { applySyncPlan, computeSyncPlan } from './issues.js';
 import { resolveCardRefs, resolveRefSpec } from './refs.js';
 import { isGitRepo, type ScanResult, scanRepo } from './scanner.js';
 import { type CardStore, openStore } from './store.js';
+import { runDetect } from './systems-detect.js';
 import { buildRepoWatchIgnore, EMPTY_IGNORED, gitIgnoredPaths } from './watch-ignore.js';
 
 const MAX_BODY = 1024 * 1024;
@@ -979,6 +982,36 @@ export async function openRepoContext(key: string, opts: RepoContextOptions): Pr
     // RCB-97 (plan §3.3): a pure read, always 200 — an invalid systems.yml is a well-formed
     // answer (`errors` non-empty), same reasoning as `/api/cost`'s `over: true`.
     if (method === 'GET' && path === '/api/systems') return sendJson(res, 200, systemsPayload());
+    // RCB-111: the Flow view's "Plan the systems map" button — a dry-run `systems detect`
+    // (never `--apply`; the only writes here are the four `store.create` calls below) turned
+    // into a parent card plus three PH.1..PH.3 steps. 409 when there is nothing to plan onto
+    // (no board) or nothing to plan (systems.yml already exists) — read-only otherwise.
+    if (method === 'POST' && path === '/api/systems/plan') {
+      const body = await readBody(req);
+      const actor = optString(body, 'actor') ?? 'web';
+      if (!store.hasBoard) {
+        throw new HttpError(409, 'no .repoboard/ here — map-only; run repoboard init first');
+      }
+      if (store.systems().exists) throw new HttpError(409, 'systems.yml already exists');
+      const run = await runDetect(root, { apply: false, now: store.clock });
+      if (run.errors.length > 0) throw new HttpError(400, run.errors.join('; '));
+      const counts = {
+        systems: run.candidates.systems.length,
+        connections: run.candidates.connections.length,
+        unclassified: run.candidates.unclassified.length,
+      };
+      const repoName = boardDisplayName(store.config, root);
+      const plan = planSystemsMap({ repoName, counts });
+      const parentResult = await store.create(plan.parent, actor);
+      if (!parentResult.ok) throw new HttpError(failureStatus(parentResult), parentResult.error);
+      const steps: Card[] = [];
+      for (const step of plan.steps) {
+        const stepResult = await store.create({ ...step, parent: parentResult.card.id }, actor);
+        if (!stepResult.ok) throw new HttpError(failureStatus(stepResult), stepResult.error);
+        steps.push(stepResult.card);
+      }
+      return sendJson(res, 201, { parent: parentResult.card, steps });
+    }
     // RCB-98 (plan §3.4): a system's `pointers` resolved live, the same resolver
     // `cmdSystemsShow` uses — the drawer's References section for a system, not a card.
     const systemRefsMatch = /^\/api\/systems\/([^/]+)\/refs$/.exec(path);

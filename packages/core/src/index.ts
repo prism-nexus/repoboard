@@ -195,6 +195,32 @@ export {
   SYSTEM_KINDS,
   SYSTEM_LAYERS,
 } from './systems.js';
+export type {
+  Candidates,
+  DetectedConnection,
+  DetectedSystem,
+  RuntimeHint,
+  Unclassified,
+} from './systems-detect.js';
+export {
+  applyDetected,
+  detectCompose,
+  detectDockerfile,
+  detectDrizzleConfig,
+  detectEnvExample,
+  detectPackageJson,
+  detectPrismaSchema,
+  detectViteConfig,
+  detectWorkflow,
+  detectWrangler,
+  emptyCandidates,
+  formatDetectReport,
+  mergeCandidates,
+  serializeSystems,
+  staleDetected,
+  toSystemId,
+  workspaceGlobs,
+} from './systems-detect.js';
 export { toIso } from './time.js';
 export type {
   CardPatch,

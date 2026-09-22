@@ -1,0 +1,15 @@
+name: deploy
+on:
+  push:
+    branches: [main]
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install
+        run: pnpm install
+      - name: Migrate database
+        run: pnpm drizzle-kit migrate
+      - name: Deploy worker
+        run: pnpm wrangler deploy

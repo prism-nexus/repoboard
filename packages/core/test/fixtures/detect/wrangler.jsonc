@@ -1,0 +1,21 @@
+{
+  // worker identity
+  "name": "detect-fixture-worker",
+  /* environment variables: non-secret config plus one API key */
+  "vars": {
+    "WEBHOOK_URL": "https://hooks.example.com/notify", // must survive comment stripping
+    "STRIPE_API_KEY": "sk_test_xxx"
+  },
+  "hyperdrive": [
+    {
+      "binding": "HYPERDRIVE",
+      "id": "hyperdrive-id-1",
+      "localConnectionString": "postgres://user:pass@localhost:5432/app" // not a comment
+    }
+  ],
+  "kv_namespaces": [{ "binding": "CACHE", "id": "kv-id-1" }],
+  "queues": {
+    "producers": [{ "binding": "QUEUE_PRODUCER", "queue": "detect-fixture-queue" }],
+    "consumers": [{ "queue": "detect-fixture-queue" }]
+  }
+}

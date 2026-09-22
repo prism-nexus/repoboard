@@ -122,6 +122,7 @@ export {
   parseSeatStamp,
   renderSeatBundle,
   replaceSeatBullet,
+  rewriteSeatBulletBody,
   seatBundle,
   seatUpConflict,
 } from './seat.js';

@@ -5,10 +5,14 @@
  */
 import { describe, expect, it } from 'vitest';
 import {
+  checkDownFields,
   findSeatLine,
   formatSeatBullet,
+  listSeats,
+  parseSeatFields,
   parseSeatStamp,
   renderSeatBundle,
+  renderSeatList,
   replaceSeatBullet,
   rewriteSeatBulletBody,
   type SeatBundle,
@@ -416,8 +420,13 @@ describe('renderSeatBundle: placeholders for every missing part', () => {
       nextCardReason: null,
       openDecisions: [],
       rig: null,
+      inFlight: null,
+      owes: null,
     };
     const rendered = renderSeatBundle(bundle, NOW);
+    expect(rendered).toContain('## In flight / owes');
+    expect(rendered).toContain('in-flight: (none recorded)');
+    expect(rendered).toContain('owes: (none recorded)');
     expect(rendered).toContain('## SEATS line');
     expect(rendered).toContain('(no SEATS line mentions ops)');
     expect(rendered).toContain('## Rig (.repoboard/local/RIG.md)');
@@ -442,6 +451,8 @@ describe('renderSeatBundle: placeholders for every missing part', () => {
       nextCardReason: 'first-todo',
       openDecisions: [],
       rig: null,
+      inFlight: null,
+      owes: null,
     };
     const rendered = renderSeatBundle(bundle, NOW);
     expect(rendered).toContain('RCB-1  todo  do this');
@@ -656,5 +667,115 @@ describe('rewriteSeatBulletBody (RCB-88)', () => {
     if (rewritten === null) return;
     expect(findSeatLine(rewritten.bullet, 'ops')).toBe(rewritten.bullet);
     expect(parseSeatStamp(rewritten.bullet)?.at).toEqual(parseSeatStamp(original)?.at);
+  });
+});
+
+describe('RCB-89 in-flight/owes + listSeats', () => {
+  const DOWN_ERR =
+    'seat --down needs an "in-flight:" line (subagent ids, Monitor ids, worktree, lock holder — ' +
+    'or none) and an "owes:" line';
+
+  describe('parseSeatFields', () => {
+    it('a 3-line DOWN bullet with both present', () => {
+      const bullet = formatSeatBullet(
+        'ops',
+        'DOWN',
+        'stood down\nin-flight: sonnet A, Monitor 123\nowes: RCB-1',
+        NOW,
+      );
+      expect(bullet.split('\n')).toHaveLength(3);
+      expect(parseSeatFields(bullet)).toEqual({
+        inFlight: 'sonnet A, Monitor 123',
+        owes: 'RCB-1',
+      });
+    });
+
+    it('an UP bullet with neither -> both null', () => {
+      const bullet = formatSeatBullet('ops', 'UP', 'watching things', NOW);
+      expect(parseSeatFields(bullet)).toEqual({ inFlight: null, owes: null });
+    });
+
+    it("owes: with an empty value -> '', not null (present but empty is not missing)", () => {
+      const bullet = formatSeatBullet('ops', 'DOWN', 'stood down\nin-flight: none\nowes:', NOW);
+      expect(parseSeatFields(bullet)).toEqual({ inFlight: 'none', owes: '' });
+    });
+  });
+
+  describe('checkDownFields', () => {
+    it('both lines present -> null', () => {
+      expect(checkDownFields('x\nin-flight: none\nowes: RCB-1')).toBeNull();
+    });
+
+    it('missing in-flight -> the exact error', () => {
+      expect(checkDownFields('x\nowes: RCB-1')).toBe(DOWN_ERR);
+    });
+
+    it('missing owes -> the exact error', () => {
+      expect(checkDownFields('x\nin-flight: none')).toBe(DOWN_ERR);
+    });
+  });
+
+  describe('listSeats', () => {
+    const section = [
+      formatSeatBullet('coordinator', 'UP', 'routing work', NOW),
+      formatSeatBullet('builder', 'DOWN', 'stood down\nin-flight: sonnet B\nowes: RCB-2', NOW),
+      '- Owner tasks elsewhere: whatever',
+    ].join('\n');
+
+    it('2 rows — the non-seat bullet is skipped, never an error; builder carries its in-flight', () => {
+      const rows = listSeats(section);
+      expect(rows).toHaveLength(2);
+      expect(rows[0]).toEqual({
+        name: 'coordinator',
+        status: 'UP',
+        stamp: '2026-09-18 21:00Z',
+        inFlight: null,
+      });
+      expect(rows[1]).toEqual({
+        name: 'builder',
+        status: 'DOWN',
+        stamp: '2026-09-18 21:00Z',
+        inFlight: 'sonnet B',
+      });
+    });
+
+    it('renderSeatList: exact text, columns padded to the widest value', () => {
+      const rendered = renderSeatList(listSeats(section));
+      expect(rendered).toBe(
+        'NAME         STATUS  STAMP              IN-FLIGHT\n' +
+          'coordinator  UP      2026-09-18 21:00Z  -\n' +
+          'builder      DOWN    2026-09-18 21:00Z  sonnet B\n',
+      );
+    });
+
+    it('renderSeatList: no rows -> one placeholder line', () => {
+      expect(renderSeatList([])).toBe('(no seat bullets in SEATS)\n');
+    });
+  });
+
+  describe('renderSeatBundle: In flight / owes section', () => {
+    it('sits FIRST, before ## SEATS line', () => {
+      const bundle = seatBundle({
+        name: 'builder',
+        now: NOW,
+        seatsSection: [
+          formatSeatBullet('builder', 'DOWN', 'stood down\nin-flight: none\nowes: RCB-1', NOW),
+        ].join('\n'),
+        ownBlock: null,
+        coordinatorBlock: null,
+        cards: [],
+      });
+      expect(bundle.inFlight).toBe('none');
+      expect(bundle.owes).toBe('RCB-1');
+      const rendered = renderSeatBundle(bundle, NOW);
+      const inFlightIdx = rendered.indexOf('## In flight / owes');
+      const seatsIdx = rendered.indexOf('## SEATS line');
+      const firstHeadingIdx = rendered.indexOf('## ');
+      expect(inFlightIdx).toBeGreaterThan(0);
+      expect(inFlightIdx).toBe(firstHeadingIdx);
+      expect(seatsIdx).toBeGreaterThan(inFlightIdx);
+      expect(rendered).toContain('in-flight: none');
+      expect(rendered).toContain('owes: RCB-1');
+    });
   });
 });

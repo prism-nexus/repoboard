@@ -16,6 +16,7 @@ import {
   type CardPatch,
   type Column,
   type CreateCardInput,
+  checkDownFields,
   createCard,
   DEFAULT_CLAUDE_MD_BUDGET_BYTES,
   type DecisionOption,
@@ -27,10 +28,12 @@ import {
   initialStateText,
   isOwnerTask,
   isSiblingUrl,
+  listSeats,
   needsDecision,
   type Priority,
   parseBoard,
   renderSeatBundle,
+  renderSeatList,
   renderState,
   resolveOlderThan,
   resolveTimeSpec,
@@ -169,15 +172,21 @@ Usage:
                                         print a day's log (default today), optionally one seat's blocks
   repoboard log --last <seat>           print that seat's newest block, searching back across days
                                         (cold-start: your own seat's last block, then the coordinator's)
-  repoboard seat <name> [--json]       the cold-start bundle for one seat: its SEATS line, its last
-                                        log block, the coordinator's, its next todo card, the open
-                                        decisions — one command instead of the three-file ritual
+  repoboard seat <name> | list [--json]  the cold-start bundle for one seat: its SEATS line, its
+                                        last log block, the coordinator's, its next todo card, the
+                                        open decisions, and its in-flight/owes fields — one command
+                                        instead of the three-file ritual
+  repoboard seat list [--json]         one row per SEATS bullet — NAME STATUS STAMP IN-FLIGHT —
+                                        instead of "seat <name>" being parsed as a seat literally
+                                        named "list" (RCB-89)
   repoboard seat <name> --up "<text>" [--force] | --down "<text>" | --update "<text>"
                                         replace ONLY this seat's own SEATS bullet and restamp
                                         STATE.md; appends the bullet if the seat has none; --up
                                         refuses a second UP inside activeWindowMinutes unless
-                                        --force (RCB-87, audited in the log); --update rewrites
-                                        only the body, keeps the standing stamp, no guard (RCB-88)
+                                        --force (RCB-87, audited in the log); --down is refused
+                                        unless the text carries BOTH an "in-flight:" line and an
+                                        "owes:" line (RCB-89); --update rewrites only the body,
+                                        keeps the standing stamp, no guard (RCB-88)
   repoboard check [--json] [--strict]  exit 0 "ok" / 1 with one line per finding: stale-state
                                         (also reads board.yml's logDir, P8.6 — an extra daily-log
                                         directory alongside .repoboard/log/, read-only),
@@ -1272,10 +1281,26 @@ async function cmdSeat(args: string[], io: CliIO): Promise<number> {
   const [name] = positionals;
   if (!name)
     throw new UserError(
-      'usage: repoboard seat <name> [--json] [--up "<text>" [--force] | --down "<text>" | --update "<text>"]',
+      'usage: repoboard seat <name> | list [--json] [--up "<text>" [--force] | --down "<text>" | --update "<text>"]',
     );
   const root = await requireRoot(io);
   const store = await openStore(root, { watch: false, now: io.now });
+
+  // RCB-89: `seat list` — a reserved first positional, one row per SEATS bullet instead of one
+  // seat's own bundle. --up/--down/--update make no sense against every seat at once.
+  if (name === 'list') {
+    if (values.up !== undefined || values.down !== undefined || values.update !== undefined) {
+      throw new UserError('seat list: --up, --down and --update are not valid with list');
+    }
+    const seats = store.state()?.sections.seats ?? '';
+    const rows = listSeats(seats);
+    if (values.json) {
+      io.stdout.write(`${JSON.stringify(rows, null, 2)}\n`);
+    } else {
+      io.stdout.write(renderSeatList(rows));
+    }
+    return 0;
+  }
 
   // RCB-88: --update rewrites only the body, keeping the standing status + stamp — no guard, no
   // audit block, handled entirely separately from the --up/--down restamp path below.
@@ -1317,6 +1342,12 @@ async function cmdSeat(args: string[], io: CliIO): Promise<number> {
     const text = values.up ?? values.down ?? '';
     if (text.trim().length === 0) {
       throw new UserError('seat --up/--down needs the bullet text');
+    }
+
+    // RCB-89: a stand-down bullet must record where the seat's work stands — before any write.
+    if (status === 'DOWN') {
+      const err = checkDownFields(text);
+      if (err) throw new UserError(err);
     }
 
     // RCB-87: --up refuses a second UP inside activeWindowMinutes unless --force. --down is never

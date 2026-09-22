@@ -2143,13 +2143,16 @@ describe('repoboard seat', () => {
     const res = await repoboard(root, 'seat', 'builder', '--json');
     expect(res.code).toBe(0);
     const parsed = JSON.parse(res.out) as Record<string, unknown>;
+    // RCB-89: SeatBundle gained inFlight/owes — updated here, per the brief, rather than left stale.
     expect(Object.keys(parsed).sort()).toEqual(
       [
         'coordinatorBlock',
+        'inFlight',
         'name',
         'nextCard',
         'nextCardReason',
         'openDecisions',
+        'owes',
         'ownBlock',
         'rig',
         'seatsLine',
@@ -2259,7 +2262,13 @@ describe('repoboard seat --up/--down (RCB-58)', () => {
 
   it('appends the bullet when the seat has none yet, on a board with no STATE.md at all', async () => {
     const root = await freshRepo({});
-    const res = await repoboard(root, 'seat', 'ops', '--down', 'stood down for the night');
+    const res = await repoboard(
+      root,
+      'seat',
+      'ops',
+      '--down',
+      'stood down for the night\nin-flight: none\nowes: none',
+    );
     expect(res.code).toBe(0);
     expect(res.out).toBe('restamped SEATS ops: DOWN 2026-09-02 22:41Z\n');
     const shown = await repoboard(root, 'seat', 'ops');
@@ -2354,7 +2363,14 @@ describe('repoboard seat --up/--down (RCB-58)', () => {
       const up = await repoboardWithClock(root, NOW, 'seat', 'ops', '--up', 'a');
       expect(up.code).toBe(0);
 
-      const down = await repoboardWithClock(root, NOW, 'seat', 'ops', '--down', 'x');
+      const down = await repoboardWithClock(
+        root,
+        NOW,
+        'seat',
+        'ops',
+        '--down',
+        'x\nin-flight: none\nowes: none',
+      );
       expect(down.code).toBe(0);
 
       const state = await readFile(join(root, '.repoboard', 'STATE.md'), 'utf8');
@@ -2441,6 +2457,111 @@ describe('repoboard seat --up/--down (RCB-58)', () => {
       const last = await repoboardWithClock(root, fiveLater, 'log', '--last', 'ops');
       expect(last.code).toBe(0);
       expect(last.out).not.toContain('--force over');
+    });
+  });
+
+  describe('--down requires in-flight/owes (RCB-89)', () => {
+    const DOWN_ERR =
+      'seat --down needs an "in-flight:" line (subagent ids, Monitor ids, worktree, lock ' +
+      'holder — or none) and an "owes:" line';
+
+    it(
+      '(16) --down "x" without the lines is refused; STATE.md\'s SEATS is unchanged (read ' +
+        'before and after)',
+      async () => {
+        const root = await freshRepo({});
+        const up = await repoboardWithClock(root, NOW, 'seat', 'ops', '--up', 'a');
+        expect(up.code).toBe(0);
+
+        const statePath = join(root, '.repoboard', 'STATE.md');
+        const before = await readFile(statePath, 'utf8');
+
+        const fiveLater = new Date(NOW.getTime() + 5 * 60_000);
+        const down = await repoboardWithClock(root, fiveLater, 'seat', 'ops', '--down', 'x');
+        expect(down.code).toBe(1);
+        expect(down.err).toContain(DOWN_ERR);
+
+        const after = await readFile(statePath, 'utf8');
+        expect(after).toBe(before);
+      },
+    );
+
+    it(
+      '(17) --down with in-flight/owes lines succeeds; `seat <name>` then prints ' +
+        '"in-flight: none" in the In flight / owes section',
+      async () => {
+        const root = await freshRepo({});
+        const down = await repoboardWithClock(
+          root,
+          NOW,
+          'seat',
+          'ops',
+          '--down',
+          'x\nin-flight: none\nowes: RCB-1',
+        );
+        expect(down.code).toBe(0);
+
+        const shown = await repoboardWithClock(root, NOW, 'seat', 'ops');
+        expect(shown.code).toBe(0);
+        expect(shown.out).toContain('## In flight / owes');
+        expect(shown.out).toContain('in-flight: none');
+        expect(shown.out).toContain('owes: RCB-1');
+      },
+    );
+  });
+
+  describe('seat list (RCB-89)', () => {
+    it('(18) seat list prints a row per SEATS bullet; exit 0 even with no STATE.md', async () => {
+      const cold = await freshRepo({});
+      const coldRes = await repoboardWithClock(cold, NOW, 'seat', 'list');
+      expect(coldRes.code).toBe(0);
+      expect(coldRes.out).toBe('(no seat bullets in SEATS)\n');
+
+      const root = await freshRepo({});
+      const up = await repoboardWithClock(root, NOW, 'seat', 'ops', '--up', 'watching things');
+      expect(up.code).toBe(0);
+      const fiveLater = new Date(NOW.getTime() + 5 * 60_000);
+      const down = await repoboardWithClock(
+        root,
+        fiveLater,
+        'seat',
+        'builder',
+        '--down',
+        'x\nin-flight: none\nowes: RCB-1',
+      );
+      expect(down.code).toBe(0);
+
+      const res = await repoboardWithClock(root, fiveLater, 'seat', 'list');
+      expect(res.code).toBe(0);
+      expect(res.out).toContain('NAME');
+      expect(res.out).toContain('STATUS');
+      expect(res.out).toContain('STAMP');
+      expect(res.out).toContain('IN-FLIGHT');
+      expect(res.out).toContain('ops');
+      expect(res.out).toContain('builder');
+    });
+
+    it('(19) seat list --json is an array with name/status/stamp/inFlight keys', async () => {
+      const root = await freshRepo({});
+      const up = await repoboardWithClock(root, NOW, 'seat', 'ops', '--up', 'watching things');
+      expect(up.code).toBe(0);
+
+      const res = await repoboardWithClock(root, NOW, 'seat', 'list', '--json');
+      expect(res.code).toBe(0);
+      const rows = JSON.parse(res.out) as Array<Record<string, unknown>>;
+      expect(Array.isArray(rows)).toBe(true);
+      expect(rows).toHaveLength(1);
+      expect(Object.keys(rows[0] ?? {}).sort()).toEqual(
+        ['inFlight', 'name', 'stamp', 'status'].sort(),
+      );
+      expect(rows[0]).toMatchObject({ name: 'ops', status: 'UP' });
+    });
+
+    it('(20) seat list --down x is a usage error', async () => {
+      const root = await freshRepo({});
+      const res = await repoboardWithClock(root, NOW, 'seat', 'list', '--down', 'x');
+      expect(res.code).toBe(1);
+      expect(res.err).toMatch(/not valid with list/);
     });
   });
 });

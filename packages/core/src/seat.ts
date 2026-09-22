@@ -51,6 +51,10 @@ export interface SeatBundle {
   openDecisions: Card[];
   /** RCB-83: `.repoboard/local/RIG.md`'s text, `null` when there is none. */
   rig: string | null;
+  /** RCB-89: `parseSeatFields(seatsLine)` when `seatsLine` is non-null, else `null`. */
+  inFlight: string | null;
+  /** RCB-89: `parseSeatFields(seatsLine)` when `seatsLine` is non-null, else `null`. */
+  owes: string | null;
 }
 
 const escapeRegExp = (s: string): string => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -298,6 +302,108 @@ export function seatUpConflict(
 }
 
 /**
+ * RCB-89: the two structured fields a stand-down bullet is asked to carry, key case-insensitive,
+ * value trimmed. Shared by `parseSeatFields` (reading a stored bullet) and `checkDownFields`
+ * (validating raw `--down` text before it becomes one) — the ONE pair of regexes either function
+ * may use, so the two can never disagree about what counts as an `in-flight:`/`owes:` line.
+ */
+const IN_FLIGHT_LINE_RE = /^\s*in-flight:\s*(.*)$/im;
+const OWES_LINE_RE = /^\s*owes:\s*(.*)$/im;
+
+/**
+ * RCB-89: `bullet`'s `in-flight:`/`owes:` lines — scanned across every line of the bullet,
+ * including the FIRST line's tail (the prose right after the `.**` stamp close, on the same
+ * physical line as the label/status/stamp) and every continuation line (with its 2-space
+ * indent). `null` when the key never appears at all; `''` when it appears with nothing after the
+ * colon — present but empty is not the same as missing. Pure, no I/O.
+ */
+export function parseSeatFields(bullet: string): { inFlight: string | null; owes: string | null } {
+  const lines = bullet.split('\n');
+  const firstLine = lines[0] ?? '';
+  const m = SEAT_BULLET_RE.exec(firstLine);
+  const tail = m ? firstLine.slice(m[0].length) : firstLine;
+  const scanText = [tail, ...lines.slice(1)].join('\n');
+  const inFlightMatch = IN_FLIGHT_LINE_RE.exec(scanText);
+  const owesMatch = OWES_LINE_RE.exec(scanText);
+  return {
+    inFlight: inFlightMatch ? (inFlightMatch[1] ?? '').trim() : null,
+    owes: owesMatch ? (owesMatch[1] ?? '').trim() : null,
+  };
+}
+
+/**
+ * RCB-89: guard for `seat --down` — `null` (ok) only when `text` (the raw `--down` argument, not
+ * yet a formatted bullet) carries BOTH an `in-flight:` line and an `owes:` line (same regexes as
+ * `parseSeatFields`); else the exact error a caller should surface verbatim. One function, no
+ * argument that could weaken it — a caller cannot ask it to check only one of the two lines.
+ */
+export function checkDownFields(text: string): string | null {
+  if (IN_FLIGHT_LINE_RE.test(text) && OWES_LINE_RE.test(text)) return null;
+  return (
+    'seat --down needs an "in-flight:" line (subagent ids, Monitor ids, worktree, lock holder — ' +
+    'or none) and an "owes:" line'
+  );
+}
+
+export interface SeatRow {
+  name: string;
+  status: 'UP' | 'DOWN';
+  stamp: string;
+  inFlight: string | null;
+}
+
+/**
+ * RCB-89: `repoboard seat list` — one row per SEATS bullet whose first line `parseSeatStamp`
+ * accepts (a non-seat bullet, e.g. `- Owner tasks elsewhere: …`, is skipped, never an error).
+ * Splits bullets with `bulletSpans` (the one place that decides where a bullet starts and ends —
+ * no second splitter here), reads the name with `bulletLabel` (its bold span, then up to that
+ * span's own first `:`, trimmed — the label of a seat bullet is `<name>: <STATUS> <stamp>.`, so
+ * the colon inside the label itself has to be cut too), and the raw `<date> <time>Z` text off
+ * `SEAT_BULLET_RE`'s own captures (not the parsed `Date`) so a stamp that fails to parse
+ * (`18:0xZ`) still survives into the row.
+ */
+export function listSeats(seatsSection: string): SeatRow[] {
+  const lines = seatsSection.split('\n');
+  const spans = bulletSpans(lines);
+  const rows: SeatRow[] = [];
+  for (const span of spans) {
+    const bulletLines = lines.slice(span.start, span.end);
+    const bulletText = bulletLines.join('\n');
+    const parsed = parseSeatStamp(bulletText);
+    if (!parsed) continue;
+    const firstLine = bulletLines[0] ?? '';
+    const m = SEAT_BULLET_RE.exec(firstLine);
+    const label = bulletLabel(firstLine);
+    const colonIdx = label.indexOf(':');
+    const name = (colonIdx === -1 ? label : label.slice(0, colonIdx)).trim();
+    const stamp = m ? `${m[3]} ${m[4]}Z` : '';
+    const { inFlight } = parseSeatFields(bulletText);
+    rows.push({ name, status: parsed.status, stamp, inFlight });
+  }
+  return rows;
+}
+
+/**
+ * RCB-89: render `listSeats`' rows as a fixed-column table, `NAME  STATUS  STAMP  IN-FLIGHT`
+ * header first, each column padded to its widest value (last column unpadded, trailing
+ * whitespace trimmed — same convention as `formatTable` in `cli.ts`). `inFlight` prints as `-`
+ * when `null`. No rows at all: one placeholder line, never a header with nothing under it.
+ */
+export function renderSeatList(rows: SeatRow[]): string {
+  if (rows.length === 0) return '(no seat bullets in SEATS)\n';
+  const header = ['NAME', 'STATUS', 'STAMP', 'IN-FLIGHT'];
+  const data = rows.map((r) => [r.name, r.status, r.stamp, r.inFlight ?? '-']);
+  const allRows = [header, ...data];
+  const widths = header.map((_, i) => Math.max(...allRows.map((row) => (row[i] ?? '').length)));
+  const line = (r: string[]) =>
+    r
+      .map((cell, i) => (i === r.length - 1 ? cell : cell.padEnd(widths[i] ?? 0)))
+      .join('  ')
+      .trimEnd();
+  return `${[line(header), ...data.map(line)].join('\n')}\n`;
+}
+
+/**
  * The cold-start bundle for one seat: its SEATS line, its own last log block, the coordinator's,
  * its next todo card, and the open decisions. A read only — nothing here writes or throws; a
  * cold seat on a fresh board (no STATE.md, no log history, no cards) is the normal case, and
@@ -335,6 +441,8 @@ export function seatBundle(input: SeatBundleInput): SeatBundle {
 
   const openDecisions = input.cards.filter((c) => needsDecision(c));
 
+  const fields = seatsLine !== null ? parseSeatFields(seatsLine) : { inFlight: null, owes: null };
+
   return {
     name: input.name,
     seatsLine,
@@ -344,6 +452,8 @@ export function seatBundle(input: SeatBundleInput): SeatBundle {
     nextCardReason,
     openDecisions,
     rig: input.rig ?? null,
+    inFlight: fields.inFlight,
+    owes: fields.owes,
   };
 }
 
@@ -358,6 +468,10 @@ export function renderSeatBundle(b: SeatBundle, now: Date): string {
   const lines: string[] = [];
 
   lines.push(`# seat ${b.name} — ${toIso(now)}`, '');
+  lines.push('## In flight / owes');
+  lines.push(`in-flight: ${b.inFlight ?? '(none recorded)'}`);
+  lines.push(`owes: ${b.owes ?? '(none recorded)'}`, '');
+
   lines.push('## SEATS line');
   lines.push(b.seatsLine ?? `(no SEATS line mentions ${b.name})`, '');
 

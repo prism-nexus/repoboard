@@ -122,12 +122,16 @@ export {
   lastBlockFor,
   parseLogBlocks,
 } from './repolog.js';
-export type { NextCardReason, SeatBundle, SeatBundleInput } from './seat.js';
+export type { NextCardReason, SeatBundle, SeatBundleInput, SeatRow } from './seat.js';
 export {
+  checkDownFields,
   findSeatLine,
   formatSeatBullet,
+  listSeats,
+  parseSeatFields,
   parseSeatStamp,
   renderSeatBundle,
+  renderSeatList,
   replaceSeatBullet,
   rewriteSeatBulletBody,
   seatBundle,

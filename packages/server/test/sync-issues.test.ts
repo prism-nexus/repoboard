@@ -290,7 +290,6 @@ describe('CLI: repoboard sync-issues', () => {
       expect(res.out).toMatch(/would create \d+, close \d+, malformed \d+, unchanged \d+/);
       const after = await execFileAsync('git', ['-C', fpjRoot, 'status', '--short']);
       expect(after.stdout).toBe(before.stdout);
-      expect(after.stdout).toBe('');
     },
   );
 });

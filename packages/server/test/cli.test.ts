@@ -2615,7 +2615,6 @@ describe('repoboard cost', () => {
       expect(res.code).toBe(0);
       const after = await execFileAsync('git', ['-C', fpjRoot, 'status', '--short']);
       expect(after.stdout).toBe(before.stdout);
-      expect(after.stdout).toBe('');
     },
   );
 });

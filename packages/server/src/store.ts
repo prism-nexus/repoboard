@@ -109,6 +109,17 @@ export interface OpenStoreOptions {
   watch?: boolean;
   /** Clock, for tests. */
   now?: () => Date;
+  /**
+   * K8: a writer touches a card file, then appends its `events.jsonl` claim — two separate
+   * writes, not one. When the watcher's `refreshCard('watch')` sees the file change before the
+   * claim lands (the gap can exceed chokidar's own 100ms `awaitWriteFinish`), synthesising a
+   * `file` event right away produces two entries for one mutation (K8). This is how long the
+   * watcher waits, after an `updated` timestamp moves, for that claim to show up before it gives
+   * up and synthesises one itself. Default `1000`ms. `0` reproduces today's un-graced behaviour
+   * exactly (the control) — a hand edit that leaves `updated` unchanged is never delayed, grace
+   * or not (see `refreshCard`).
+   */
+  claimGraceMs?: number;
 }
 
 /**
@@ -285,6 +296,22 @@ export class CardStore extends EventEmitter<StoreEvents> {
   private watcher: FSWatcher | null = null;
   private queue: Promise<unknown> = Promise.resolve();
   private readonly now: () => Date;
+  /** K8: how long `refreshCard`'s watch branch waits for a writer's own claim before synthesising
+   * one itself — see `OpenStoreOptions.claimGraceMs`. */
+  private readonly claimGraceMs: number;
+  /**
+   * K8: one outstanding grace timer per (card id, `updated`) pair, keyed by `${id}\0${updated}` —
+   * NOT by id alone. Two watch events for the same card in quick succession (RB-1 todo→doing,
+   * then RB-1 doing→review before the first's grace fires) are two distinct claims to wait for;
+   * keying by id alone and cancelling the older timer would drop the first mutation's event
+   * entirely whenever it was never claimed — an undercount, and a K8 break in the other
+   * direction. Each entry checks only its own `updated` on fire (see `schedulePendingClaim`), so
+   * entries never need to interact with one another. Cleared entirely by `close()`.
+   */
+  private readonly pendingClaims = new Map<
+    string,
+    { updated: string; event: Omit<Event, 'ts'>; timer: ReturnType<typeof setTimeout> }
+  >();
   /** RCB-83: does `.repoboard/local/` exist? Decided once, in `load()` — see `hasBoard`'s own
    * doc comment for why this is not re-derived while the server runs. */
   private hasLocalLayer = false;
@@ -304,6 +331,7 @@ export class CardStore extends EventEmitter<StoreEvents> {
     this.statePath = join(this.repoboardDir, 'STATE.md');
     this.logDir = join(this.repoboardDir, 'log');
     this.now = opts.now ?? (() => new Date());
+    this.claimGraceMs = opts.claimGraceMs ?? 1000;
   }
 
   get config(): BoardConfig {
@@ -413,6 +441,10 @@ export class CardStore extends EventEmitter<StoreEvents> {
   }
 
   async close(): Promise<void> {
+    // K8: cancel every outstanding grace timer first — none may fire (and so emit or append)
+    // once close() has been called.
+    for (const pending of this.pendingClaims.values()) clearTimeout(pending.timer);
+    this.pendingClaims.clear();
     const w = this.watcher;
     this.watcher = null;
     if (w) await w.close();
@@ -1468,28 +1500,51 @@ export class CardStore extends EventEmitter<StoreEvents> {
       // emits nothing twice, and both run on the same serial `enqueue` queue.
       await this.loadEvents();
       if (this.isClaimed(card, prevCard)) return;
-      const ts = toIso(this.now());
-      const event: Event = prevCard
+      const event: Omit<Event, 'ts'> = prevCard
         ? prevCard.status !== card.status
-          ? {
-              ts,
-              actor: 'file',
-              type: 'move',
-              cardId: card.id,
-              from: prevCard.status,
-              to: card.status,
-            }
-          : {
-              ts,
-              actor: 'file',
-              type: 'update',
-              cardId: card.id,
-              from: card.status,
-              to: card.status,
-            }
-        : { ts, actor: 'file', type: 'create', cardId: card.id, from: null, to: card.status };
-      await this.appendEvent(event);
+          ? { actor: 'file', type: 'move', cardId: card.id, from: prevCard.status, to: card.status }
+          : { actor: 'file', type: 'update', cardId: card.id, from: card.status, to: card.status }
+        : { actor: 'file', type: 'create', cardId: card.id, from: null, to: card.status };
+
+      // K8: a writer's card-file write and its `events.jsonl` claim are two separate writes.
+      // `updated` moving (a real mutation, not a hand edit of `status:` alone — see `isClaimed`)
+      // means a claim may simply not have landed yet, so give it `claimGraceMs` before deciding
+      // no one is coming. `claimGraceMs <= 0` is the control: synthesise now, exactly as before
+      // this task. A hand edit (updated unchanged) is never delayed — that path is the product's
+      // headline behaviour and must not get slower (§0.3).
+      const updatedMoved = !prevCard || prevCard.updated !== card.updated;
+      if (!updatedMoved || this.claimGraceMs <= 0) {
+        const ts = toIso(this.now());
+        await this.appendEvent({ ...event, ts });
+        return;
+      }
+      this.schedulePendingClaim(card.id, card.updated, event);
     }
+  }
+
+  /**
+   * K8: park the "no claim yet" synthesis for `claimGraceMs` instead of writing it immediately.
+   * Keyed by `${id}\0${updated}` (see `pendingClaims`'s own doc comment) — a later watch event
+   * for the same card but a DIFFERENT `updated` gets its own entry and its own timer; it never
+   * cancels this one, so an earlier mutation that never gets claimed still gets reported. On
+   * fire, re-checks for the claim — through the same serial `enqueue` queue every watcher task
+   * uses — before writing, so a claim that lands during the grace window still wins and only one
+   * event is ever written for that `updated`.
+   */
+  private schedulePendingClaim(id: string, updated: string, event: Omit<Event, 'ts'>): void {
+    const key = `${id}\0${updated}`;
+    const timer = setTimeout(() => {
+      this.pendingClaims.delete(key);
+      this.enqueue(async () => {
+        await this.loadEvents();
+        if (this.eventLog.some((e) => e.cardId === id && e.ts === updated)) return;
+        const ts = toIso(this.now());
+        await this.appendEvent({ ...event, ts });
+      }).catch((e: unknown) => {
+        this.emit('warning', `claim-grace: ${id}: ${(e as Error).message}`);
+      });
+    }, this.claimGraceMs);
+    this.pendingClaims.set(key, { updated, event, timer });
   }
 
   private removeCardFile(path: string): void {

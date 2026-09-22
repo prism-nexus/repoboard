@@ -1,5 +1,5 @@
 import { existsSync, readFileSync } from 'node:fs';
-import { mkdir, readFile, rm, stat, utimes, writeFile } from 'node:fs/promises';
+import { appendFile, mkdir, readFile, rm, stat, utimes, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { BoardConfig, Card } from '@repoboard/core';
@@ -1446,9 +1446,158 @@ describe('K8: one external mutation, one ticker entry', () => {
     );
 
     await waitForEvent<Card>(store, 'card', (c) => c.status === 'doing');
+    // RCB-115: `updated` moved and no claim ever follows, so this now clears the store's default
+    // `claimGraceMs` (1000ms) before the synthetic event lands — `settle()`'s 700ms is no longer
+    // enough. Wait for the event itself instead of a fixed sleep.
+    await waitForEvent<StoreEvent>(store, 'event', (e) => e.type === 'move');
     await settle();
 
     expect(events.map((e) => `${e.actor}:${e.type}`)).toEqual(['file:move']);
+  });
+
+  // RCB-115 (K8 double event under a slow writer): a writer's card-file write and its
+  // events.jsonl claim are two separate writes. `claimGraceMs` gives the claim time to land
+  // before the watcher synthesises its own `file` event — a scratch "slow writer" below does the
+  // card-file half by hand and appends the matching claim itself, after a delay (or never).
+  describe('claimGraceMs (RCB-115)', () => {
+    /**
+     * Hand-edits `id`'s status (bumping `updated` too, the real-writer shape), then — unless
+     * `claimDelayMs` is `undefined` (no claim ever) — sleeps `claimDelayMs` and appends the
+     * matching claim line to events.jsonl itself, exactly what a slow real writer would do.
+     */
+    async function slowWriterMove(
+      repo: TempRepo,
+      id: string,
+      from: string,
+      to: string,
+      updated: string,
+      claimDelayMs: number | undefined,
+    ): Promise<void> {
+      const path = join(repo.cardsDir, `${id}.md`);
+      const original = await readFile(path, 'utf8');
+      // A regex against whatever `updated:` currently holds, not a hardcoded default — this
+      // helper is also used to chain a second hand edit onto a card a first edit already moved
+      // (test (e)), where `updated` is no longer the fixture's original value.
+      await writeFile(
+        path,
+        original
+          .replace(`status: ${from}`, `status: ${to}`)
+          .replace(/^updated: .+$/m, `updated: ${updated}`),
+      );
+      if (claimDelayMs === undefined) return;
+      await sleep(claimDelayMs);
+      const claim: StoreEvent = {
+        ts: updated,
+        actor: 'claude/cli',
+        type: 'move',
+        cardId: id,
+        from,
+        to,
+      };
+      await appendFile(join(repo.root, '.repoboard', 'events.jsonl'), `${JSON.stringify(claim)}\n`);
+    }
+
+    it('(a) default grace: a claim landing 400ms late is absorbed — one event, not two', async () => {
+      const repo = await repoWith({ 'RB-1.md': cardText('RB-1', 'todo') });
+      const store = await open(repo, true); // default claimGraceMs (1000ms)
+      const events: StoreEvent[] = [];
+      store.on('event', (e) => events.push(e));
+
+      await slowWriterMove(repo, 'RB-1', 'todo', 'doing', '2026-09-02T22:50:00Z', 400);
+
+      await waitForEvent<StoreEvent>(store, 'event', (e) => e.actor === 'claude/cli');
+      // Past the default grace window (from roughly when the card change was delivered), so any
+      // synthesis the grace timer would still do has already run.
+      await sleep(900);
+
+      expect(events.map((e) => `${e.actor}:${e.type}`)).toEqual(['claude/cli:move']);
+    });
+
+    it('(a) claimGraceMs: 0 is the control — reproduces the old race, two events', async () => {
+      const repo = await repoWith({ 'RB-1.md': cardText('RB-1', 'todo') });
+      const store = await openStore(repo.root, { watch: true, now: () => NOW, claimGraceMs: 0 });
+      opened.push(store);
+      const events: StoreEvent[] = [];
+      store.on('event', (e) => events.push(e));
+
+      await slowWriterMove(repo, 'RB-1', 'todo', 'doing', '2026-09-02T22:50:00Z', 400);
+      // The `file` event fires DURING slowWriterMove's 400 ms wait, so a waitForEvent registered
+      // after it would miss it; the collector above was attached before the edit.
+      await settle();
+
+      expect(events.map((e) => `${e.actor}:${e.type}`)).toEqual(['file:move', 'claude/cli:move']);
+    });
+
+    it('(b) claimGraceMs: 300, no claim ever arrives: exactly one file:move after the grace window', async () => {
+      const repo = await repoWith({ 'RB-1.md': cardText('RB-1', 'todo') });
+      const store = await openStore(repo.root, { watch: true, now: () => NOW, claimGraceMs: 300 });
+      opened.push(store);
+      const events: StoreEvent[] = [];
+      store.on('event', (e) => events.push(e));
+
+      await slowWriterMove(repo, 'RB-1', 'todo', 'doing', '2026-09-02T22:50:00Z', undefined);
+
+      const event = await waitForEvent<StoreEvent>(store, 'event', (e) => e.type === 'move');
+      expect(`${event.actor}:${event.type}`).toBe('file:move');
+      // No second event ever follows for this card.
+      await sleep(300);
+      expect(events.map((e) => `${e.actor}:${e.type}`)).toEqual(['file:move']);
+    });
+
+    it('(c) claimGraceMs: 5000 does not slow a hand edit that leaves updated unchanged (§0.3)', async () => {
+      const repo = await repoWith({ 'RB-1.md': cardText('RB-1', 'todo') });
+      const store = await openStore(repo.root, { watch: true, now: () => NOW, claimGraceMs: 5000 });
+      opened.push(store);
+      const path = join(repo.cardsDir, 'RB-1.md');
+      const original = await readFile(path, 'utf8');
+      await writeFile(path, original.replace('status: todo', 'status: doing'));
+
+      // `updated` is untouched, so this must not wait for the 5000ms grace — it must arrive well
+      // inside it, same as today's synchronous path.
+      const event = await waitForEvent<StoreEvent>(store, 'event', (e) => e.type === 'move', 1500);
+      expect(`${event.actor}:${event.type}`).toBe('file:move');
+    });
+
+    it('(d) claimGraceMs: 1000, close() 300ms after the edit cancels a genuinely pending timer', async () => {
+      const repo = await repoWith({ 'RB-1.md': cardText('RB-1', 'todo') });
+      const store = await openStore(repo.root, { watch: true, now: () => NOW, claimGraceMs: 1000 });
+      opened.push(store);
+      const events: StoreEvent[] = [];
+      store.on('event', (e) => events.push(e));
+
+      await slowWriterMove(repo, 'RB-1', 'todo', 'doing', '2026-09-02T22:50:00Z', undefined);
+      // 300ms is well past chokidar's 100ms awaitWriteFinish, so the card `change` has already
+      // been delivered and `schedulePendingClaim` has already registered a real timer — this
+      // closes while a grace timer is genuinely outstanding, not merely before chokidar noticed
+      // the write (RCB-115 seat review: the previous 50ms variant risked closing before the
+      // watcher had scheduled anything at all, so it never actually exercised the cancel path).
+      await sleep(300);
+      await expect(store.close()).resolves.toBeUndefined();
+      // Closed already — `afterEach`'s own close() on the same store must be a harmless no-op.
+
+      await sleep(1500);
+      expect(events).toEqual([]);
+    });
+
+    it('(e) two watch events for the same card inside the grace window both get reported', async () => {
+      const repo = await repoWith({ 'RB-1.md': cardText('RB-1', 'todo') });
+      const store = await openStore(repo.root, { watch: true, now: () => NOW, claimGraceMs: 300 });
+      opened.push(store);
+      const events: StoreEvent[] = [];
+      store.on('event', (e) => events.push(e));
+
+      // RCB-115 seat review: a later watch event for the same card must NOT cancel an earlier
+      // one's pending claim — each `updated` is its own mutation and, unclaimed, must be reported
+      // on its own. No claim ever arrives for either edit.
+      await slowWriterMove(repo, 'RB-1', 'todo', 'doing', '2026-09-02T22:50:00Z', undefined);
+      // Past awaitWriteFinish (100ms), still inside RB-1's first grace window (300ms).
+      await sleep(250);
+      await slowWriterMove(repo, 'RB-1', 'doing', 'review', '2026-09-02T23:00:00Z', undefined);
+
+      await sleep(1200);
+      expect(events.map((e) => `${e.actor}:${e.type}`)).toEqual(['file:move', 'file:move']);
+      expect(events.map((e) => `${e.from}->${e.to}`)).toEqual(['todo->doing', 'doing->review']);
+    });
   });
 });
 

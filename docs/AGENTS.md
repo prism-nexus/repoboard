@@ -246,7 +246,8 @@ NO `## Log` line, so the same event is never recorded twice.
 > / `update_card` / `append_log` MCP tools if you have no shell; editing
 > `.repoboard/cards/RB-12.md` by hand as a last resort — `docs/AGENTS.md` has the details.) If a
 > task needs a human decision, `repoboard card ask RB-12 "<question>" --option "A <text>"...`
-> instead of guessing or waiting on a chat relay — docs/REFERENCE.md §1.
+> instead of guessing or waiting on a chat relay — docs/REFERENCE.md §1. If you dispatch
+> subagents, `docs/SUBAGENTS.md` is the brief-and-control practice this board expects.
 
 ## 8. Everything else
 

@@ -180,7 +180,8 @@ pnpm build       # packages/server/dist/cli.js, self-contained with the built we
 
 `packages/core` (domain, no I/O), `packages/server` (CLI, HTTP, WebSocket, watcher, MCP),
 `packages/web` (Vite, React, d3). The plan and every settled decision: `docs/BUILD-PLAN.md`;
-the running record: `.repoboard/local/docs/HANDOFF.md` (the local layer, RCB-83).
+how this repo dispatches subagents: `docs/SUBAGENTS.md`; the running record:
+`.repoboard/local/docs/HANDOFF.md` (the local layer, RCB-83).
 
 ## Status
 

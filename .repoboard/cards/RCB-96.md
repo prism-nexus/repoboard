@@ -1,7 +1,7 @@
 ---
 id: RCB-96
 title: PH.2 Detectors (package.json, wrangler, compose, Dockerfile, CI, .env.example, vite/drizzle/prisma) + systems detect [--apply], dry-run default, provenance stamped
-status: doing
+status: done
 assignee: repoboard builder
 size: L
 refs:
@@ -10,9 +10,10 @@ parent: RCB-80
 phase: PH.2
 gate: RCB-95
 created: 2026-09-22T03:53:06Z
-updated: 2026-09-22T07:13:43Z
+updated: 2026-09-22T07:49:50Z
 ---
 
 ## Log
 - 2026-09-22T07:12:08Z repoboard builder — moved backlog → doing
 - 2026-09-22T07:13:43Z coordinator — updated assignee
+- 2026-09-22T07:49:50Z repoboard builder — moved doing → done

@@ -662,3 +662,15 @@ detect proposes one` / `Systems: systems.yml invalid (<k> errors) — repoboard 
 check` gains `systems-invalid` (error — the file failed to parse) and `systems-stale` (warning —
 a `source.detected` row no longer matches its source file; blocks only with `--strict`); an
 absent file raises neither (§3.1: unconfigured is inert).
+
+## 8. Flow view (RCB-98)
+
+A third top-level view, `Board | Map | Flow` (`View = 'board' | 'map' | 'flow'`, `TopBar.tsx`,
+`App.tsx`), drawing `.repoboard/systems.yml` via core's pure `layoutSystems` (RCB-95) as inline
+SVG — 0 KB added. States: no file → the `systemsSummary(null, []).line` note; invalid → each
+parse error in a `<pre>`; else rows by `layer`, boxes per system, orthogonal edges. An env switch
+(`dev | prod | both`, default `both`) redraws via `layoutSystems(doc, env)`; a `none` environment
+shows its note in prose instead of a diagram. Clicking a box opens a drawer: the row's fields,
+`pointers` resolved live (`GET /api/systems/:id/refs`, same resolver as `systems show`), and
+backlinks — cards whose `refs:`/`files:` path equals or falls under a pointer — clicking one
+selects the card and switches to Board.

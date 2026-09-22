@@ -103,6 +103,14 @@ export function TopBar({
         >
           Map
         </button>
+        <button
+          type="button"
+          className={`tab ${view === 'flow' ? 'tab--on' : ''}`}
+          onClick={() => onView('flow')}
+          aria-pressed={view === 'flow'}
+        >
+          Flow
+        </button>
       </nav>
       <div className="topbar__tools">
         <span

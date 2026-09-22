@@ -9,6 +9,7 @@ import type {
   RepoSnapshot,
   Sibling,
   StateSections,
+  SystemsDoc,
   Window,
 } from '@repoboard/core';
 
@@ -47,6 +48,17 @@ export interface LogPayload {
 }
 
 /**
+ * RCB-97/98: `GET /api/systems`'s whole payload, and the `systems` half of the WS snapshot/message.
+ * `exists: false` means no `systems.yml` at all (`doc: null`, `errors: []`, inert per plan §3.1);
+ * `exists: true` with `doc: null` means the file is there but failed to parse (`errors` non-empty).
+ */
+export interface SystemsPayload {
+  doc: SystemsDoc | null;
+  errors: string[];
+  exists: boolean;
+}
+
+/**
  * P7.2: `hasBoard` is false when the served root has no `.repoboard/` — map-only mode. It is
  * optional here because it is an additive field: a payload without it is one that predates P7.2,
  * and the safe reading of "absent" is "there is a board", which shows everything rather than
@@ -70,6 +82,8 @@ export type ServerMessage =
       };
       repo: RepoSnapshot | null;
       leases?: LeasesPayload;
+      /** RCB-98: optional the same way `leases`/`state`/`log` are — absent means "nothing yet". */
+      systems?: SystemsPayload;
       state?: StatePayload;
       log?: LogPayload;
     }
@@ -89,6 +103,7 @@ export type ServerMessage =
    */
   | { type: 'config'; config: BoardConfig; siblings?: Sibling[] }
   | { type: 'leases'; leases: LeasesPayload }
+  | ({ type: 'systems' } & SystemsPayload)
   | { type: 'state'; state: StatePayload }
   | { type: 'log'; date: string; text: string }
   /**

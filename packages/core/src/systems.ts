@@ -379,6 +379,10 @@ export function layoutSystems(doc: SystemsDoc, env: 'dev' | 'prod' | 'both'): Sy
     return { env, rows: [], edges: [], notes, none, width: 0, height: 0 };
   }
 
+  // A row/edge is dashed only when BOTH environments have a story to compare against (neither is
+  // `none`) — otherwise "both" degenerates to the one env that exists, and nothing is one-of-two.
+  const bothEnvsShown = none.dev === undefined && none.prod === undefined;
+
   const visibleIds = new Set(
     env === 'both'
       ? doc.systems.map((s) => s.id)
@@ -420,7 +424,7 @@ export function layoutSystems(doc: SystemsDoc, env: 'dev' | 'prod' | 'both'): Sy
         y: rowIndex * 2,
         w: 1,
         h: 1,
-        dashed: env === 'both' && (system?.env.length ?? 0) === 1,
+        dashed: env === 'both' && bothEnvsShown && (system?.env.length ?? 0) === 1,
       };
       boxOf.set(id, box);
       return box;
@@ -436,7 +440,7 @@ export function layoutSystems(doc: SystemsDoc, env: 'dev' | 'prod' | 'both'): Sy
       {
         from: c.from,
         to: c.to,
-        dashed: env === 'both' && c.env.length === 1,
+        dashed: env === 'both' && bothEnvsShown && c.env.length === 1,
         via: c.via,
         points: edgePoints(from, to),
       },

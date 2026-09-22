@@ -116,6 +116,9 @@ page an agent needs, including a paragraph to paste into a `CLAUDE.md`.
   layout under 1.2 ms on every run recorded in `docs/HANDOFF.md`), heat modes for churn over 30 and 90 days and for
   recent edits, an import graph for JS/TS (131 edges here), and *who is where*: files named on
   cards in an active column, updated within `activeWindowMinutes`, glow in the assignee's color.
+- **Flow** — the systems diagram from `.repoboard/systems.yml` (rows by layer, a dev/prod/both
+  switch, one-env systems dashed), with a drawer for each box's fields, live pointers, and
+  backlinks (see `docs/REFERENCE.md` §8).
 - **Ticker** — the events in `.repoboard/events.jsonl`, newest first, including moves made by
   hand-editing a file. One entry per mutation, whichever surface made it: a CLI or MCP move is
   reported under its own actor, a hand edit as `file`, and neither is reported twice (K8).
@@ -238,3 +241,8 @@ owner's.
   (sub-second) is compared against the second-resolution stamp, which would produce the same false
   positive for any same-second write. Fix in `checkFindings` with a same-second test; filed by the
   orchestrator from the first dogfood run.
+- **K14** Flow view: an edge between two boxes in the same column two rows apart runs straight
+  through the box between them (two-env fixture, `both`: api → sendgrid passes through postgres).
+  `layoutSystems` (core) routes every edge as a three-segment path at the mid-row y and never
+  checks for a box on the vertical run; plan §3.5 defers real edge routing. Seen 2026-09-22 in
+  the browser on the RCB-98 landing; fix = a column-aware detour in core with a test on that pair.

@@ -36,7 +36,7 @@ import {
 import { watch as chokidarWatch, type FSWatcher } from 'chokidar';
 import { type WebSocket, WebSocketServer } from 'ws';
 import { applySyncPlan, computeSyncPlan } from './issues.js';
-import { resolveCardRefs } from './refs.js';
+import { resolveCardRefs, resolveRefSpec } from './refs.js';
 import { isGitRepo, type ScanResult, scanRepo } from './scanner.js';
 import { type CardStore, openStore } from './store.js';
 import { buildRepoWatchIgnore, EMPTY_IGNORED, gitIgnoredPaths } from './watch-ignore.js';
@@ -979,6 +979,20 @@ export async function openRepoContext(key: string, opts: RepoContextOptions): Pr
     // RCB-97 (plan §3.3): a pure read, always 200 — an invalid systems.yml is a well-formed
     // answer (`errors` non-empty), same reasoning as `/api/cost`'s `over: true`.
     if (method === 'GET' && path === '/api/systems') return sendJson(res, 200, systemsPayload());
+    // RCB-98 (plan §3.4): a system's `pointers` resolved live, the same resolver
+    // `cmdSystemsShow` uses — the drawer's References section for a system, not a card.
+    const systemRefsMatch = /^\/api\/systems\/([^/]+)\/refs$/.exec(path);
+    if (method === 'GET' && systemRefsMatch?.[1] !== undefined) {
+      const id = decodeURIComponent(systemRefsMatch[1]);
+      const { doc } = systemsPayload();
+      const system = doc?.systems.find((s) => s.id === id);
+      if (!doc || !system) throw new HttpError(404, `unknown system "${id}"`);
+      return sendJson(
+        res,
+        200,
+        await Promise.all(system.pointers.map((p) => resolveRefSpec(root, p))),
+      );
+    }
     // P8.5: archive/sync-issues. Both are POST-only (they can write) and both accept a `dryRun`
     // that never calls a store writer at all — the same "pure read, always 200" reasoning as
     // `/api/leases/check/:resource` and `/api/cost` does not apply here (a real run DOES write),

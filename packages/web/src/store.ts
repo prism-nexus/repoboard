@@ -25,12 +25,15 @@ import type {
   ReposPayload,
   ServerMessage,
   StatePayload,
+  SystemsPayload,
   Transport,
   TransportFactory,
 } from './wire.js';
 
 export type Theme = 'dark' | 'light';
-export type View = 'board' | 'map';
+export type View = 'board' | 'map' | 'flow';
+/** RCB-98: the Flow view's env switch (plan §3.4); default `'both'`. */
+export type FlowEnv = 'dev' | 'prod' | 'both';
 
 export interface Toast {
   id: number;
@@ -63,6 +66,12 @@ export interface State {
   state: StatePayload | null;
   /** P8.3: today's `.repoboard/log/<date>.md`, or null before the first snapshot / before it exists. */
   log: LogPayload | null;
+  /** RCB-98: `.repoboard/systems.yml`, or `null` before the first snapshot (the Flow view's
+   * "loading" state — distinct from `exists: false`, which is a real, inert answer). */
+  systems: SystemsPayload | null;
+  /** RCB-98: the Flow view's env switch (plan §3.4); default `'both'`, not persisted — a fresh
+   * load always starts at the safest read of "both stories". */
+  flowEnv: FlowEnv;
   events: Event[];
   connected: boolean;
   /** False until the first snapshot; the disconnected banner only shows after that. */
@@ -144,6 +153,8 @@ export interface Store {
   saveColumns(columns: Column[]): Promise<boolean>;
   select(id: string | null): void;
   setView(view: View): void;
+  /** RCB-98: the Flow view's env switch. */
+  setFlowEnv(env: FlowEnv): void;
   togglePin(id: string): void;
   setHover(id: string | null): void;
   setFun(fun: boolean): void;
@@ -185,6 +196,8 @@ export function createStore(factory: TransportFactory, opts: StoreOptions = {}):
     leases: null,
     state: null,
     log: null,
+    systems: null,
+    flowEnv: 'both',
     events: [],
     connected: false,
     everConnected: false,
@@ -296,6 +309,7 @@ export function createStore(factory: TransportFactory, opts: StoreOptions = {}):
             siblings: msg.board.siblings ?? [],
             repo: msg.repo,
             leases: msg.leases ?? null,
+            systems: msg.systems ?? null,
             state: msg.state ?? null,
             log: msg.log ?? null,
             everConnected: true,
@@ -332,6 +346,9 @@ export function createStore(factory: TransportFactory, opts: StoreOptions = {}):
           break;
         case 'leases':
           set({ leases: msg.leases });
+          break;
+        case 'systems':
+          set({ systems: { doc: msg.doc, errors: msg.errors, exists: msg.exists } });
           break;
         case 'state':
           set({ state: msg.state });
@@ -475,6 +492,7 @@ export function createStore(factory: TransportFactory, opts: StoreOptions = {}):
     },
     select: (selectedId) => set({ selectedId }),
     setView: (view) => set({ view }),
+    setFlowEnv: (flowEnv) => set({ flowEnv }),
     togglePin: (id) =>
       set({
         pinned: state.pinned.includes(id)

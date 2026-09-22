@@ -753,6 +753,77 @@ describe('GET /api/cards/:id/refs (K7)', () => {
   });
 });
 
+describe('GET /api/systems/:id/refs (RCB-98)', () => {
+  const SYSTEMS_YML = `environments:
+  dev:  { note: "local dev" }
+  prod: { note: "cloud" }
+systems:
+  - id: api
+    name: api service
+    kind: service
+    layer: app
+    env: [dev, prod]
+    runtime: { dev: "node server", prod: "Cloudflare Workers" }
+    owner: null
+    pointers: ["docs/plan.md#§5 Phases"]
+    docs: []
+    why: null
+    source: { hand: "owner", at: "2026-09-22T00:00:00Z" }
+connections: []
+`;
+  const PLAN = '# Plan\n\n## §5 Phases\n- **P6.1** README.\n\n## §6 Layout\nx\n';
+
+  /**
+   * Unlike `rig()`, `systems.yml` must exist BEFORE the store opens/watches — a brand-new file's
+   * chokidar `add` is flaky under concurrent test load (same note as `systems.test.ts`'s HTTP
+   * describe), where a pre-existing file's later `change` is not.
+   */
+  async function systemsRefsRig(withSystemsYml = true) {
+    const repo = await makeTempRepoboard({ 'RB-1.md': cardText('RB-1', 'todo') });
+    cleanups.push(repo.cleanup);
+    await mkdir(join(repo.root, 'docs'));
+    await writeFile(join(repo.root, 'docs', 'plan.md'), PLAN);
+    if (withSystemsYml) {
+      await writeFile(join(repo.root, '.repoboard', 'systems.yml'), SYSTEMS_YML);
+    }
+    const store = await openStore(repo.root, { watch: true, now: () => NOW });
+    cleanups.push(() => store.close());
+    const server = await startServer({ store, port: 0, scan: false });
+    cleanups.push(() => server.close());
+    return { repo, store, server, url: server.url.replace(/\/$/, '') };
+  }
+
+  it("resolves a known system's pointers, live, the same as `systems show`", async () => {
+    const r = await systemsRefsRig();
+    const res = await fetch(`${r.url}/api/systems/api/refs`);
+    expect(res.status).toBe(200);
+    const refs = (await json(res)) as { spec: string; text: string | null }[];
+    expect(refs).toEqual([
+      {
+        spec: 'docs/plan.md#§5 Phases',
+        path: 'docs/plan.md',
+        start: 3,
+        end: 5,
+        text: '## §5 Phases\n- **P6.1** README.\n',
+        truncated: false,
+        error: null,
+      },
+    ]);
+  });
+
+  it('404s with {error} for an unknown id, and for a repo with no systems.yml at all', async () => {
+    const r = await systemsRefsRig();
+    const unknown = await fetch(`${r.url}/api/systems/nope/refs`);
+    expect(unknown.status).toBe(404);
+    expect(await json(unknown)).toMatchObject({ error: expect.stringContaining('nope') });
+
+    const noFile = await systemsRefsRig(false);
+    const res = await fetch(`${noFile.url}/api/systems/api/refs`);
+    expect(res.status).toBe(404);
+    expect(await json(res)).toMatchObject({ error: expect.any(String) });
+  });
+});
+
 // ---- P7.2: hasBoard on the wire (plan §3) ----------------------------------------------------
 
 describe('hasBoard (P7.2)', () => {

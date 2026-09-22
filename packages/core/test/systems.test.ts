@@ -245,6 +245,17 @@ systems:
         expect(layout.edges.length).toBeGreaterThan(0);
       });
 
+      it('"both": prod is none, so no box and no edge is dashed even though every row is one-env', () => {
+        // RCB-98 fix: every system/connection here has env.length === 1 (dev-only), but `both`
+        // only means "one of two stories to compare" when both environments actually have one.
+        const layout = layoutSystems(noneProd(), 'both');
+        const boxes = layout.rows.flatMap((r) => r.boxes);
+        expect(boxes.length).toBeGreaterThan(0);
+        expect(boxes.every((b) => b.dashed === false)).toBe(true);
+        expect(layout.edges.length).toBeGreaterThan(0);
+        expect(layout.edges.every((e) => e.dashed === false)).toBe(true);
+      });
+
       it('"prod" view is empty rows/edges, with none.prod set', () => {
         const layout = layoutSystems(noneProd(), 'prod');
         expect(layout.rows).toEqual([]);

@@ -6,7 +6,7 @@
  * `RepoSnapshot` alongside the config.
  */
 import { defaultBoardConfig, type RepoSnapshot } from '@repoboard/core';
-import { act, screen } from '@testing-library/react';
+import { act, fireEvent, screen } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
 import { card, renderApp, testStore } from './helpers.jsx';
 
@@ -149,5 +149,22 @@ describe('TopBar siblings (RCB-42)', () => {
       }),
     );
     expect(screen.getByRole('link', { name: 'fpj' })).toBeTruthy();
+  });
+});
+
+describe('TopBar Flow tab (RCB-98)', () => {
+  it('renders a third tab, and clicking it sets view: "flow"', () => {
+    const store = testStore();
+    store.dispatch({
+      type: 'snapshot',
+      board: { config: defaultBoardConfig(), cards: [] },
+      repo: repo('/repos/freshpickedjobs'),
+    });
+    renderApp(store);
+    const flowTab = screen.getByRole('button', { name: 'Flow' });
+    expect(flowTab.getAttribute('aria-pressed')).toBe('false');
+    fireEvent.click(flowTab);
+    expect(store.getState().view).toBe('flow');
+    expect(flowTab.getAttribute('aria-pressed')).toBe('true');
   });
 });

@@ -1518,6 +1518,79 @@ button {
   background: var(--surface);
 }
 
+/* flow (RCB-98) — tokens only: --line, --muted, --accent, --bg (plus the pre-existing --surface/
+   --ink already used everywhere else); no new colours, fun stays off (plan D9). */
+.flow {
+  min-height: 0;
+  display: grid;
+  grid-template-rows: auto 1fr;
+  height: 100%;
+  position: relative; /* anchors the system drawer, same as .map */
+}
+.flow__bar {
+  border-bottom: 1px solid var(--line);
+}
+.flow__canvas {
+  min-height: 0;
+  overflow: auto;
+  background: var(--bg);
+  padding: 12px;
+}
+.flow-note {
+  color: var(--muted);
+  max-width: 60ch;
+  margin: 24px;
+}
+.flow-errors {
+  margin: 12px;
+  color: var(--ink);
+}
+.flow-errors pre {
+  white-space: pre-wrap;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  margin: 0 0 8px;
+}
+.flow-svg {
+  max-width: 100%;
+  height: auto;
+  display: block;
+}
+.flow-row-label {
+  fill: var(--muted);
+  font-size: 11px;
+}
+.flow-box rect {
+  fill: var(--surface);
+  stroke: var(--line);
+  stroke-width: 1.5;
+  cursor: pointer;
+}
+.flow-box:hover rect {
+  stroke: var(--line-strong);
+}
+.flow-box--selected rect {
+  stroke: var(--accent);
+  stroke-width: 2;
+}
+.flow-box__id {
+  fill: var(--ink);
+  font-size: 12px;
+  font-weight: 700;
+}
+.flow-box__name {
+  fill: var(--muted);
+  font-size: 11px;
+}
+.flow-box__env {
+  font-size: 10px;
+}
+.flow-edge {
+  fill: none;
+  stroke: var(--muted);
+  stroke-width: 1.5;
+}
+
 /* treemap */
 .treemap {
   position: absolute;

@@ -186,7 +186,7 @@ Steps (all `parent: RCB-80`, `refs:` into this page, backlog until PH.0 clears):
 | PH.1 | `systems.yml` schema, parser, validator, layout — core, pure; plan §2 and §4 gain the shapes. Shapes landed in `packages/core/src/systems.ts` (RCB-95). | M | PH.0 |
 | PH.2 | Detectors + `systems detect [--apply]`, dry-run default, provenance stamped. Landed (RCB-96). | L | PH.1 |
 | PH.3 | Surfaces: CLI/MCP/HTTP/WS, `seat` line, `cost` counts it, `check` findings. Landed (RCB-97). | M | PH.1 |
-| PH.4 | Flow view: rows, env switch, one-env dashes, none-note, drawer with pointers + backlinks | L | PH.3 |
+| PH.4 | Flow view: rows, env switch, one-env dashes, none-note, drawer with pointers + backlinks. Landed (RCB-98). | L | PH.3 |
 | PH.5 | Dogfood: repoboard's own `systems.yml` (hand + detect); a read-only detect report on freshpickedjobs handed to the owner, nothing written there | M | PH.2, PH.4 |
 | PH.6 | Docs and bytes: AGENTS, REFERENCE, README; O3 table re-measured with the new line | S | PH.5 |
 | PH.7 | Plan-on-the-board findings: every gap a cold reader hit becomes its own card (label `plan-ux`) | S each | none |

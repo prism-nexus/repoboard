@@ -8,6 +8,7 @@ import { TopBar } from './components/TopBar.jsx';
 import { StoreContext, useBoardState, useNow, useStore } from './hooks.js';
 import { columnsWithCards, type Store } from './store.js';
 import { Board } from './views/Board.jsx';
+import { FlowView } from './views/Flow.jsx';
 import { MapView } from './views/Map.jsx';
 
 export function App({ store }: { store: Store }) {
@@ -70,7 +71,9 @@ function Shell() {
           Disconnected from the server. Reconnecting… the board shows the last state it saw.
         </div>
       ) : null}
-      <main className="main">{state.view === 'board' ? <Board /> : <MapView />}</main>
+      <main className="main">
+        {state.view === 'board' ? <Board /> : state.view === 'flow' ? <FlowView /> : <MapView />}
+      </main>
       {selected && state.config ? (
         <Drawer
           card={selected}

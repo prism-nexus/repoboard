@@ -1,2 +1,6 @@
-leases: []
+leases:
+  - resource: RCB-99
+    holder: repoboard builder
+    since: 2026-09-22T08:45:43Z
+    note: RCB-99 dogfood systems.yml
 windows: []

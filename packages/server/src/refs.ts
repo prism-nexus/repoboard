@@ -6,7 +6,14 @@
  */
 import { readFile, realpath, stat } from 'node:fs/promises';
 import { isAbsolute, join, relative, sep } from 'node:path';
-import { type Card, parseRef, type ResolvedRef, refError, resolveRef } from '@repoboard/core';
+import {
+  type Card,
+  parseRef,
+  type ResolvedRef,
+  refError,
+  resolveRef,
+  splitLines,
+} from '@repoboard/core';
 import { textFileReason } from './scanner.js';
 
 export type RepoPathResult = { ok: true; path: string } | { ok: false; error: string };
@@ -103,17 +110,125 @@ export function resolveCardRefs(root: string, card: Card): Promise<ResolvedRef[]
   return Promise.all((card.refs ?? []).map((spec) => resolveRefSpec(root, spec)));
 }
 
-/** CLI `card show --resolve`: each ref as a fenced block headed `path:start-end`. */
+/** RCB-106: one merged, printable span of a file, or an unresolved ref passed through as-is. */
+export type MergedRef =
+  | { path: string; start: number; end: number; text: string; truncated: boolean; specs: string[] }
+  | { error: string; spec: string };
+
+/**
+ * RCB-106: card order, but overlapping or touching 1-based spans of the SAME file collapse into
+ * one entry so a caller (the CLI's `--resolve`, and anything else printing refs) never repeats a
+ * line. Only resolved refs with equal `path` and `next.start <= cur.end + 1` merge — a gap of >= 1
+ * line, or a different file, never merges. Groups are found by sorting resolved refs by
+ * (path, start); a group's own position in the output is its first member's original card index,
+ * so an unmerged ref (or an unresolved one) keeps its card position and a merged group appears
+ * where its earliest member did. Never re-reads a file: the merge is over text already resolved.
+ */
+export function mergeResolvedRefs(refs: readonly ResolvedRef[]): MergedRef[] {
+  type Resolved = {
+    idx: number;
+    path: string;
+    start: number;
+    end: number;
+    text: string;
+    truncated: boolean;
+    spec: string;
+  };
+  type Group = {
+    position: number;
+    path: string;
+    start: number;
+    end: number;
+    text: string;
+    truncated: boolean;
+    /** `{ spec, idx }` so `specs` can come out in CARD order, not line order. */
+    members: { spec: string; idx: number }[];
+  };
+  type Positioned = { position: number; entry: MergedRef };
+
+  const resolvedEntries: Resolved[] = [];
+  const positioned: Positioned[] = [];
+
+  refs.forEach((r, idx) => {
+    if (r.text === null || r.path === null || r.start === null || r.end === null) {
+      positioned.push({
+        position: idx,
+        entry: { error: r.error ?? 'unknown error', spec: r.spec },
+      });
+      return;
+    }
+    resolvedEntries.push({
+      idx,
+      path: r.path,
+      start: r.start,
+      end: r.end,
+      text: r.text,
+      truncated: r.truncated,
+      spec: r.spec,
+    });
+  });
+
+  const sorted = [...resolvedEntries].sort((a, b) =>
+    a.path === b.path ? a.start - b.start : a.path < b.path ? -1 : 1,
+  );
+
+  const groups: Group[] = [];
+  for (const entry of sorted) {
+    const cur = groups[groups.length - 1];
+    if (cur !== undefined && cur.path === entry.path && entry.start <= cur.end + 1) {
+      if (entry.end > cur.end) {
+        const extra = splitLines(entry.text).slice(cur.end - entry.start + 1);
+        if (extra.length > 0) cur.text = `${cur.text}\n${extra.join('\n')}`;
+        cur.end = entry.end;
+      }
+      if (entry.truncated) cur.truncated = true;
+      cur.members.push({ spec: entry.spec, idx: entry.idx });
+      if (entry.idx < cur.position) cur.position = entry.idx;
+    } else {
+      groups.push({
+        position: entry.idx,
+        path: entry.path,
+        start: entry.start,
+        end: entry.end,
+        text: entry.text,
+        truncated: entry.truncated,
+        members: [{ spec: entry.spec, idx: entry.idx }],
+      });
+    }
+  }
+
+  for (const g of groups) {
+    positioned.push({
+      position: g.position,
+      entry: {
+        path: g.path,
+        start: g.start,
+        end: g.end,
+        text: g.text,
+        truncated: g.truncated,
+        specs: g.members.sort((a, b) => a.idx - b.idx).map((m) => m.spec),
+      },
+    });
+  }
+
+  return positioned.sort((a, b) => a.position - b.position).map((p) => p.entry);
+}
+
+/** CLI `card show --resolve`: each merged span as a fenced block headed `path:start-end`. */
 export function formatResolvedRefs(refs: readonly ResolvedRef[]): string {
   const out: string[] = [];
-  for (const r of refs) {
-    if (r.text === null) {
-      out.push(`${r.spec} — unresolved: ${r.error ?? 'unknown error'}`, '');
+  for (const m of mergeResolvedRefs(refs)) {
+    if ('error' in m) {
+      out.push(`${m.spec} — unresolved: ${m.error}`, '');
       continue;
     }
-    const range = r.start === r.end ? `${r.start}` : `${r.start}-${r.end}`;
-    const head = `${r.path}:${range}${r.truncated ? ' (truncated)' : ''}`;
-    out.push(head, '```', r.text, '```', '');
+    const range = m.start === m.end ? `${m.start}` : `${m.start}-${m.end}`;
+    const suffix = m.truncated ? ' (truncated)' : '';
+    const head =
+      m.specs.length > 1
+        ? `${m.path}:${range}${suffix} — satisfies: ${m.specs.join(', ')}`
+        : `${m.path}:${range}${suffix}`;
+    out.push(head, '```', m.text, '```', '');
   }
   return out.join('\n');
 }

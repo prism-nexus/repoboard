@@ -5,9 +5,11 @@
  */
 import { mkdir, realpath, rm, symlink, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
+import { splitLines } from '@repoboard/core';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
   formatResolvedRefs,
+  mergeResolvedRefs,
   readRepoText,
   resolveCardRefs,
   resolveRefSpec,
@@ -240,5 +242,126 @@ describe('formatResolvedRefs (CLI --resolve)', () => {
         '',
       ].join('\n'),
     );
+  });
+});
+
+describe('mergeResolvedRefs / --resolve prints overlapping spans once (RCB-106)', () => {
+  function linesText(from: number, to: number): string {
+    const ls: string[] = [];
+    for (let i = from; i <= to; i++) ls.push(`l${i}`);
+    return ls.join('\n');
+  }
+  function resolvedFixture(
+    spec: string,
+    path: string,
+    start: number,
+    end: number,
+    truncated = false,
+  ) {
+    return { spec, path, start, end, text: linesText(start, end), truncated, error: null };
+  }
+  function unresolvedFixture(spec: string, error: string) {
+    return { spec, path: null, start: null, end: null, text: null, truncated: false, error };
+  }
+
+  it('merges a truncated whole-file ref with an overlapping heading ref into one satisfies block', () => {
+    const pathRef = resolvedFixture('d.md', 'd.md', 1, 200, true);
+    const headingRef = resolvedFixture('d.md#H', 'd.md', 173, 213);
+    const merged = mergeResolvedRefs([pathRef, headingRef]);
+    expect(merged).toHaveLength(1);
+    const [m] = merged;
+    if (m === undefined || !('specs' in m)) throw new Error('expected a resolved group');
+    expect(m.path).toBe('d.md');
+    expect(m.start).toBe(1);
+    expect(m.end).toBe(213);
+    expect(m.truncated).toBe(true);
+    expect(m.specs).toEqual(['d.md', 'd.md#H']);
+    const lines = splitLines(m.text);
+    expect(lines).toHaveLength(213);
+    expect(lines[0]).toBe('l1');
+    expect(lines[212]).toBe('l213');
+
+    const out = formatResolvedRefs([pathRef, headingRef]);
+    expect(out).toContain('d.md:1-213 (truncated) — satisfies: d.md, d.md#H');
+    expect(out.match(/\bl173\b/g)).toHaveLength(1);
+  });
+
+  it('does not merge across a one-line gap; both blocks keep plain heads, unchanged bytes', () => {
+    const a = resolvedFixture('e.md:L3-6', 'e.md', 3, 6);
+    const b = resolvedFixture('e.md:L8-9', 'e.md', 8, 9);
+    expect(mergeResolvedRefs([a, b])).toHaveLength(2);
+    const out = formatResolvedRefs([a, b]);
+    expect(out).toBe(
+      ['e.md:3-6', '```', a.text, '```', '', 'e.md:8-9', '```', b.text, '```', ''].join('\n'),
+    );
+  });
+
+  it('merges touching spans (no gap) into one block satisfying both', () => {
+    const a = resolvedFixture('f.md:L3-6', 'f.md', 3, 6);
+    const b = resolvedFixture('f.md:L7-9', 'f.md', 7, 9);
+    const merged = mergeResolvedRefs([a, b]);
+    expect(merged).toHaveLength(1);
+    const [m] = merged;
+    if (m === undefined || !('specs' in m)) throw new Error('expected a resolved group');
+    expect(m.start).toBe(3);
+    expect(m.end).toBe(9);
+    expect(m.specs).toEqual(['f.md:L3-6', 'f.md:L7-9']);
+    expect(splitLines(m.text)).toEqual(['l3', 'l4', 'l5', 'l6', 'l7', 'l8', 'l9']);
+  });
+
+  it('never merges across different files, even with identical line numbers', () => {
+    const a = resolvedFixture('a.md:L3-6', 'a.md', 3, 6);
+    const b = resolvedFixture('b.md:L3-6', 'b.md', 3, 6);
+    expect(mergeResolvedRefs([a, b])).toHaveLength(2);
+  });
+
+  it("keeps card order: a merged group sits at its first member's position, an unresolved ref between them stays in place", () => {
+    const b1 = resolvedFixture('b.md:L10-12', 'b.md', 10, 12);
+    const bad = unresolvedFixture('#bare', '"#bare": missing path before "#"');
+    const a = resolvedFixture('a.md:L1-2', 'a.md', 1, 2);
+    const b2 = resolvedFixture('b.md:L11-14', 'b.md', 11, 14);
+    const merged = mergeResolvedRefs([b1, bad, a, b2]);
+    expect(merged).toHaveLength(3);
+    const [first, second, third] = merged;
+    if (first === undefined || second === undefined || third === undefined) {
+      throw new Error('expected three entries');
+    }
+    if (!('specs' in first)) throw new Error('expected a resolved group');
+    expect(first.path).toBe('b.md');
+    expect(first.start).toBe(10);
+    expect(first.end).toBe(14);
+    expect(first.specs).toEqual(['b.md:L10-12', 'b.md:L11-14']);
+    if (!('error' in second)) throw new Error('expected the unresolved passthrough');
+    expect(second.spec).toBe('#bare');
+    if (!('specs' in third)) throw new Error('expected a resolved group');
+    expect(third.path).toBe('a.md');
+    expect(third.specs).toEqual(['a.md:L1-2']);
+  });
+
+  it('specs come out in CARD order even when the later ref starts earlier in the file', () => {
+    const later = resolvedFixture('b.md:L11-14', 'b.md', 11, 14);
+    const earlier = resolvedFixture('b.md:L10-12', 'b.md', 10, 12);
+    const merged = mergeResolvedRefs([later, earlier]);
+    expect(merged).toHaveLength(1);
+    const [only] = merged;
+    if (only === undefined || !('specs' in only)) throw new Error('expected a resolved group');
+    expect(only.start).toBe(10);
+    expect(only.end).toBe(14);
+    expect(only.specs).toEqual(['b.md:L11-14', 'b.md:L10-12']);
+  });
+
+  it('merges an identical spec resolved twice into one block, spec listed twice, text once', () => {
+    const a = resolvedFixture('g.md:L3-6', 'g.md', 3, 6);
+    const dup = resolvedFixture('g.md:L3-6', 'g.md', 3, 6);
+    const merged = mergeResolvedRefs([a, dup]);
+    expect(merged).toHaveLength(1);
+    const [m] = merged;
+    if (m === undefined || !('specs' in m)) throw new Error('expected a resolved group');
+    expect(m.specs).toEqual(['g.md:L3-6', 'g.md:L3-6']);
+    expect(m.text).toBe('l3\nl4\nl5\nl6');
+
+    const out = formatResolvedRefs([a, dup]);
+    expect(out).toContain('satisfies: g.md:L3-6, g.md:L3-6');
+    expect(out.match(/\bl3\b/g)).toHaveLength(1);
   });
 });

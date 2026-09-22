@@ -50,6 +50,7 @@ shows `!` for a task instead of `?`.
 | `repoboard card ask <id> "<task text>" --task [--as a]` | `repoboard card ask RCB-9 "buy the domain" --task --as coord` → `owner task RCB-9: buy the domain` |
 | `repoboard card decide <id> [<letter>] [--words "<verbatim>"] [--as a]` | `repoboard card decide RCB-36 A` → `decided RCB-36 A`; or `repoboard card decide RCB-36 --words "do it"` → `decided RCB-36 — "do it"`; on a task, `repoboard card decide RCB-9` → `done RCB-9` (or `done RCB-9 — "<words>"`) |
 | `repoboard card list --needs-decision` | filters to cards with an OPEN decision; the table gains a `DECISION` column (a `?` marker, `!` for a task) only when at least one listed card has one — see the bytes below |
+| `repoboard card show <id> --resolve` | each `refs:` entry as a fenced block headed `path:start-end`; RCB-106: overlapping or touching spans of the SAME file print once as one block headed `path:start-end — satisfies: <spec>, <spec>` (`mergeResolvedRefs`, server `refs.ts`); a single-spec block and an unresolved line are byte-identical to before |
 
 Asking again on a card whose decision is OPEN is refused, naming the open question — pass
 `--replace` to withdraw it and ask a new one. Asking again on a DECIDED card just replaces the

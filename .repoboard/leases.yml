@@ -1,2 +1,6 @@
-leases: []
+leases:
+  - resource: RCB-112
+    holder: repoboard builder
+    since: 2026-09-22T19:15:10Z
+    note: RCB-112 build
 windows: []

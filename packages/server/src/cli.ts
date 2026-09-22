@@ -22,6 +22,7 @@ import {
   type DecisionOption,
   dailyLogHeader,
   defaultBoardConfig,
+  findColumn,
   findSeatLine,
   formatCostTable,
   formatLogBlock,
@@ -46,6 +47,7 @@ import {
   serializeCard,
   serializeLeases,
   splitLandings,
+  stepsOf,
   toIso,
   trimLandings,
 } from '@repoboard/core';
@@ -113,16 +115,22 @@ Usage:
                                         (repeatable)
                                         --as actor; status changes go through \`card move\`
   repoboard card list [--status s] [--json] [--needs-decision] [--size S|M|L|XL]
+                      [--parent <id> [--unblocked]]
                                         list cards; --json is compact (id, title, status,
                                         assignee, priority, size, labels, files, parent, phase,
                                         gate, blocked, updated); add --full for bodies;
                                         --size filters to that size (RCB-67);
                                         --needs-decision filters to cards with an open decision;
                                         a BLOCKED column (RCB-68) appears only when a listed card
-                                        is blocked on a gate
-  repoboard card show <id> [--resolve]        print the card file; --resolve appends the lines each
-                                        refs: entry points at, read live from the file; an
-                                        archived id prints \`archived: .repoboard/archive/<id>.md\`
+                                        is blocked on a gate;
+                                        --parent lists that card's steps in phase order (ID PHASE
+                                        STATUS ASSIGNEE GATE BLOCKED TITLE); --unblocked keeps
+                                        the not-done, not-blocked ones (RCB-104)
+  repoboard card show <id> [--resolve] [--steps]  print the card file; --resolve appends the
+                                        lines each refs: entry points at, read live from the
+                                        file; an archived id prints
+                                        \`archived: .repoboard/archive/<id>.md\`; --steps appends
+                                        a ## Steps table of its children
   repoboard card ask <id> "<question>" [--option "A1 <text>"]... [--as a] [--replace] [--task]
                                         open a decision on a card (P8.1); --replace withdraws one
                                         already open. With no options, the owner answers with --words.
@@ -751,6 +759,19 @@ function idNumber(id: string): number {
  * may be filtered) — like `toRow`, a `blocked` reason needs the facts a gate might point outside
  * the filtered list.
  */
+/** Shared padder: fixed-width columns, last column unpadded (trailing spaces trimmed). Both
+ * `formatTable` and `formatStepsTable` (RCB-104) render through this, so the idiom lives in one
+ * place — `formatTable`'s own bytes are unchanged by the factoring. */
+function renderFixedWidthTable(header: string[], rows: string[][]): string {
+  const widths = header.map((h, i) => Math.max(h.length, ...rows.map((r) => (r[i] ?? '').length)));
+  const line = (r: string[]) =>
+    r
+      .map((cell, i) => (i === r.length - 1 ? cell : cell.padEnd(widths[i] ?? 0)))
+      .join('  ')
+      .trimEnd();
+  return [line(header), ...rows.map(line)].join('\n');
+}
+
 export function formatTable(cards: Card[], all: readonly Card[], config: BoardConfig): string {
   const anySize = cards.some((c) => c.size !== undefined);
   const anyDecision = cards.some((c) => needsDecision(c));
@@ -768,13 +789,29 @@ export function formatTable(cards: Card[], all: readonly Card[], config: BoardCo
   if (anyDecision) header.push('DECISION');
   if (anyBlocked) header.push('BLOCKED');
   header.push('TITLE');
-  const widths = header.map((h, i) => Math.max(h.length, ...rows.map((r) => (r[i] ?? '').length)));
-  const line = (r: string[]) =>
-    r
-      .map((cell, i) => (i === r.length - 1 ? cell : cell.padEnd(widths[i] ?? 0)))
-      .join('  ')
-      .trimEnd();
-  return [line(header), ...rows.map(line)].join('\n');
+  return renderFixedWidthTable(header, rows);
+}
+
+/**
+ * RCB-104: `card list --parent <id>` and `card show <id> --steps` share this — a phase card's
+ * steps in `stepsOf` order (never re-sorted here). Columns are ALWAYS present (no
+ * appears-if-any-row-has-one rule like `formatTable`'s SIZE/DECISION/BLOCKED): `ID PHASE STATUS
+ * ASSIGNEE GATE BLOCKED TITLE`. `all` is the whole board, same reason as `formatTable`: a gate or
+ * `blockedReason` may point outside `steps`. Zero steps prints the single line `(no steps)`.
+ */
+export function formatStepsTable(steps: Card[], all: readonly Card[], config: BoardConfig): string {
+  if (steps.length === 0) return '(no steps)';
+  const header = ['ID', 'PHASE', 'STATUS', 'ASSIGNEE', 'GATE', 'BLOCKED', 'TITLE'];
+  const rows = steps.map((s) => [
+    s.id,
+    s.phase ?? '-',
+    s.status,
+    s.assignee ?? '-',
+    s.gate ?? '-',
+    blockedReason(s, all, config) ?? '',
+    s.title,
+  ]);
+  return renderFixedWidthTable(header, rows);
 }
 
 async function cmdCardList(args: string[], io: CliIO): Promise<number> {
@@ -784,17 +821,38 @@ async function cmdCardList(args: string[], io: CliIO): Promise<number> {
     json: { type: 'boolean', default: false },
     full: { type: 'boolean', default: false },
     'needs-decision': { type: 'boolean', default: false },
+    parent: { type: 'string' },
+    unblocked: { type: 'boolean', default: false },
   });
   if (values.full && !values.json) throw new UserError('--full only applies with --json');
+  if (values.unblocked && values.parent === undefined) {
+    throw new UserError('--unblocked requires --parent <id>');
+  }
   const size = sizeFrom(values.size);
   const root = await requireRoot(io);
   const store = await openStore(root, { watch: false, now: io.now });
   const all = store.list();
-  let cards = all;
+  const parentId = values.parent;
+  let cards: Card[];
+  if (parentId !== undefined) {
+    if (!all.some((c) => c.id === parentId)) throw new UserError(`unknown card "${parentId}"`);
+    cards = stepsOf(parentId, all); // RCB-104: phase order — never re-sorted below
+  } else {
+    cards = all;
+  }
   if (values.status !== undefined) cards = cards.filter((c) => c.status === values.status);
   if (size !== undefined) cards = cards.filter((c) => c.size === size);
   if (values['needs-decision']) cards = cards.filter((c) => needsDecision(c));
-  cards = cards.slice().sort((a, b) => idNumber(a.id) - idNumber(b.id) || (a.id < b.id ? -1 : 1));
+  if (values.unblocked) {
+    cards = cards.filter(
+      (c) =>
+        findColumn(store.config, c.status)?.done !== true &&
+        blockedReason(c, all, store.config) === null,
+    );
+  }
+  if (parentId === undefined) {
+    cards = cards.slice().sort((a, b) => idNumber(a.id) - idNumber(b.id) || (a.id < b.id ? -1 : 1));
+  }
   if (values.json) {
     // Compact rows by default (K6): bodies only with --full. Same shape as MCP list_cards.
     io.stdout.write(
@@ -802,7 +860,9 @@ async function cmdCardList(args: string[], io: CliIO): Promise<number> {
     );
     return 0;
   }
-  io.stdout.write(`${formatTable(cards, all, store.config)}\n`);
+  io.stdout.write(
+    `${parentId !== undefined ? formatStepsTable(cards, all, store.config) : formatTable(cards, all, store.config)}\n`,
+  );
   if (store.invalid.length > 0) {
     const err = io.stderr ?? io.stdout;
     for (const inv of store.invalid) err.write(`invalid: ${inv.path}: ${inv.error}\n`);
@@ -811,9 +871,12 @@ async function cmdCardList(args: string[], io: CliIO): Promise<number> {
 }
 
 async function cmdCardShow(args: string[], io: CliIO): Promise<number> {
-  const { values, positionals } = parse(args, { resolve: { type: 'boolean', default: false } });
+  const { values, positionals } = parse(args, {
+    resolve: { type: 'boolean', default: false },
+    steps: { type: 'boolean', default: false },
+  });
   const [id] = positionals;
-  if (!id) throw new UserError('usage: repoboard card show <id> [--resolve]');
+  if (!id) throw new UserError('usage: repoboard card show <id> [--resolve] [--steps]');
   const root = await requireRoot(io);
   const store = await openStore(root, { watch: false, now: io.now });
   const card = store.get(id);
@@ -830,6 +893,11 @@ async function cmdCardShow(args: string[], io: CliIO): Promise<number> {
     throw new UserError(`unknown card "${id}"`);
   }
   io.stdout.write(await readFile(store.filePath(id), 'utf8'));
+  if (values.steps) {
+    // RCB-104: render-only — the card file is never written.
+    const all = store.list();
+    io.stdout.write(`\n## Steps\n${formatStepsTable(stepsOf(card.id, all), all, store.config)}\n`);
+  }
   if (values.resolve) {
     // K7: each ref as a fenced block headed path:start-end, resolved now from the file.
     const refs = await resolveCardRefs(store.root, card);

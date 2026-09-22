@@ -5,7 +5,7 @@ import { basename, dirname, join } from 'node:path';
 import { promisify } from 'node:util';
 import { type Card, defaultBoardConfig, parseBoard, serializeBoard } from '@repoboard/core';
 import { afterEach, describe, expect, it } from 'vitest';
-import { findRoot, formatTable, run } from '../src/cli.js';
+import { findRoot, formatStepsTable, formatTable, run } from '../src/cli.js';
 import { cardText, makeTempDir, makeTempRepoboard, makeTempRepoNoBoard, NOW } from './helpers.js';
 
 const execFileAsync = promisify(execFile);
@@ -1071,6 +1071,156 @@ describe('formatTable', () => {
         'RB-1  todo    -               First\n' +
         'RB-2  todo    -         M     First',
     );
+  });
+});
+
+describe('card list --parent / card show --steps (RCB-104)', () => {
+  function cardId(out: string): string {
+    const m = /^created (\S+)/.exec(out);
+    if (!m?.[1]) throw new Error(`no "created <id>" in: ${out}`);
+    return m[1];
+  }
+
+  /**
+   * Parent `P` in `doing`; three steps added OUT of phase order (PH.2 first, so id order ≠
+   * phase order): PH.2 gets a placeholder sentence gate (PH.1's id does not exist yet), PH.0 is
+   * added and moved to `done`, PH.1 is added gated on PH.0's id, then PH.2's gate is updated to
+   * PH.1's id. Plus one unrelated card with no parent.
+   */
+  async function buildFixture(): Promise<{
+    root: string;
+    parent: string;
+    ph0: string;
+    ph1: string;
+    ph2: string;
+    other: string;
+  }> {
+    const root = await freshRepo();
+    const parent = cardId(
+      (await repoboard(root, 'card', 'add', 'Parent', '--status', 'doing')).out,
+    );
+    const ph2 = cardId(
+      (
+        await repoboard(
+          root,
+          'card',
+          'add',
+          'Step two',
+          '--parent',
+          parent,
+          '--phase',
+          'PH.2',
+          '--gate',
+          'wait for step one',
+        )
+      ).out,
+    );
+    const ph0 = cardId(
+      (await repoboard(root, 'card', 'add', 'Step zero', '--parent', parent, '--phase', 'PH.0'))
+        .out,
+    );
+    expect((await repoboard(root, 'card', 'move', ph0, 'done')).code).toBe(0);
+    const ph1 = cardId(
+      (
+        await repoboard(
+          root,
+          'card',
+          'add',
+          'Step one',
+          '--parent',
+          parent,
+          '--phase',
+          'PH.1',
+          '--gate',
+          ph0,
+        )
+      ).out,
+    );
+    expect((await repoboard(root, 'card', 'update', ph2, '--gate', ph1)).code).toBe(0);
+    const other = cardId((await repoboard(root, 'card', 'add', 'Unrelated')).out);
+    return { root, parent, ph0, ph1, ph2, other };
+  }
+
+  it('1. lists steps in phase order (not id order), with per-step GATE/BLOCKED', async () => {
+    const { root, parent, ph0, ph1, ph2, other } = await buildFixture();
+    const res = await repoboard(root, 'card', 'list', '--parent', parent);
+    expect(res.code).toBe(0);
+    const lines = res.out.split('\n').filter((l) => l !== '');
+    expect(lines[0]).toMatch(/^ID\s+PHASE\s+STATUS\s+ASSIGNEE\s+GATE\s+BLOCKED\s+TITLE$/);
+    expect(lines).toHaveLength(4); // header + 3 steps
+    const ids = lines.slice(1).map((l) => l.split(/\s+/)[0]);
+    expect(ids).toEqual([ph0, ph1, ph2]);
+    expect(res.out).not.toContain(other);
+    const ph1Line = lines.find((l) => l.startsWith(`${ph1} `));
+    expect(ph1Line).toMatch(new RegExp(`^${ph1}\\s+PH\\.1\\s+backlog\\s+-\\s+${ph0}\\s+Step one$`));
+    const ph2Line = lines.find((l) => l.startsWith(`${ph2} `));
+    expect(ph2Line).toMatch(
+      new RegExp(
+        `^${ph2}\\s+PH\\.2\\s+backlog\\s+-\\s+${ph1}\\s+blocked on ${ph1} \\(backlog\\)\\s+Step two$`,
+      ),
+    );
+  });
+
+  it('2. --unblocked keeps only the not-done, not-blocked step (PH.0 done, PH.2 blocked)', async () => {
+    const { root, parent, ph1 } = await buildFixture();
+    const res = await repoboard(root, 'card', 'list', '--parent', parent, '--unblocked');
+    expect(res.code).toBe(0);
+    const lines = res.out.split('\n').filter((l) => l !== '');
+    expect(lines).toHaveLength(2); // header + PH.1 only
+    expect(lines[1]?.startsWith(`${ph1} `)).toBe(true);
+  });
+
+  it('3. --parent --json returns rows in phase order, each with parent === the parent id', async () => {
+    const { root, parent, ph0, ph1, ph2 } = await buildFixture();
+    const res = await repoboard(root, 'card', 'list', '--parent', parent, '--json');
+    expect(res.code).toBe(0);
+    const rows = JSON.parse(res.out) as Array<Record<string, unknown>>;
+    expect(rows.map((r) => r.id)).toEqual([ph0, ph1, ph2]);
+    for (const row of rows) expect(row.parent).toBe(parent);
+  });
+
+  it('4. --unblocked without --parent is refused', async () => {
+    const root = await freshRepo();
+    const res = await repoboard(root, 'card', 'list', '--unblocked');
+    expect(res.code).toBe(1);
+    expect(res.err).toMatch(/--unblocked requires --parent/);
+  });
+
+  it('5. --parent naming an unknown card is refused', async () => {
+    const root = await freshRepo();
+    const res = await repoboard(root, 'card', 'list', '--parent', 'NOPE-1');
+    expect(res.code).toBe(1);
+    expect(res.err).toMatch(/unknown card "NOPE-1"/);
+  });
+
+  it('6. card show <id> --steps appends a ## Steps section; the file itself is untouched', async () => {
+    const { root, parent, ph0, ph1, ph2 } = await buildFixture();
+    const withSteps = await repoboard(root, 'card', 'show', parent, '--steps');
+    expect(withSteps.code).toBe(0);
+    expect(withSteps.out).toContain('\n## Steps\n');
+    const stepsSection = withSteps.out.slice(withSteps.out.indexOf('## Steps'));
+    const i0 = stepsSection.indexOf(ph0);
+    const i1 = stepsSection.indexOf(ph1);
+    const i2 = stepsSection.indexOf(ph2);
+    expect(i0).toBeGreaterThan(-1);
+    expect(i1).toBeGreaterThan(i0);
+    expect(i2).toBeGreaterThan(i1);
+
+    const plain = await repoboard(root, 'card', 'show', parent);
+    const fileText = await readFile(join(root, '.repoboard', 'cards', `${parent}.md`), 'utf8');
+    expect(plain.out).toBe(fileText);
+    expect(fileText).not.toContain('## Steps');
+  });
+
+  it('7. card show <id> --steps on a childless card prints (no steps)', async () => {
+    const { root, ph0 } = await buildFixture();
+    const res = await repoboard(root, 'card', 'show', ph0, '--steps');
+    expect(res.code).toBe(0);
+    expect(res.out.endsWith('\n## Steps\n(no steps)\n')).toBe(true);
+  });
+
+  it('8. formatStepsTable([]) is "(no steps)"; formatTable is untouched', () => {
+    expect(formatStepsTable([], [], defaultBoardConfig())).toBe('(no steps)');
   });
 });
 

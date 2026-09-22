@@ -1,9 +1,13 @@
 /**
  * RCB-83 step 1: `.repoboard/local/` — a second, local-only git repo nested inside the (public)
  * one, gitignored by the tool itself. It holds machine facts (`RIG.md`: build, ports, locks, seat
- * names, other repos on this machine) that must never ship in the public tree, and is where an
- * owner can `git mv` the running record (`STATE.md`, `log/`) once they want it local too (never
- * done automatically — `localInit` only prints a notice).
+ * names, other repos on this machine) that must never ship in the public tree.
+ *
+ * RCB-93: the running record (`STATE.md`, `log/`) follows this rule — it lives where it already
+ * is. An UNTRACKED top-level record moves into `.repoboard/local/` on `local init` (nothing else
+ * could be reading it there). A TRACKED one is left in place unless `local init --move-record`,
+ * since the store reads `.repoboard/STATE.md`/`log/` at the top level whenever it exists — see
+ * `moveIntoLocal` and `store.ts`'s `load()`.
  *
  * All git calls run via `spawn('git', …)` with `cwd` = the local dir itself, so once `git init`
  * has run there every command is scoped to THAT nested repo (git resolves `.git` from `cwd`
@@ -129,6 +133,9 @@ export interface LocalInitOptions {
   remote?: string;
   io: LocalIO;
   now?: () => Date;
+  /** RCB-93: move a TRACKED `.repoboard/STATE.md`/`log/` into `.repoboard/local/` too. Default
+   * false — an untracked record still moves unconditionally, unchanged from before RCB-93. */
+  moveRecord?: boolean;
 }
 
 /**
@@ -164,12 +171,26 @@ export async function localInit(root: string, opts: LocalInitOptions): Promise<v
     }
   }
 
-  // The running record follows the layer: once `.repoboard/local/` exists the store reads and
-  // writes `local/STATE.md` and writes `local/log/`, so a top-level STATE.md/log/ left behind
-  // would silently stop being read. Move them in (a rename, never a rewrite) so the seat's next
-  // read sees the same record; in the parent repo they then show as deletions to commit.
-  await moveIntoLocal(root, 'STATE.md', opts.io);
-  await moveIntoLocal(root, 'log', opts.io);
+  // RCB-93: the record lives where it already is. An UNTRACKED top-level STATE.md/log/ still
+  // moves in unconditionally (today's behaviour, unchanged) — nothing else could be reading it.
+  // A TRACKED one is left in place unless `--move-record`: the store (see `store.ts` `load()`)
+  // reads `.repoboard/STATE.md`/`log/` at the top level whenever it exists, tracked or not, so a
+  // bare `local init` never makes a committed record read as missing for every other seat.
+  const moveRecord = opts.moveRecord ?? false;
+  await moveIntoLocal(root, 'STATE.md', opts.io, moveRecord);
+  await moveIntoLocal(root, 'log', opts.io, moveRecord);
+
+  // Neither record exists at the top level at all (nothing tracked, nothing to move) — mkdir the
+  // local log dir now so the store's `isDirectory(local/log)` check (`resolveLogDir()`) sees it
+  // from the very first write, rather than falling back to `.repoboard/log/` until the first log.
+  const stateAtTop = await stat(join(root, '.repoboard', 'STATE.md')).then(
+    () => true,
+    () => false,
+  );
+  const logAtTop = await isDirectory(join(root, '.repoboard', 'log'));
+  if (!stateAtTop && !logAtTop) {
+    await mkdir(join(localDir(root), 'log'), { recursive: true });
+  }
 
   const sync = await localSync(root, 'repoboard local: init');
   // A remote given to a repo that already has its commits: `localSync` found nothing to commit,
@@ -184,9 +205,37 @@ export async function localInit(root: string, opts: LocalInitOptions): Promise<v
   }
 }
 
-/** Rename `.repoboard/<name>` to `.repoboard/local/<name>` when the former exists and the latter
- * does not. Prints `moved …`; silent when there is nothing to move. Never merges or overwrites. */
-async function moveIntoLocal(root: string, name: string, io: LocalIO): Promise<void> {
+/**
+ * RCB-93: is `.repoboard/<relPath>` tracked in the ROOT repo's git index? A file is checked with
+ * `ls-files --error-unmatch` (exit 0 = tracked); a directory (`log`) is checked with a plain
+ * `ls-files` — any tracked file under it counts, so non-empty stdout means tracked. Any git
+ * failure — untracked, or root is not a git repository at all — is treated as untracked; the
+ * store makes no git calls either, so "no git" and "not tracked" collapse to the same thing here.
+ */
+async function isTrackedInGit(root: string, relPath: string, isDir: boolean): Promise<boolean> {
+  if (isDir) {
+    const res = await runGit(root, ['ls-files', '--', relPath]);
+    return res.code === 0 && res.stdout.trim().length > 0;
+  }
+  const res = await runGit(root, ['ls-files', '--error-unmatch', '--', relPath]);
+  return res.code === 0;
+}
+
+/**
+ * Move `.repoboard/<name>` into `.repoboard/local/<name>` when the former exists and the latter
+ * does not — UNLESS `<name>` is tracked in the root repo's git index and `moveRecord` is false, in
+ * which case it is left exactly where it is (RCB-93: the record lives where it already is; the
+ * store reads it there). Tracked and moved: also `git rm -r --cached` it in the ROOT repo so the
+ * parent index shows the removal staged for the owner to commit. Untracked: unchanged behaviour —
+ * always moves. Prints `moved …` / `kept … (tracked in git; …)`; silent when there is nothing to
+ * move (both present, or neither). Never merges or overwrites.
+ */
+async function moveIntoLocal(
+  root: string,
+  name: string,
+  io: LocalIO,
+  moveRecord: boolean,
+): Promise<void> {
   const from = join(root, '.repoboard', name);
   const to = join(localDir(root), name);
   const fromPresent = await stat(from).then(
@@ -198,8 +247,24 @@ async function moveIntoLocal(root: string, name: string, io: LocalIO): Promise<v
     () => false,
   );
   if (!fromPresent || toPresent) return;
+
+  const relPath = `.repoboard/${name}`;
+  const isDir = await isDirectory(from);
+  const tracked = await isTrackedInGit(root, relPath, isDir);
+
+  if (tracked && !moveRecord) {
+    io.stdout.write(
+      `kept ${relPath} (tracked in git; pass --move-record to move it into .repoboard/local/)\n`,
+    );
+    return;
+  }
+
   await rename(from, to);
-  io.stdout.write(`moved .repoboard/${name} → .repoboard/local/${name}\n`);
+  io.stdout.write(`moved ${relPath} → .repoboard/local/${name}\n`);
+
+  if (tracked) {
+    await runGit(root, ['rm', '-r', '-q', '--cached', '--', relPath]);
+  }
 }
 
 export interface LocalSyncResult {

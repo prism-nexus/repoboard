@@ -205,12 +205,14 @@ Usage:
                                         block's header time is more than a minute ahead of the
                                         clock, so it was ignored for stale-state; hand-typed header
                                         or clock skew, RCB-90)
-  repoboard local init [--remote <url>]
+  repoboard local init [--remote <url>] [--move-record]
                                         create .repoboard/local/ — a gitignored, separate git repo
                                         for machine facts (scaffolds RIG.md, adds the exact line
                                         \`.repoboard/local/\` to the root .gitignore, git-inits and
                                         commits); --remote sets (or updates) origin for a private
-                                        backup that needs no extra step (RCB-83)
+                                        backup that needs no extra step (RCB-83); a tracked
+                                        STATE.md/log is kept in place unless --move-record — the
+                                        store reads the record where it is (RCB-93)
   repoboard local sync [-m "<msg>"]    stage, commit (default message "repoboard local: sync") and
                                         push .repoboard/local/ if it has an origin; "no
                                         .repoboard/local/" when there is none to sync
@@ -1433,14 +1435,24 @@ async function cmdCheck(args: string[], io: CliIO): Promise<number> {
 
 /**
  * RCB-83: `repoboard local init|sync|status` — the local-only layer, `.repoboard/local/`, a
- * separate gitignored git repo for machine facts (RIG.md) and, once an owner `git mv`s them in,
- * the running record (STATE.md, log/). See `local.ts` for the git mechanics.
+ * separate gitignored git repo for machine facts (RIG.md). RCB-93: the running record (STATE.md,
+ * log/) follows it too, but only when the top level has none — a record already tracked in git
+ * stays exactly where it is unless `local init --move-record` says otherwise. See `local.ts` for
+ * the git mechanics.
  */
 async function cmdLocal(sub: string | undefined, args: string[], io: CliIO): Promise<number> {
   const root = await requireRoot(io);
   if (sub === 'init') {
-    const { values } = parse(args, { remote: { type: 'string' } });
-    await localInit(root, { remote: values.remote, io, now: io.now });
+    const { values } = parse(args, {
+      remote: { type: 'string' },
+      'move-record': { type: 'boolean', default: false },
+    });
+    await localInit(root, {
+      remote: values.remote,
+      io,
+      now: io.now,
+      moveRecord: values['move-record'],
+    });
     return 0;
   }
   if (sub === 'sync') {

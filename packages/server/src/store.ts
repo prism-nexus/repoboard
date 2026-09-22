@@ -273,6 +273,9 @@ export class CardStore extends EventEmitter<StoreEvents> {
   /** RCB-83: does `.repoboard/local/` exist? Decided once, in `load()` — see `hasBoard`'s own
    * doc comment for why this is not re-derived while the server runs. */
   private hasLocalLayer = false;
+  /** RCB-93: does `.repoboard/local/log/` exist? Precomputed once in `load()` (alongside
+   * `hasLocalLayer`) so `resolveLogDir()` can stay synchronous — see its own doc comment. */
+  private hasLocalLog = false;
 
   constructor(root: string, opts: OpenStoreOptions = {}) {
     super();
@@ -352,13 +355,18 @@ export class CardStore extends EventEmitter<StoreEvents> {
   /** Read board.yml, every card, and the event log. Then optionally start watching. */
   async load(watch: boolean): Promise<void> {
     this.board = await isDirectory(this.repoboardDir);
-    // RCB-83: the local layer's record follows it — a `.repoboard/local/` directory redirects
-    // where STATE.md is read/written and where the log is written (reads still merge the old
-    // location, see `logReadDirs`). No local dir at all: byte-for-byte today's behaviour.
+    // RCB-93: the record lives where it already is — the local layer OWNS STATE.md/log only when
+    // the top level has none. Existence, never git: the store makes no git calls, so a tracked
+    // top-level file reads exactly like an untracked one, and only the DIRECTORY's presence plus
+    // the top-level file's absence redirects to `local/`. Reads still merge the old location too
+    // (see `logReadDirs`); no local dir at all is byte-for-byte today's behaviour.
     this.hasLocalLayer = await isDirectory(localDir(this.root));
-    this.statePath = this.hasLocalLayer
-      ? join(localDir(this.root), 'STATE.md')
-      : join(this.repoboardDir, 'STATE.md');
+    const topStateExists = await exists(join(this.repoboardDir, 'STATE.md'));
+    this.statePath =
+      this.hasLocalLayer && !topStateExists
+        ? join(localDir(this.root), 'STATE.md')
+        : join(this.repoboardDir, 'STATE.md');
+    this.hasLocalLog = this.hasLocalLayer && (await isDirectory(join(localDir(this.root), 'log')));
     // RCB-71 A: `resolveLogDir()` reads `this.cfg`, so this must come AFTER `loadConfig()`.
     await this.loadConfig();
     this.logDir = this.resolveLogDir();
@@ -743,10 +751,17 @@ export class CardStore extends EventEmitter<StoreEvents> {
    * watcher's `board.yml` handler, so a `logDir` added or removed while `serve` runs takes effect
    * on the next `board.yml` change without a restart. Reversed from P8.6 decision 1, which had
    * `logDir` as an additional READ-only source; reads are unaffected, see `logReadDirs()`.
+   *
+   * RCB-93: `hasLocalLog` (precomputed once in `load()`, alongside `hasLocalLayer`) is true only
+   * when `.repoboard/local/log/` itself already exists as a directory — never re-derived here, so
+   * this stays synchronous (a `board.yml` `logDir` change re-runs this from the watcher). A
+   * tracked top-level `log/` that `local init` left in place never gets a `local/log/` directory
+   * in the first place (see `moveIntoLocal`), so it keeps writing `.repoboard/log/` here too — the
+   * record lives where it already is.
    */
   private resolveLogDir(): string {
     if (this.cfg.logDir) return resolve(this.root, this.cfg.logDir);
-    return this.hasLocalLayer ? join(localDir(this.root), 'log') : join(this.repoboardDir, 'log');
+    return this.hasLocalLog ? join(localDir(this.root), 'log') : join(this.repoboardDir, 'log');
   }
 
   /**

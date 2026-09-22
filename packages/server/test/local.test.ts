@@ -8,10 +8,10 @@
  */
 import { execFile } from 'node:child_process';
 import { existsSync } from 'node:fs';
-import { readFile, rm, stat, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
-import { toIso } from '@repoboard/core';
+import { defaultBoardConfig, serializeBoard, toIso } from '@repoboard/core';
 import { afterEach, describe, expect, it } from 'vitest';
 import { run } from '../src/cli.js';
 import { hasLocal, localDir, localInit, localStatus, localSync } from '../src/local.js';
@@ -143,6 +143,121 @@ describe('repoboard local init', () => {
     const clean = await freshRepo({});
     const res2 = await repoboard(clean, 'local', 'init');
     expect(res2.out).not.toContain('moved ');
+  });
+});
+
+describe('RCB-93: a tracked record stays where it is', () => {
+  /** git-init the root, add + commit `.repoboard/` so STATE.md and log/ are TRACKED there. */
+  async function commitRepoboard(root: string): Promise<void> {
+    await git(root, 'init', '-q');
+    await git(root, 'add', '.repoboard');
+    await git(root, 'commit', '-q', '-m', 'tracked record');
+  }
+
+  it('(a) a tracked STATE.md/log is kept in place without --move-record; the store keeps reading it there', async () => {
+    const root = await freshRepo({});
+    const init = await repoboard(root, 'init', '--practices');
+    expect(init.code).toBe(0);
+    await commitRepoboard(root);
+
+    const res = await repoboard(root, 'local', 'init');
+    expect(res.code).toBe(0);
+    expect(res.out).toContain(
+      'kept .repoboard/STATE.md (tracked in git; pass --move-record to move it into .repoboard/local/)',
+    );
+    expect(res.out).toContain(
+      'kept .repoboard/log (tracked in git; pass --move-record to move it into .repoboard/local/)',
+    );
+    expect(existsSync(join(root, '.repoboard', 'STATE.md'))).toBe(true);
+    expect(existsSync(join(root, '.repoboard', 'local', 'STATE.md'))).toBe(false);
+
+    const up = await repoboard(root, 'seat', 'builder', '--up', 'starting work');
+    expect(up.code).toBe(0);
+    const topState = await readFile(join(root, '.repoboard', 'STATE.md'), 'utf8');
+    expect(topState).toContain('starting work');
+    expect(existsSync(join(root, '.repoboard', 'local', 'STATE.md'))).toBe(false);
+
+    const seat = await repoboard(root, 'seat', 'builder');
+    expect(seat.code).toBe(0);
+    expect(seat.out).toContain('## Rig (.repoboard/local/RIG.md)');
+    expect(seat.out).toContain('builder: UP');
+  });
+
+  it('(b) --move-record moves a tracked STATE.md/log and stages the removal in the root repo', async () => {
+    const root = await freshRepo({});
+    const init = await repoboard(root, 'init', '--practices');
+    expect(init.code).toBe(0);
+    await commitRepoboard(root);
+
+    const res = await repoboard(root, 'local', 'init', '--move-record');
+    expect(res.code).toBe(0);
+    expect(res.out).toContain('moved .repoboard/STATE.md → .repoboard/local/STATE.md');
+    expect(res.out).toContain('moved .repoboard/log → .repoboard/local/log');
+
+    const status = await git(root, 'status', '--porcelain');
+    expect(status).toContain('D  .repoboard/STATE.md');
+
+    expect(existsSync(join(root, '.repoboard', 'STATE.md'))).toBe(false);
+    expect(existsSync(join(root, '.repoboard', 'local', 'STATE.md'))).toBe(true);
+
+    const up = await repoboard(root, 'seat', 'builder', '--up', 'moved record work');
+    expect(up.code).toBe(0);
+    const localState = await readFile(join(root, '.repoboard', 'local', 'STATE.md'), 'utf8');
+    expect(localState).toContain('moved record work');
+    expect(existsSync(join(root, '.repoboard', 'STATE.md'))).toBe(false);
+  });
+
+  it('(c) a bare .repoboard/local/ directory alone never flips which STATE.md the store reads', async () => {
+    const root = await freshRepo({});
+    const init = await repoboard(root, 'init', '--practices');
+    expect(init.code).toBe(0);
+    const before = await repoboard(root, 'seat', 'builder', '--up', 'before local dir existed');
+    expect(before.code).toBe(0);
+
+    await mkdir(join(root, '.repoboard', 'local'), { recursive: true });
+
+    const res = await repoboard(root, 'seat', 'builder');
+    expect(res.code).toBe(0);
+    expect(res.out).toContain('builder: UP');
+    expect(existsSync(join(root, '.repoboard', 'local', 'STATE.md'))).toBe(false);
+  });
+
+  it('(d) a configured board.yml logDir still wins even with a tracked STATE.md/log', async () => {
+    const root = await freshRepo({});
+    const init = await repoboard(root, 'init', '--practices');
+    expect(init.code).toBe(0);
+    await writeFile(
+      join(root, '.repoboard', 'board.yml'),
+      serializeBoard({ ...defaultBoardConfig(), logDir: 'docs/log' }),
+    );
+    await commitRepoboard(root);
+
+    const initLocal = await repoboard(root, 'local', 'init');
+    expect(initLocal.code).toBe(0);
+
+    const res = await repoboard(root, 'log', '--as', 'x', 'y');
+    expect(res.code).toBe(0);
+    const text = await readFile(join(root, 'docs', 'log', `${TODAY}.md`), 'utf8');
+    expect(text).toContain('y');
+    expect(existsSync(join(root, '.repoboard', 'local', 'log'))).toBe(false);
+  });
+
+  it('(e) control: no top-level record at all — local init pre-creates local/log/, seat/log write there', async () => {
+    const root = await freshRepo({});
+    const res = await repoboard(root, 'local', 'init');
+    expect(res.code).toBe(0);
+    expect(existsSync(join(root, '.repoboard', 'local', 'log'))).toBe(true);
+
+    const log = await repoboard(root, 'log', '--as', 'x', 'y');
+    expect(log.code).toBe(0);
+    const text = await readFile(join(root, '.repoboard', 'local', 'log', `${TODAY}.md`), 'utf8');
+    expect(text).toContain('y');
+
+    const up = await repoboard(root, 'seat', 'x', '--up', 'a');
+    expect(up.code).toBe(0);
+    const state = await readFile(join(root, '.repoboard', 'local', 'STATE.md'), 'utf8');
+    expect(state).toContain('a');
+    expect(existsSync(join(root, '.repoboard', 'STATE.md'))).toBe(false);
   });
 });
 

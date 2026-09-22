@@ -3,4 +3,8 @@ leases:
     holder: repoboard builder
     since: 2026-09-22T17:50:03Z
     note: RCB-109 Flow drawer
+  - resource: RCB-111
+    holder: repoboard builder
+    since: 2026-09-22T18:04:00Z
+    note: RCB-111 Flow empty state → plan cards
 windows: []

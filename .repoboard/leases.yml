@@ -1,6 +1,2 @@
-leases:
-  - resource: RCB-100
-    holder: repoboard builder
-    since: 2026-09-22T09:54:20Z
-    note: RCB-100 PH.6 docs and bytes
+leases: []
 windows: []

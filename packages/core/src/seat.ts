@@ -4,11 +4,13 @@
  * as one read instead of the three-file ritual. Pure, I/O-free (§0.5): the store gathers
  * `SeatBundleInput`, this file turns it into a `SeatBundle` and renders it.
  */
+import { defaultBoardConfig, findColumn } from './board.js';
 import { needsDecision } from './decisions.js';
+import { blockedReason, gateState, stepsOf } from './phases.js';
 import { formatLogBlock, type LogBlock } from './repolog.js';
 import { ownerQueueLine } from './state.js';
 import { toIso } from './time.js';
-import type { Card } from './types.js';
+import type { BoardConfig, Card } from './types.js';
 
 export interface SeatBundleInput {
   /** As typed on the command line — never normalized, so the render echoes what the seat asked. */
@@ -22,10 +24,13 @@ export interface SeatBundleInput {
   cards: readonly Card[];
   /** RCB-83: `.repoboard/local/RIG.md`'s text, or `null`/absent when there is none. */
   rig?: string | null;
+  /** RCB-103: board config for `findColumn`/`blockedReason` against — `defaultBoardConfig()` when
+   *  absent, so every existing caller/test (no phases in play) keeps working unchanged. */
+  config?: BoardConfig;
 }
 
 /** Which rule picked `nextCard`, so the render (and a reader) can say so instead of guessing. */
-export type NextCardReason = 'assigned' | 'priority' | 'first-todo' | null;
+export type NextCardReason = 'parent-step' | 'assigned' | 'priority' | 'first-todo' | null;
 
 /**
  * RCB-57 (B1): rank for the priority fallback — high wins, unset loses. A plain object (not a
@@ -47,6 +52,11 @@ export interface SeatBundle {
   coordinatorBlock: { date: string; block: LogBlock } | null;
   nextCard: Card | null;
   nextCardReason: NextCardReason;
+  /** RCB-103: set only when `nextCardReason === 'parent-step'` — the parent card whose step
+   *  `nextCard` is, and `gateState(nextCard, ...).by` when that step's gate is `clear`, `null`
+   *  when the step has no gate (a blocked step is never picked, so `gateState` here is never
+   *  `blocked`). */
+  nextCardStep: { parentId: string; gateBy: string | null } | null;
   /** `needsDecision(c)`, list order — reused from `decisions.ts`, never re-derived. */
   openDecisions: Card[];
   /** RCB-83: `.repoboard/local/RIG.md`'s text, `null` when there is none. */
@@ -415,6 +425,7 @@ export function seatBundle(input: SeatBundleInput): SeatBundle {
 
   const coordinatorBlock = isCoordinatorSeat(input.name) ? null : input.coordinatorBlock;
 
+  const config = input.config ?? defaultBoardConfig();
   const wantedAssignee = input.name.trim().toLowerCase();
   const todoCards = input.cards.filter((c) => c.status === 'todo');
   const assigned = todoCards.find((c) => (c.assignee ?? '').toLowerCase() === wantedAssignee);
@@ -429,9 +440,41 @@ export function seatBundle(input: SeatBundleInput): SeatBundle {
   const anyPrioritised = unassignedTodo.some((c) => c.priority !== undefined);
   const picked = byPriority[0] ?? null;
 
+  /**
+   * RCB-103: evaluated FIRST, ahead of `assigned` — a seat that owns a PARENT (a non-done card of
+   * its own that HAS steps, RCB-68) should be pointed at that plan's next clear step, not a
+   * random todo card elsewhere. A "parent" here is any non-done card of mine with `stepsOf(...)`
+   * non-empty; a plain card contributes nothing (`stepsOf` returns `[]`), so a board with no
+   * phases in play behaves byte-for-byte as before. Cards are walked in LIST order (never
+   * re-sorted — `stepsOf` already gives its own steps in phase order) and the first (parent,
+   * step) pair found wins; a parent whose every step is done/blocked/not-mine is skipped, not
+   * stopped on, so a later qualifying parent still gets a chance.
+   */
+  let parentStep: Card | null = null;
+  let nextCardStep: { parentId: string; gateBy: string | null } | null = null;
+  for (const c of input.cards) {
+    if ((c.assignee ?? '').trim().toLowerCase() !== wantedAssignee) continue;
+    if (findColumn(config, c.status)?.done === true) continue;
+    const step = stepsOf(c.id, input.cards).find((s) => {
+      if (findColumn(config, s.status)?.done === true) return false;
+      if (blockedReason(s, input.cards, config) !== null) return false;
+      const stepAssignee = (s.assignee ?? '').trim().toLowerCase();
+      return stepAssignee === '' || stepAssignee === wantedAssignee;
+    });
+    if (step !== undefined) {
+      parentStep = step;
+      const state = gateState(step, input.cards, config);
+      nextCardStep = { parentId: c.id, gateBy: state.kind === 'clear' ? state.by : null };
+      break;
+    }
+  }
+
   let nextCard: Card | null = null;
   let nextCardReason: NextCardReason = null;
-  if (assigned !== undefined) {
+  if (parentStep !== null) {
+    nextCard = parentStep;
+    nextCardReason = 'parent-step';
+  } else if (assigned !== undefined) {
     nextCard = assigned;
     nextCardReason = 'assigned';
   } else if (picked !== null) {
@@ -450,6 +493,7 @@ export function seatBundle(input: SeatBundleInput): SeatBundle {
     coordinatorBlock,
     nextCard,
     nextCardReason,
+    nextCardStep: nextCardReason === 'parent-step' ? nextCardStep : null,
     openDecisions,
     rig: input.rig ?? null,
     inFlight: fields.inFlight,
@@ -495,11 +539,15 @@ export function renderSeatBundle(b: SeatBundle, now: Date): string {
   if (b.nextCard) {
     lines.push(`${b.nextCard.id}  ${b.nextCard.status}  ${b.nextCard.title}`);
     lines.push(
-      b.nextCardReason === 'assigned'
-        ? `(assigned to ${b.name})`
-        : b.nextCardReason === 'priority'
-          ? `(first ${b.nextCard.priority}-priority todo)`
-          : '(first todo; nothing assigned, nothing prioritised)',
+      b.nextCardReason === 'parent-step' && b.nextCardStep
+        ? `(next unblocked step of ${b.nextCardStep.parentId} — ${
+            b.nextCardStep.gateBy !== null ? `gate ${b.nextCardStep.gateBy}` : 'no gate'
+          })`
+        : b.nextCardReason === 'assigned'
+          ? `(assigned to ${b.name})`
+          : b.nextCardReason === 'priority'
+            ? `(first ${b.nextCard.priority}-priority todo)`
+            : '(first todo; nothing assigned, nothing prioritised)',
     );
   } else {
     lines.push('(no todo card)');

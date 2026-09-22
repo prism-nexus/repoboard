@@ -848,6 +848,7 @@ export class CardStore extends EventEmitter<StoreEvents> {
       coordinatorBlock,
       cards: this.list(),
       rig,
+      config: this.config,
     });
   }
 

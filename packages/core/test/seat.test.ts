@@ -4,6 +4,7 @@
  * with placeholders for every missing part.
  */
 import { describe, expect, it } from 'vitest';
+import { defaultBoardConfig } from '../src/board.js';
 import {
   checkDownFields,
   findSeatLine,
@@ -312,6 +313,180 @@ describe('seatBundle: nextCard', () => {
   });
 });
 
+describe("seatBundle: nextCard follows a parent's steps (RCB-103)", () => {
+  const config = defaultBoardConfig();
+
+  it(
+    '(1) parent in doing assigned to builder; PH.0 done, PH.1 gated on PH.0 (clear), PH.2 gated ' +
+      'on PH.1 — Next = PH.1, reason parent-step, gateBy = "<PH.0 id> (done)"',
+    () => {
+      const cards: Card[] = [
+        card({ id: 'RCB-80', status: 'doing', assignee: 'builder', title: 'the parent plan' }),
+        card({ id: 'RCB-94', status: 'done', parent: 'RCB-80', phase: 'PH.0', title: 'PH.0' }),
+        card({
+          id: 'RCB-95',
+          status: 'backlog',
+          parent: 'RCB-80',
+          phase: 'PH.1',
+          gate: 'RCB-94',
+          title: 'PH.1',
+        }),
+        card({
+          id: 'RCB-96',
+          status: 'backlog',
+          parent: 'RCB-80',
+          phase: 'PH.2',
+          gate: 'RCB-95',
+          title: 'PH.2',
+        }),
+        card({ id: 'RCB-97', status: 'todo', title: 'first todo, unassigned' }),
+      ];
+      const bundle = seatBundle({
+        name: 'builder',
+        now: NOW,
+        seatsSection: null,
+        ownBlock: null,
+        coordinatorBlock: null,
+        cards,
+        config,
+      });
+      expect(bundle.nextCard?.id).toBe('RCB-95');
+      expect(bundle.nextCardReason).toBe('parent-step');
+      expect(bundle.nextCardStep).toEqual({ parentId: 'RCB-80', gateBy: 'RCB-94 (done)' });
+    },
+  );
+
+  it('(2) PH.1 blocked (gate on a backlog card) is skipped; PH.2 with no gate is picked, gateBy null', () => {
+    const cards: Card[] = [
+      card({ id: 'RCB-80', status: 'doing', assignee: 'builder', title: 'the parent plan' }),
+      card({ id: 'RCB-98', status: 'backlog', title: 'still backlog, blocks PH.1' }),
+      card({
+        id: 'RCB-95',
+        status: 'backlog',
+        parent: 'RCB-80',
+        phase: 'PH.1',
+        gate: 'RCB-98',
+        title: 'PH.1',
+      }),
+      card({ id: 'RCB-96', status: 'backlog', parent: 'RCB-80', phase: 'PH.2', title: 'PH.2' }),
+    ];
+    const bundle = seatBundle({
+      name: 'builder',
+      now: NOW,
+      seatsSection: null,
+      ownBlock: null,
+      coordinatorBlock: null,
+      cards,
+      config,
+    });
+    expect(bundle.nextCard?.id).toBe('RCB-96');
+    expect(bundle.nextCardReason).toBe('parent-step');
+    expect(bundle.nextCardStep).toEqual({ parentId: 'RCB-80', gateBy: null });
+  });
+
+  it('(3) every step done or blocked: falls through to the assigned todo card, as before', () => {
+    const cards: Card[] = [
+      card({ id: 'RCB-80', status: 'doing', assignee: 'builder', title: 'the parent plan' }),
+      card({ id: 'RCB-98', status: 'backlog', title: 'still backlog, blocks PH.1' }),
+      card({ id: 'RCB-94', status: 'done', parent: 'RCB-80', phase: 'PH.0', title: 'PH.0' }),
+      card({
+        id: 'RCB-95',
+        status: 'backlog',
+        parent: 'RCB-80',
+        phase: 'PH.1',
+        gate: 'RCB-98',
+        title: 'PH.1',
+      }),
+      card({ id: 'RCB-99', status: 'todo', assignee: 'builder', title: 'fallback todo' }),
+    ];
+    const bundle = seatBundle({
+      name: 'builder',
+      now: NOW,
+      seatsSection: null,
+      ownBlock: null,
+      coordinatorBlock: null,
+      cards,
+      config,
+    });
+    expect(bundle.nextCard?.id).toBe('RCB-99');
+    expect(bundle.nextCardReason).toBe('assigned');
+    expect(bundle.nextCardStep).toBeNull();
+  });
+
+  it('(4) a clear step assigned to `ops` is skipped for `builder`; the next clear step wins', () => {
+    const cards: Card[] = [
+      card({ id: 'RCB-80', status: 'doing', assignee: 'builder', title: 'the parent plan' }),
+      card({
+        id: 'RCB-95',
+        status: 'backlog',
+        parent: 'RCB-80',
+        phase: 'PH.1',
+        assignee: 'ops',
+        title: 'PH.1, assigned to ops',
+      }),
+      card({ id: 'RCB-96', status: 'backlog', parent: 'RCB-80', phase: 'PH.2', title: 'PH.2' }),
+    ];
+    const bundle = seatBundle({
+      name: 'builder',
+      now: NOW,
+      seatsSection: null,
+      ownBlock: null,
+      coordinatorBlock: null,
+      cards,
+      config,
+    });
+    expect(bundle.nextCard?.id).toBe('RCB-96');
+    expect(bundle.nextCardReason).toBe('parent-step');
+    expect(bundle.nextCardStep).toEqual({ parentId: 'RCB-80', gateBy: null });
+  });
+
+  it('(5) parent assigned to someone else is ignored entirely; first-todo rule applies', () => {
+    const cards: Card[] = [
+      card({ id: 'RCB-80', status: 'doing', assignee: 'ops', title: 'someone else’s plan' }),
+      card({ id: 'RCB-95', status: 'backlog', parent: 'RCB-80', phase: 'PH.1', title: 'PH.1' }),
+      card({ id: 'RCB-99', status: 'todo', title: 'first todo, unassigned' }),
+    ];
+    const bundle = seatBundle({
+      name: 'builder',
+      now: NOW,
+      seatsSection: null,
+      ownBlock: null,
+      coordinatorBlock: null,
+      cards,
+      config,
+    });
+    expect(bundle.nextCard?.id).toBe('RCB-99');
+    expect(bundle.nextCardReason).toBe('first-todo');
+    expect(bundle.nextCardStep).toBeNull();
+  });
+
+  it('(6) render text contains "(next unblocked step of RCB-80 — gate RCB-94 (done))"', () => {
+    const cards: Card[] = [
+      card({ id: 'RCB-80', status: 'doing', assignee: 'builder', title: 'the parent plan' }),
+      card({ id: 'RCB-94', status: 'done', parent: 'RCB-80', phase: 'PH.0', title: 'PH.0' }),
+      card({
+        id: 'RCB-95',
+        status: 'backlog',
+        parent: 'RCB-80',
+        phase: 'PH.1',
+        gate: 'RCB-94',
+        title: 'PH.1',
+      }),
+    ];
+    const bundle = seatBundle({
+      name: 'builder',
+      now: NOW,
+      seatsSection: null,
+      ownBlock: null,
+      coordinatorBlock: null,
+      cards,
+      config,
+    });
+    const rendered = renderSeatBundle(bundle, NOW);
+    expect(rendered).toContain('(next unblocked step of RCB-80 — gate RCB-94 (done))');
+  });
+});
+
 describe('seatBundle: coordinator section', () => {
   it('C2: coordinatorBlock is forced null when name IS the coordinator, even if one was gathered', () => {
     const gathered = {
@@ -418,6 +593,7 @@ describe('renderSeatBundle: placeholders for every missing part', () => {
       coordinatorBlock: null,
       nextCard: null,
       nextCardReason: null,
+      nextCardStep: null,
       openDecisions: [],
       rig: null,
       inFlight: null,
@@ -449,6 +625,7 @@ describe('renderSeatBundle: placeholders for every missing part', () => {
       coordinatorBlock: null,
       nextCard: card({ id: 'RCB-1', title: 'do this' }),
       nextCardReason: 'first-todo',
+      nextCardStep: null,
       openDecisions: [],
       rig: null,
       inFlight: null,

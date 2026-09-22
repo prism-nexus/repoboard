@@ -2144,6 +2144,7 @@ describe('repoboard seat', () => {
     expect(res.code).toBe(0);
     const parsed = JSON.parse(res.out) as Record<string, unknown>;
     // RCB-89: SeatBundle gained inFlight/owes — updated here, per the brief, rather than left stale.
+    // RCB-103: SeatBundle gained nextCardStep — updated here too, same reason.
     expect(Object.keys(parsed).sort()).toEqual(
       [
         'coordinatorBlock',
@@ -2151,6 +2152,7 @@ describe('repoboard seat', () => {
         'name',
         'nextCard',
         'nextCardReason',
+        'nextCardStep',
         'openDecisions',
         'owes',
         'ownBlock',
@@ -2159,6 +2161,58 @@ describe('repoboard seat', () => {
       ].sort(),
     );
     expect(parsed.name).toBe('builder');
+  });
+
+  it('RCB-103: Next card follows a parent’s next unblocked step, not the first todo card', async () => {
+    const root = await freshRepo({});
+    const parent = await repoboard(root, 'card', 'add', 'the parent plan', '--assignee', 'builder');
+    expect(parent.code).toBe(0);
+    const parentId = /^created (\S+)/.exec(parent.out)?.[1];
+    if (!parentId) throw new Error('missing parent id');
+    await repoboard(root, 'card', 'move', parentId, 'doing');
+
+    const ph0 = await repoboard(
+      root,
+      'card',
+      'add',
+      'PH.0',
+      '--parent',
+      parentId,
+      '--phase',
+      'PH.0',
+    );
+    const ph0Id = /^created (\S+)/.exec(ph0.out)?.[1];
+    if (!ph0Id) throw new Error('missing PH.0 id');
+    await repoboard(root, 'card', 'move', ph0Id, 'done');
+
+    const ph1 = await repoboard(
+      root,
+      'card',
+      'add',
+      'PH.1',
+      '--parent',
+      parentId,
+      '--phase',
+      'PH.1',
+      '--gate',
+      ph0Id,
+    );
+    const ph1Id = /^created (\S+)/.exec(ph1.out)?.[1];
+    if (!ph1Id) throw new Error('missing PH.1 id');
+
+    // A first-todo card that must lose to the parent's own next step.
+    await repoboard(root, 'card', 'add', 'unrelated first todo');
+
+    const res = await repoboard(root, 'seat', 'builder');
+    expect(res.code).toBe(0);
+    expect(res.out).toContain('## Next card');
+    expect(res.out).toContain(`${ph1Id}  backlog  PH.1`);
+    expect(res.out).toContain(`(next unblocked step of ${parentId} — gate ${ph0Id} (done))`);
+
+    const json = await repoboard(root, 'seat', 'builder', '--json');
+    const parsed = JSON.parse(json.out) as Record<string, unknown>;
+    expect(parsed.nextCardReason).toBe('parent-step');
+    expect(parsed.nextCardStep).toEqual({ parentId, gateBy: `${ph0Id} (done)` });
   });
 
   it('no STATE.md, no log, no cards: exit 0 with a placeholder for every section', async () => {

@@ -1,6 +1,2 @@
-leases:
-  - resource: RCB-115
-    holder: repoboard builder
-    since: 2026-09-22T22:44:00Z
-    note: store K8 flake
+leases: []
 windows: []

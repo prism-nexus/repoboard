@@ -28,6 +28,7 @@ import { z } from 'zod';
 import { applySyncPlan, computeSyncPlan } from './issues.js';
 import { resolveCardRefs, resolveRefSpec } from './refs.js';
 import { type CardStore, openStore } from './store.js';
+import { systemTests } from './systems-tests.js';
 import { VERSION } from './version.js';
 
 export const MCP_TOOL_NAMES = [
@@ -835,7 +836,8 @@ export function createMcpServer(opts: McpServerOptions): McpServer {
         "RCB-97 (plan §3.3): one system's full row from .repoboard/systems.yml, every " +
         'connection touching it, and its pointers resolved live (same engine as get_card ' +
         'resolveRefs: [{spec, path, start, end, text, truncated, error}]). Use list_systems to ' +
-        'find ids.',
+        'find ids. tests: the test files that import or name each pointer (static, live; null ' +
+        'when a pointer is not a source file).',
       inputSchema: {
         id: z.string().describe('The system id, e.g. gateway (list_systems shows the ids).'),
       },
@@ -847,7 +849,8 @@ export function createMcpServer(opts: McpServerOptions): McpServer {
       if (!doc || !system) return fail(`id: unknown system "${id}" (list_systems shows the ids)`);
       const connections = doc.connections.filter((c) => c.from === id || c.to === id);
       const pointers = await Promise.all(system.pointers.map((p) => resolveRefSpec(store.root, p)));
-      return ok({ system, connections, pointers });
+      const tests = await systemTests(store.root, system.pointers);
+      return ok({ system, connections, pointers, tests });
     },
   );
 

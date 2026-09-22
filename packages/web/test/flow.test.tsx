@@ -278,6 +278,14 @@ describe('Flow view (RCB-98)', () => {
           error: null,
         },
       ],
+      '/api/systems/gateway/tests': {
+        pointers: [
+          { pointer: 'apps/gateway/src/index.ts', tests: ['test/gateway.test.ts'], reason: null },
+        ],
+        files: 1,
+        source: 'static: test files that import or name the pointer, read live',
+        line: 'tests: 1 file',
+      },
     });
     const backlinkCard = card('RB-2', 'todo', { refs: ['apps/gateway/src/index.ts#x'] });
     const { store } = openFlow({ doc: TWO_ENV(), errors: [], exists: true }, [
@@ -376,5 +384,95 @@ describe('Flow view (RCB-98)', () => {
     expect(screen.getByTestId('flow-no-file')).toBeInTheDocument();
     expect(screen.queryByTestId('flow-plan')).toBeNull();
     expect(screen.queryByTestId('flow-plan-confirm')).toBeNull();
+  });
+
+  it('10. Tests section: gateway shows the line then reveals files on show/hide; api (no pointers) shows n/a with no fetch', async () => {
+    const fetchMock = stubFetch({
+      '/api/systems/gateway/refs': [
+        {
+          spec: 'apps/gateway/src/index.ts',
+          path: 'apps/gateway/src/index.ts',
+          start: 1,
+          end: 1,
+          text: 'export {};',
+          truncated: false,
+          error: null,
+        },
+      ],
+      '/api/systems/gateway/tests': {
+        pointers: [
+          { pointer: 'apps/gateway/src/index.ts', tests: ['test/gateway.test.ts'], reason: null },
+        ],
+        files: 1,
+        source: 'static: test files that import or name the pointer, read live',
+        line: 'tests: 1 file',
+      },
+    });
+    openFlow({ doc: TWO_ENV(), errors: [], exists: true });
+
+    fireEvent.click(screen.getByTestId('flow-svg').querySelector('[data-box="api"]') as Element);
+    const apiDrawer = screen.getByTestId('flow-drawer');
+    const apiTests = within(apiDrawer).getByTestId('flow-drawer-tests');
+    expect(apiTests).toHaveTextContent('tests: n/a (no pointers)');
+    // `api`'s pointers are [] — no dead fetch for a system with nothing to resolve.
+    expect(fetchMock).not.toHaveBeenCalled();
+
+    fireEvent.click(
+      screen.getByTestId('flow-svg').querySelector('[data-box="gateway"]') as Element,
+    );
+    await screen.findByTestId('flow-drawer');
+    const testsSection = await screen.findByTestId('flow-drawer-tests');
+    await within(testsSection).findByText('tests: 1 file');
+    expect(testsSection).not.toHaveTextContent('test/gateway.test.ts');
+
+    fireEvent.click(within(testsSection).getByRole('button', { name: 'show' }));
+    await within(testsSection).findByText(/test\/gateway\.test\.ts/);
+    expect(testsSection).toHaveTextContent('apps/gateway/src/index.ts');
+    expect(testsSection).toHaveTextContent(
+      'static: test files that import or name the pointer, read live',
+    );
+
+    fireEvent.click(within(testsSection).getByRole('button', { name: 'hide' }));
+    expect(testsSection).not.toHaveTextContent('test/gateway.test.ts');
+    expect(testsSection).not.toHaveTextContent('static: test files');
+  });
+
+  it('11. CONTROL: a 500 from /tests shows the error block without taking the drawer down (backlinks still render)', async () => {
+    const fetchMock = vi.fn(async (url: string) => {
+      if (url === '/api/systems/gateway/refs') {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => [
+            {
+              spec: 'apps/gateway/src/index.ts',
+              path: 'apps/gateway/src/index.ts',
+              start: 1,
+              end: 1,
+              text: 'export {};',
+              truncated: false,
+              error: null,
+            },
+          ],
+          url,
+        };
+      }
+      if (url === '/api/systems/gateway/tests') {
+        return { ok: false, status: 500, json: async () => ({}), url };
+      }
+      throw new Error(`unexpected fetch: ${url}`);
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    openFlow({ doc: TWO_ENV(), errors: [], exists: true });
+    fireEvent.click(
+      screen.getByTestId('flow-svg').querySelector('[data-box="gateway"]') as Element,
+    );
+    const drawer = await screen.findByTestId('flow-drawer');
+    const testsSection = await screen.findByTestId('flow-drawer-tests');
+    await within(testsSection).findByText('could not load tests');
+    expect(within(testsSection).getByRole('alert')).toBeInTheDocument();
+    // A failure in the tests fetch must not take the rest of the drawer down.
+    expect(within(drawer).getByTestId('flow-drawer-backlinks')).toBeInTheDocument();
   });
 });

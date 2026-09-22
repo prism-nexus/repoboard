@@ -824,6 +824,85 @@ connections: []
   });
 });
 
+describe('GET /api/systems/:id/tests (RCB-110)', () => {
+  const SYSTEMS_YML = `environments:
+  dev:  { note: "local dev" }
+  prod: { note: "cloud" }
+systems:
+  - id: api
+    name: api service
+    kind: service
+    layer: app
+    env: [dev, prod]
+    runtime: { dev: "node server", prod: "Cloudflare Workers" }
+    owner: null
+    pointers: ["src/api/index.ts"]
+    docs: []
+    why: null
+    source: { hand: "owner", at: "2026-09-22T00:00:00Z" }
+connections: []
+`;
+
+  /**
+   * Same rig pattern as `systemsRefsRig` above: `systems.yml` written BEFORE the store
+   * opens/watches (a brand-new file's chokidar `add` is flaky under concurrent test load). The
+   * only test file in the repo is `test/api.test.ts`, importing whatever `testImport` names —
+   * the `api` pointer for the 200 case, an unrelated sibling for the CONTROL case.
+   */
+  async function systemsTestsRig(testImport: string) {
+    const repo = await makeTempRepoboard({});
+    cleanups.push(repo.cleanup);
+    await mkdir(join(repo.root, 'src', 'api'), { recursive: true });
+    await writeFile(join(repo.root, 'src', 'api', 'index.ts'), 'export const API_MARKER = true;\n');
+    await writeFile(join(repo.root, 'src', 'other.ts'), 'export const OTHER = true;\n');
+    await mkdir(join(repo.root, 'test'), { recursive: true });
+    await writeFile(join(repo.root, 'test', 'api.test.ts'), `import '${testImport}';\n`);
+    await mkdir(join(repo.root, '.repoboard'), { recursive: true });
+    await writeFile(join(repo.root, '.repoboard', 'systems.yml'), SYSTEMS_YML);
+    const store = await openStore(repo.root, { watch: true, now: () => NOW });
+    cleanups.push(() => store.close());
+    const server = await startServer({ store, port: 0, scan: false });
+    cleanups.push(() => server.close());
+    return { repo, store, url: server.url.replace(/\/$/, '') };
+  }
+
+  it('200 with the count and the covering test file for the api pointer', async () => {
+    const r = await systemsTestsRig('../src/api/index.js');
+    const res = await fetch(`${r.url}/api/systems/api/tests`);
+    expect(res.status).toBe(200);
+    const body = (await json(res)) as {
+      files: number | null;
+      line: string;
+      pointers: Array<{ pointer: string; tests: string[] | null; reason: string | null }>;
+    };
+    expect(body.files).toBe(1);
+    expect(body.line).toBe('tests: 1 file');
+    expect(body.pointers).toEqual([
+      { pointer: 'src/api/index.ts', tests: ['test/api.test.ts'], reason: null },
+    ]);
+  });
+
+  it('404s with {error} for an unknown system id', async () => {
+    const r = await systemsTestsRig('../src/api/index.js');
+    const res = await fetch(`${r.url}/api/systems/nope/tests`);
+    expect(res.status).toBe(404);
+    expect(await json(res)).toMatchObject({ error: expect.stringContaining('nope') });
+  });
+
+  it(
+    'CONTROL: a test that imports a sibling and never names the pointer — ' +
+      'files: 0, "tests: none found" (a filename-similarity matcher would fail this)',
+    async () => {
+      const r = await systemsTestsRig('../src/other.js');
+      const res = await fetch(`${r.url}/api/systems/api/tests`);
+      expect(res.status).toBe(200);
+      const body = (await json(res)) as { files: number | null; line: string };
+      expect(body.files).toBe(0);
+      expect(body.line).toBe('tests: none found');
+    },
+  );
+});
+
 // ---- P7.2: hasBoard on the wire (plan §3) ----------------------------------------------------
 
 describe('hasBoard (P7.2)', () => {

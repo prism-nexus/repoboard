@@ -59,6 +59,18 @@ export interface SystemsPayload {
 }
 
 /**
+ * RCB-110: `GET /api/systems/:id/tests`'s payload — one entry per pointer, whether it resolves to
+ * a source file (`files` non-null) or not, plus a provenance sentence and the one-line summary
+ * the drawer shows collapsed.
+ */
+export interface SystemTestsPayload {
+  pointers: { pointer: string; tests: string[] | null; reason: string | null }[];
+  files: number | null;
+  source: string;
+  line: string;
+}
+
+/**
  * P7.2: `hasBoard` is false when the served root has no `.repoboard/` — map-only mode. It is
  * optional here because it is an additive field: a payload without it is one that predates P7.2,
  * and the safe reading of "absent" is "there is a board", which shows everything rather than

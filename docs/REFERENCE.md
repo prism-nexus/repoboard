@@ -685,6 +685,28 @@ absent file raises neither (§3.1: unconfigured is inert).
 costs tens of KB while the list costs 631 B — list first, show one row. The seat line is 66 B
 standing, the file 2,693 B in the cold read, both under plan §3.1's 4,096 B budget.
 
+### Test coverage per pointer (RCB-110, owner chose A: static)
+
+`repoboard systems show <id>` prints a `tests:` block between the row and the resolved refs —
+`tests: N files` / `tests: none found` / `tests: n/a (no source pointers)`, then one line per
+pointer (`<pointer>: N — a, b`, `none`, or the reason) and a `source:` sentence. The rule lives in
+one pure function, `testsForPointers` (core `systems-tests.ts`): a test file is a code file
+matching `*.test.*` / `*.spec.*` or under a `test/`, `tests/`, `__tests__/` segment; it exercises a
+pointer when a relative import of it resolves to the pointer (or under a directory pointer) or its
+text names the pointer literally; a pointer that is not in the tree or not a code file is `null`
+with a reason (a non-code pointer named by a test is still `null`); `files` is the union across
+pointers, `null` when no pointer is a source file. The server (`systems-tests.ts`) lists the tree
+(`listRepoFiles`, git ls-files or the walk) and reads only the test files. Same payload on MCP
+`get_system` (`tests`), `GET /api/systems/:id/tests`, and the Flow drawer's Tests row (collapsed;
+`show` reveals the per-pointer list). Nothing is stored: 0 B added to systems.yml.
+
+Measured 2026-09-22 on this repo (5 systems): `systems show repoboard` 33,770 → 34,616 B
+(`--json` 36,049 → 37,477 B), `show freshpickedjobs` 400 → 564 B; 0.18 s wall for the repoboard
+row (11 test files across 4 pointers; `repo-context.ts` has none that names it directly). The
+literal-name half is broad by design: a fixture string naming `packages/server/src/cli.ts` in a
+web test counts, and `packages/web/test/helpers.tsx` counts as a test file by its `test/` segment.
+Coverage-report driven (B) is a later card with its own provenance.
+
 ## 8. Flow view (RCB-98)
 
 A third top-level view, `Board | Map | Flow` (`View = 'board' | 'map' | 'flow'`, `TopBar.tsx`,

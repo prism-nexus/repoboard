@@ -42,6 +42,7 @@ import { resolveCardRefs, resolveRefSpec } from './refs.js';
 import { isGitRepo, type ScanResult, scanRepo } from './scanner.js';
 import { type CardStore, openStore } from './store.js';
 import { runDetect } from './systems-detect.js';
+import { systemTests } from './systems-tests.js';
 import { buildRepoWatchIgnore, EMPTY_IGNORED, gitIgnoredPaths } from './watch-ignore.js';
 
 const MAX_BODY = 1024 * 1024;
@@ -1025,6 +1026,16 @@ export async function openRepoContext(key: string, opts: RepoContextOptions): Pr
         200,
         await Promise.all(system.pointers.map((p) => resolveRefSpec(root, p))),
       );
+    }
+    // RCB-110: which test files import or name each of a system's pointers — static, live,
+    // same 404 shape as /refs above.
+    const systemTestsMatch = /^\/api\/systems\/([^/]+)\/tests$/.exec(path);
+    if (method === 'GET' && systemTestsMatch?.[1] !== undefined) {
+      const id = decodeURIComponent(systemTestsMatch[1]);
+      const { doc } = systemsPayload();
+      const system = doc?.systems.find((s) => s.id === id);
+      if (!doc || !system) throw new HttpError(404, `unknown system "${id}"`);
+      return sendJson(res, 200, await systemTests(root, system.pointers));
     }
     // P8.5: archive/sync-issues. Both are POST-only (they can write) and both accept a `dryRun`
     // that never calls a store writer at all — the same "pure read, always 200" reasoning as

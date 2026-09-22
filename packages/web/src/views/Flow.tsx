@@ -19,6 +19,7 @@ import { RefsList } from '../components/RefsList.jsx';
 import { useBoardState, useStore } from '../hooks.js';
 import { apiPath } from '../repo-key.js';
 import type { FlowEnv, State } from '../store.js';
+import type { SystemTestsPayload } from '../wire.js';
 
 const ENVS: readonly FlowEnv[] = ['dev', 'prod', 'both'];
 
@@ -106,6 +107,87 @@ function useSystemRefs(systemId: string, pointers: readonly string[]): SystemRef
   return state;
 }
 
+type SystemTestsState =
+  | { kind: 'loading' }
+  | { kind: 'ok'; tests: SystemTestsPayload | null }
+  | { kind: 'error'; message: string };
+
+/** Mirrors `useSystemRefs` exactly: fetched live on every select, never cached, skipped entirely
+ * when the system has no pointers (no dead network call) — `tests: null` there, not an empty
+ * payload, since "no pointers" and "pointers with zero tests" are different facts. */
+function useSystemTests(systemId: string, pointers: readonly string[]): SystemTestsState {
+  const store = useStore();
+  const repoKey = store.getState().repoKey;
+  const [state, setState] = useState<SystemTestsState>({ kind: 'loading' });
+  // biome-ignore lint/correctness/useExhaustiveDependencies: `systemId` identity is the refetch trigger, by design (mirrors useSystemRefs)
+  useEffect(() => {
+    if (pointers.length === 0) {
+      setState({ kind: 'ok', tests: null });
+      return;
+    }
+    let alive = true;
+    setState({ kind: 'loading' });
+    const url = apiPath(`/api/systems/${encodeURIComponent(systemId)}/tests`, repoKey);
+    const load = async (): Promise<SystemTestsState> => {
+      if (typeof fetch !== 'function') return { kind: 'error', message: 'fetch unavailable' };
+      const res = await fetch(url);
+      if (!res.ok) return { kind: 'error', message: `${url} → HTTP ${res.status}` };
+      const data: unknown = await res.json();
+      return { kind: 'ok', tests: data as SystemTestsPayload };
+    };
+    load()
+      .catch(
+        (e: unknown): SystemTestsState => ({
+          kind: 'error',
+          message: e instanceof Error ? e.message : String(e),
+        }),
+      )
+      .then((next) => {
+        if (alive) setState(next);
+      });
+    return () => {
+      alive = false;
+    };
+  }, [systemId]);
+  return state;
+}
+
+/** One `<li>` per pointer, per the wire contract: a non-null `tests` gives its count and file
+ * list, a null `tests` with a `reason` gives the reason, otherwise `none`. */
+function testsLine(p: SystemTestsPayload['pointers'][number]): string {
+  if (p.tests !== null) return `${p.pointer} — ${p.tests.length}: ${p.tests.join(', ')}`;
+  if (p.reason !== null) return `${p.pointer} — ${p.reason}`;
+  return `${p.pointer} — none`;
+}
+
+/** Mirrors `RefsList`'s collapsed toggle (RCB-109): closed shows nothing of `tests[]`, only a
+ * `show`/`hide` button; open reveals the per-pointer list and the source sentence below it. */
+function TestsToggle({ payload }: { payload: SystemTestsPayload }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <>
+      <button
+        type="button"
+        className="drawer__ref-toggle"
+        aria-expanded={open}
+        onClick={() => setOpen((o) => !o)}
+      >
+        {open ? 'hide' : 'show'}
+      </button>
+      {open ? (
+        <>
+          <ul className="drawer__files mono">
+            {payload.pointers.map((p) => (
+              <li key={p.pointer}>{testsLine(p)}</li>
+            ))}
+          </ul>
+          <p className="mono muted">{payload.source}</p>
+        </>
+      ) : null}
+    </>
+  );
+}
+
 function sourceText(source: SystemRow['source']): string {
   return 'hand' in source
     ? `hand: ${source.hand} · ${source.at}`
@@ -122,6 +204,7 @@ interface SystemDrawerProps {
 
 function SystemDrawer({ system, doc, cards, onClose, onOpenCard }: SystemDrawerProps) {
   const refs = useSystemRefs(system.id, system.pointers);
+  const tests = useSystemTests(system.id, system.pointers);
   const connections = useMemo(
     () => doc.connections.filter((c) => c.from === system.id || c.to === system.id),
     [doc.connections, system.id],
@@ -203,6 +286,26 @@ function SystemDrawer({ system, doc, cards, onClose, onOpenCard }: SystemDrawerP
           )}
         </section>
       ) : null}
+      <section className="drawer__section" data-testid="flow-drawer-tests">
+        <h3>Tests</h3>
+        {tests.kind === 'loading' ? (
+          <p className="mono muted">loading…</p>
+        ) : tests.kind === 'error' ? (
+          <div className="drawer__ref drawer__ref--error" role="alert">
+            <div className="drawer__ref-head mono">could not load tests</div>
+            <div className="drawer__ref-error">{tests.message}</div>
+          </div>
+        ) : tests.tests === null ? (
+          <p className="mono">tests: n/a (no pointers)</p>
+        ) : (
+          <>
+            <p className="mono">{tests.tests.line}</p>
+            {tests.tests.pointers.some((p) => p.tests !== null) ? (
+              <TestsToggle payload={tests.tests} />
+            ) : null}
+          </>
+        )}
+      </section>
       <section className="drawer__section" data-testid="flow-drawer-backlinks">
         <h3>Backlinks ({backlinks.length})</h3>
         {backlinks.length === 0 ? (

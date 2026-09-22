@@ -231,6 +231,8 @@ export {
   SYSTEMS_ROW_MAX_BYTES,
   systemsSummary,
 } from './systems-surface.js';
+export type { PointerTests, SystemTests, TestFileInput } from './systems-tests.js';
+export { isCodePath, isTestFile, SYSTEM_TESTS_SOURCE, testsForPointers } from './systems-tests.js';
 export { toIso } from './time.js';
 export type {
   CardPatch,

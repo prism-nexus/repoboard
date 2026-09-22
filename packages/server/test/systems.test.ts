@@ -160,6 +160,13 @@ async function writeApiPointerFile(root: string): Promise<void> {
   await writeFile(join(root, 'src', 'api', 'index.ts'), 'export const API_MARKER = true;\n');
 }
 
+/** RCB-110: a test file that imports the `api` pointer written by `writeApiPointerFile` — the
+ * one test coverage `systems show`/`get_system` should find. */
+async function writeApiTestFile(root: string): Promise<void> {
+  await mkdir(join(root, 'test'), { recursive: true });
+  await writeFile(join(root, 'test', 'api.test.ts'), "import '../src/api/index.js';\n");
+}
+
 // ---------------------------------------------------------------------------------------------
 // 1. store.systems() — absent, valid, invalid
 // ---------------------------------------------------------------------------------------------
@@ -280,6 +287,28 @@ describe('CLI: repoboard systems show <id> (RCB-97)', () => {
     const unknown = await repoboard(repo.root, 'systems', 'show', 'nope');
     expect(unknown.code).toBe(1);
     expect(unknown.err).toContain('unknown system "nope"');
+  });
+
+  it('RCB-110: tests block — a pointer with a covering test, and one with none', async () => {
+    const repo = await freshRepo();
+    await writeSystemsYml(repo.root, VALID_SYSTEMS_YML);
+    await writeApiPointerFile(repo.root);
+    await writeApiTestFile(repo.root);
+
+    const api = await repoboard(repo.root, 'systems', 'show', 'api');
+    expect(api.code).toBe(0);
+    expect(api.out).toContain('tests: 1 file');
+    expect(api.out).toContain('src/api/index.ts: 1 — test/api.test.ts');
+
+    const apiJson = await repoboard(repo.root, 'systems', 'show', 'api', '--json');
+    const apiParsed = JSON.parse(apiJson.out) as { tests: { files: number | null } };
+    expect(apiParsed.tests.files).toBe(1);
+
+    // gateway's pointer (apps/gateway/src/index.ts) is never written to this repo.
+    const gateway = await repoboard(repo.root, 'systems', 'show', 'gateway');
+    expect(gateway.code).toBe(0);
+    expect(gateway.out).toContain('tests: n/a (no source pointers)');
+    expect(gateway.out).toContain('apps/gateway/src/index.ts: not found');
   });
 });
 
@@ -482,6 +511,7 @@ describe('MCP: list_systems / get_system (RCB-97)', () => {
     const repo = await freshRepo();
     await writeSystemsYml(repo.root, VALID_SYSTEMS_YML);
     await writeApiPointerFile(repo.root);
+    await writeApiTestFile(repo.root);
     const store = await openStore(repo.root, { watch: false, now: () => NOW });
     cleanups.push(() => store.close());
     const server = createMcpServer({ store, defaultActor: 'test/mcp', now: () => NOW });
@@ -502,10 +532,13 @@ describe('MCP: list_systems / get_system (RCB-97)', () => {
       system: { id: string };
       connections: unknown[];
       pointers: Array<{ text: string | null }>;
+      tests: { files: number | null; pointers: Array<{ pointer: string; tests: string[] | null }> };
     };
     expect(parsed.system.id).toBe('api');
     expect(parsed.connections).toHaveLength(3);
     expect(parsed.pointers[0]?.text).toContain('API_MARKER');
+    expect(parsed.tests.files).toBe(1);
+    expect(parsed.tests.pointers[0]?.tests).toEqual(['test/api.test.ts']);
 
     const failRes = await call('get_system', { id: 'nope' });
     expect(failRes.isError).toBe(true);

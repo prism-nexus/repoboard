@@ -309,6 +309,21 @@ async function walkFiles(root: string, cap: number): Promise<string[]> {
   return out;
 }
 
+/**
+ * RCB-110: the file list `scanRepo` walks, exposed standalone — the same choice (`isGitRepo` →
+ * `gitFiles` : `walkFiles`), sliced to `cap`. Used by `systemTests` to build the test-file corpus
+ * without paying for a full scan (line counts, git activity, the import-edge graph). Left as its
+ * own function rather than folded into `scanRepo`: `scanRepo` also needs `listed.length` BEFORE
+ * the slice to compute `truncated`, so sharing this helper there would mean returning that count
+ * too — a shape change, not the 2-line swap the brief allowed.
+ */
+export async function listRepoFiles(root: string, cap: number = FILE_CAP): Promise<string[]> {
+  const rootResolved = resolve(root);
+  const inGit = await isGitRepo(rootResolved);
+  const listed = inGit ? await gitFiles(rootResolved) : await walkFiles(rootResolved, cap + 1);
+  return listed.length > cap ? listed.slice(0, cap) : listed;
+}
+
 interface Activity {
   commits30d: number;
   commits90d: number;

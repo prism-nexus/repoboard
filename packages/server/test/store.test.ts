@@ -815,6 +815,80 @@ describe('setSeatBullet (RCB-58)', () => {
   // must fail. See cli.test.ts for the CLI-facing half of this same control.
 });
 
+describe('updateSeatBullet (RCB-88)', () => {
+  const SEATS = [
+    '- **coordinator**: routes work',
+    '- **repoboard builder (its own terminal)**: on RCB-1',
+    '- **ops**: watching things',
+  ].join('\n');
+
+  it("(a) rewrites ONLY the builder bullet's body, keeps the standing stamp; STATE line 3 restamps as builder; every other bullet byte-identical", async () => {
+    const repo = await repoWith({});
+    let clock = NOW;
+    const store = await openStore(repo.root, { watch: false, now: () => clock });
+    opened.push(store);
+
+    await store.setStateSection('seats', SEATS, 'coordinator');
+    const up = await store.setSeatBullet('builder', 'UP', 'a');
+    expect(up.ok).toBe(true);
+
+    clock = new Date(NOW.getTime() + 5 * 60_000);
+    const res = await store.updateSeatBullet('builder', 'b');
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+
+    expect(res.status).toBe('UP');
+    expect(res.stamp).toBe('2026-09-02 22:41Z');
+    expect(res.doc.sections.seats).toBe(
+      [
+        '- **coordinator**: routes work',
+        '- **builder: UP 2026-09-02 22:41Z.** b',
+        '- **ops**: watching things',
+      ].join('\n'),
+    );
+    // STATE.md's own line-3 stamp restamps to the +5 clock, actor builder — every other write does.
+    expect(res.doc.stamp).toBe('2026-09-02T22:46:10Z');
+    expect(res.doc.actor).toBe('builder');
+
+    const onDisk = await readFile(join(repo.root, '.repoboard', 'STATE.md'), 'utf8');
+    expect(onDisk).toContain('**Written 2026-09-02T22:46:10Z by builder.**');
+    expect(onDisk).toContain('- **builder: UP 2026-09-02 22:41Z.** b');
+    expect(onDisk).toContain('- **coordinator**: routes work');
+    expect(onDisk).toContain('- **ops**: watching things');
+  });
+
+  it('(b) no builder bullet: ok false, error matches /no standing bullet/, STATE.md unchanged', async () => {
+    const repo = await repoWith({});
+    const store = await open(repo, false);
+    // SEATS has coordinator/builder/ops bullets but none for "qa" — findSeatLine finds nothing.
+    await store.setStateSection('seats', SEATS, 'coordinator');
+    const before = await readFile(join(repo.root, '.repoboard', 'STATE.md'), 'utf8');
+
+    const res = await store.updateSeatBullet('qa', 'b');
+    expect(res.ok).toBe(false);
+    if (res.ok) return;
+    expect(res.error).toMatch(/no standing bullet/);
+
+    const after = await readFile(join(repo.root, '.repoboard', 'STATE.md'), 'utf8');
+    expect(after).toBe(before);
+  });
+
+  it('(c) no STATE.md: ok false, and the file still does not exist', async () => {
+    const repo = await repoWith({});
+    const store = await open(repo, false);
+    expect(existsSync(join(repo.root, '.repoboard', 'STATE.md'))).toBe(false);
+
+    const res = await store.updateSeatBullet('builder', 'b');
+    expect(res.ok).toBe(false);
+
+    expect(existsSync(join(repo.root, '.repoboard', 'STATE.md'))).toBe(false);
+  });
+
+  // RCB-88 control: in `store.updateSeatBullet`, swap the rewrite for
+  // `formatSeatBullet(name, 'UP', text, now)` (so it restamps) — test (a) must fail on the stamp.
+  // See cli.test.ts for the CLI-facing half of this same control.
+});
+
 // ---- RCB-34/P7.3: the column set is editable from the app (plan §11 O6) ---------------------
 describe('setColumns (RCB-34/P7.3)', () => {
   const NEXT_COLUMNS = [
@@ -1508,8 +1582,10 @@ describe('K10 structure of store.ts', () => {
       'setStateSection',
       'takeLease',
       'update',
+      'updateSeatBullet',
     ]);
     expect(decls.map((d) => d[3])).toEqual([
+      'mutate',
       'mutate',
       'mutate',
       'mutate',

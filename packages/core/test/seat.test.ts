@@ -10,6 +10,7 @@ import {
   parseSeatStamp,
   renderSeatBundle,
   replaceSeatBullet,
+  rewriteSeatBulletBody,
   type SeatBundle,
   seatBundle,
   seatUpConflict,
@@ -609,5 +610,51 @@ describe('parseSeatStamp / seatUpConflict (RCB-87)', () => {
     const conflict = seatUpConflict(bullet, NOW87, 30);
     expect(conflict).not.toBeNull();
     expect(conflict?.stamp).toBe('2026-09-21 22:42Z');
+  });
+});
+
+describe('rewriteSeatBulletBody (RCB-88)', () => {
+  const NOW88 = new Date('2026-09-02T22:41:10Z');
+
+  it("(1) keeps the label/status/stamp, replaces the body — 'a' becomes 'b'", () => {
+    const bullet = formatSeatBullet('ops', 'UP', 'a', NOW88);
+    const rewritten = rewriteSeatBulletBody(bullet, 'b');
+    expect(rewritten).not.toBeNull();
+    expect(rewritten?.bullet).toBe('- **ops: UP 2026-09-02 22:41Z.** b');
+    expect(rewritten?.status).toBe('UP');
+    expect(rewritten?.stamp).toBe('2026-09-02 22:41Z');
+  });
+
+  it('(2) a DOWN bullet keeps DOWN', () => {
+    const bullet = formatSeatBullet('ops', 'DOWN', 'a', NOW88);
+    const rewritten = rewriteSeatBulletBody(bullet, 'b');
+    expect(rewritten?.status).toBe('DOWN');
+    expect(rewritten?.bullet).toBe('- **ops: DOWN 2026-09-02 22:41Z.** b');
+  });
+
+  it('(3) a stamp with a non-digit (18:0xZ) is kept verbatim', () => {
+    const bullet = '- **ops: UP 2026-09-02 18:0xZ.** a';
+    const rewritten = rewriteSeatBulletBody(bullet, 'b');
+    expect(rewritten?.stamp).toBe('2026-09-02 18:0xZ');
+    expect(rewritten?.bullet).toBe('- **ops: UP 2026-09-02 18:0xZ.** b');
+  });
+
+  it("(4) text 'x\\ny' becomes a continuation line 'x\\n  y'", () => {
+    const bullet = formatSeatBullet('ops', 'UP', 'a', NOW88);
+    const rewritten = rewriteSeatBulletBody(bullet, 'x\ny');
+    expect(rewritten?.bullet).toBe('- **ops: UP 2026-09-02 22:41Z.** x\n  y');
+  });
+
+  it('(5) a non-seat bullet is not a seat bullet at all -> null', () => {
+    expect(rewriteSeatBulletBody('- Owner tasks elsewhere: whatever', 'b')).toBeNull();
+  });
+
+  it('(6) round-trip: findSeatLine finds it, parseSeatStamp gives the ORIGINAL at', () => {
+    const original = formatSeatBullet('ops', 'UP', 'a', NOW88);
+    const rewritten = rewriteSeatBulletBody(original, 'b');
+    expect(rewritten).not.toBeNull();
+    if (rewritten === null) return;
+    expect(findSeatLine(rewritten.bullet, 'ops')).toBe(rewritten.bullet);
+    expect(parseSeatStamp(rewritten.bullet)?.at).toEqual(parseSeatStamp(original)?.at);
   });
 });

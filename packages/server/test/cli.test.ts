@@ -2247,6 +2247,88 @@ describe('repoboard seat --up/--down (RCB-58)', () => {
       expect(state).toContain('- **ops: DOWN 2026-09-02 22:41Z.** x');
     });
   });
+
+  describe('--update keeps the stamp (RCB-88)', () => {
+    it('(11) --update rewrites the body, keeps the UP stamp byte-for-byte', async () => {
+      const root = await freshRepo({});
+      const up = await repoboardWithClock(root, NOW, 'seat', 'ops', '--up', 'a');
+      expect(up.code).toBe(0);
+
+      const fiveLater = new Date(NOW.getTime() + 5 * 60_000);
+      const res = await repoboardWithClock(root, fiveLater, 'seat', 'ops', '--update', 'b');
+      expect(res.code).toBe(0);
+      expect(res.out).toBe('updated SEATS ops: UP 2026-09-02 22:41Z kept\n');
+
+      const state = await readFile(join(root, '.repoboard', 'STATE.md'), 'utf8');
+      expect(state).toContain('- **ops: UP 2026-09-02 22:41Z.** b');
+      expect(state).not.toContain('22:46Z');
+    });
+
+    it('(12) --update on a fresh repo (no bullet) is refused; no STATE.md is created', async () => {
+      const root = await freshRepo({});
+      expect(existsSync(join(root, '.repoboard', 'STATE.md'))).toBe(false);
+
+      const res = await repoboardWithClock(root, NOW, 'seat', 'ops', '--update', 'b');
+      expect(res.code).toBe(1);
+      expect(res.err).toMatch(/no standing bullet/);
+      expect(existsSync(join(root, '.repoboard', 'STATE.md'))).toBe(false);
+    });
+
+    it('(13) --update and --up together is a usage error', async () => {
+      const root = await freshRepo({});
+      const res = await repoboardWithClock(root, NOW, 'seat', 'ops', '--update', 'b', '--up', 'a');
+      expect(res.code).toBe(1);
+      expect(res.err).toMatch(/exclusive/);
+    });
+
+    it('(14) --json --update prints {bullet, name, stamp, status}', async () => {
+      const root = await freshRepo({});
+      const up = await repoboardWithClock(root, NOW, 'seat', 'ops', '--up', 'a');
+      expect(up.code).toBe(0);
+
+      const fiveLater = new Date(NOW.getTime() + 5 * 60_000);
+      const res = await repoboardWithClock(
+        root,
+        fiveLater,
+        'seat',
+        'ops',
+        '--json',
+        '--update',
+        'b',
+      );
+      expect(res.code).toBe(0);
+      const parsed = JSON.parse(res.out) as Record<string, unknown>;
+      expect(Object.keys(parsed).sort()).toEqual(['bullet', 'name', 'stamp', 'status']);
+      expect(parsed).toMatchObject({
+        name: 'ops',
+        status: 'UP',
+        stamp: '2026-09-02 22:41Z',
+        bullet: '- **ops: UP 2026-09-02 22:41Z.** b',
+      });
+    });
+
+    it('(15) --update --force is a no-op force — no log block is appended', async () => {
+      const root = await freshRepo({});
+      const up = await repoboardWithClock(root, NOW, 'seat', 'ops', '--up', 'a');
+      expect(up.code).toBe(0);
+
+      const fiveLater = new Date(NOW.getTime() + 5 * 60_000);
+      const res = await repoboardWithClock(
+        root,
+        fiveLater,
+        'seat',
+        'ops',
+        '--update',
+        'b',
+        '--force',
+      );
+      expect(res.code).toBe(0);
+
+      const last = await repoboardWithClock(root, fiveLater, 'log', '--last', 'ops');
+      expect(last.code).toBe(0);
+      expect(last.out).not.toContain('--force over');
+    });
+  });
 });
 
 describe('repoboard check', () => {

@@ -163,6 +163,31 @@ export {
   splitLandings,
   trimLandings,
 } from './state.js';
+export type {
+  Connection,
+  Environment,
+  LayoutBox,
+  LayoutEdge,
+  LayoutPoint,
+  LayoutRow,
+  Source,
+  SystemEnv,
+  SystemKind,
+  SystemLayer,
+  SystemRow,
+  SystemsDoc,
+  SystemsLayout,
+  SystemsParseResult,
+} from './systems.js';
+export {
+  DEFAULT_SYSTEMS_BUDGET_BYTES,
+  emptySystemsDoc,
+  layoutSystems,
+  parseSystems,
+  SYSTEM_ENVS,
+  SYSTEM_KINDS,
+  SYSTEM_LAYERS,
+} from './systems.js';
 export { toIso } from './time.js';
 export type {
   CardPatch,

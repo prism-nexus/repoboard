@@ -107,6 +107,7 @@ Rules, each one function in core with a test:
   errors with the row named; a dangling connection endpoint is an error; ids unique.
 - **Byte target 4,096 B** for the file on this repo, measured by `cost` (which learns to count
   it); a repo may raise it in `board.yml` like `claudeMdBudgetBytes`.
+- Shapes landed in `packages/core/src/systems.ts` (RCB-95).
 
 ### 3.2 Truth: hand rows plus detection with provenance (answers Q1)
 
@@ -182,7 +183,7 @@ Steps (all `parent: RCB-80`, `refs:` into this page, backlog until PH.0 clears):
 | Phase | Card | Size | Gate |
 |---|---|---|---|
 | PH.0 | Owner decisions Q1–Q4 + budget answered on RCB-80 | S | RCB-80 (its decision) |
-| PH.1 | `systems.yml` schema, parser, validator, layout — core, pure; plan §2 and §4 gain the shapes | M | PH.0 |
+| PH.1 | `systems.yml` schema, parser, validator, layout — core, pure; plan §2 and §4 gain the shapes. Shapes landed in `packages/core/src/systems.ts` (RCB-95). | M | PH.0 |
 | PH.2 | Detectors + `systems detect [--apply]`, dry-run default, provenance stamped | L | PH.1 |
 | PH.3 | Surfaces: CLI/MCP/HTTP/WS, `seat` line, `cost` counts it, `check` findings | M | PH.1 |
 | PH.4 | Flow view: rows, env switch, one-env dashes, none-note, drawer with pointers + backlinks | L | PH.3 |

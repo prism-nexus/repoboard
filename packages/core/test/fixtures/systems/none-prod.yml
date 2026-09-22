@@ -1,0 +1,48 @@
+environments:
+  dev:  { note: "local dev only" }
+  prod: { none: "local-only by design — speed and tokens" }
+systems:
+  - id: cli
+    name: repoboard CLI
+    kind: tool
+    layer: client
+    env: [dev]
+    runtime: { dev: "node dist/cli.js" }
+    owner: null
+    pointers: ["packages/server/src/cli.ts"]
+    docs: []
+    why: null
+    source: { hand: "owner", at: "2026-09-22T00:00:00Z" }
+  - id: server
+    name: repoboard server
+    kind: service
+    layer: app
+    env: [dev]
+    runtime: { dev: "node dist/server.js" }
+    owner: null
+    pointers: []
+    docs: []
+    why: null
+    source: { hand: "owner", at: "2026-09-22T00:00:00Z" }
+  - id: sqlite
+    name: local state files
+    kind: storage
+    layer: data
+    env: [dev]
+    runtime: { dev: "filesystem" }
+    owner: null
+    pointers: []
+    docs: []
+    why: null
+    source: { hand: "owner", at: "2026-09-22T00:00:00Z" }
+connections:
+  - from: cli
+    to: server
+    via: "child process"
+    env: [dev]
+    source: { hand: "owner", at: "2026-09-22T00:00:00Z" }
+  - from: server
+    to: sqlite
+    via: "fs read/write"
+    env: [dev]
+    source: { hand: "owner", at: "2026-09-22T00:00:00Z" }

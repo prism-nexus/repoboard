@@ -1,0 +1,90 @@
+environments:
+  dev:  { note: "vite dev :5173 + wrangler dev :8787 + local postgres :5433" }
+  prod: { note: "Cloudflare Workers; Neon via Hyperdrive" }
+systems:
+  - id: web
+    name: marketing site
+    kind: client
+    layer: client
+    env: [dev, prod]
+    runtime: { dev: "vite dev", prod: "static hosting" }
+    pointers: ["apps/web/src"]
+    docs: []
+    why: null
+    source: { hand: "owner", at: "2026-09-22T00:00:00Z" }
+  - id: gateway
+    name: edge gateway
+    kind: worker
+    layer: edge
+    env: [dev, prod]
+    runtime: { dev: "wrangler dev", prod: "Cloudflare Workers" }
+    owner: backend
+    pointers: ["apps/gateway/src/index.ts"]
+    docs: ["docs/BUILD-PLAN.md#§3"]
+    why: null
+    source: { detected: "wrangler.jsonc", at: "2026-09-22T00:00:00Z" }
+  - id: api
+    name: api service
+    kind: service
+    layer: app
+    env: [dev, prod]
+    runtime: { dev: "node server", prod: "Cloudflare Workers" }
+    owner: null
+    pointers: []
+    docs: []
+    why: "core business logic"
+    source: { hand: "owner", at: "2026-09-22T00:00:00Z" }
+  - id: worker-jobs
+    name: background jobs
+    kind: job
+    layer: app
+    env: [prod]
+    runtime: { prod: "queue consumer" }
+    source: { detected: "package.json", at: "2026-09-22T00:00:00Z" }
+  - id: postgres
+    name: primary database
+    kind: db
+    layer: data
+    env: [dev, prod]
+    runtime: { dev: "local postgres :5433", prod: "Neon via Hyperdrive" }
+    owner: null
+    pointers: []
+    docs: []
+    why: null
+    source: { detected: "wrangler.jsonc@hyperdrive", at: "2026-09-22T00:00:00Z" }
+  - id: sendgrid
+    name: transactional email
+    kind: email
+    layer: external
+    env: [dev]
+    runtime: { dev: "sandbox key" }
+    owner: null
+    pointers: []
+    docs: []
+    why: null
+    source: { hand: "owner", at: "2026-09-22T00:00:00Z" }
+connections:
+  - from: web
+    to: gateway
+    via: "HTTPS"
+    env: [dev, prod]
+    source: { hand: "owner", at: "2026-09-22T00:00:00Z" }
+  - from: gateway
+    to: api
+    via: "HTTP internal"
+    env: [dev, prod]
+    source: { detected: "wrangler.jsonc", at: "2026-09-22T00:00:00Z" }
+  - from: api
+    to: postgres
+    via: "Hyperdrive binding HYPERDRIVE"
+    env: [dev, prod]
+    source: { detected: "wrangler.jsonc@hyperdrive", at: "2026-09-22T00:00:00Z" }
+  - from: worker-jobs
+    to: postgres
+    env: [prod]
+    source: { hand: "owner", at: "2026-09-22T00:00:00Z" }
+  - from: api
+    to: sendgrid
+    via: "SMTP relay"
+    env: [dev]
+    source: { hand: "owner", at: "2026-09-22T00:00:00Z" }

@@ -54,6 +54,8 @@ shows `!` for a task instead of `?`.
 | `repoboard card list --parent <id> [--unblocked]` | `--parent` lists that card's steps in phase order (ID PHASE STATUS ASSIGNEE GATE BLOCKED TITLE); `--unblocked` keeps the not-done, not-blocked ones (RCB-104) |
 | `repoboard card show <id> --steps` | `--steps` appends a `## Steps` table of its children (RCB-104) |
 
+RCB-107: `ask` and `decide` also write the body's `## Decision` section (created before `## Notes`, else before `## Log`, else at the end — `appendDecisionLine`): `- <ts> <actor> — asked: <question>` with each option as a nested `- <letter>: <text>` line, then `- <ts> <actor> — decided <letter>: <text>` (or `— "<words>"`, `done` for a task); a `--replace` adds `question withdrawn` first. The frontmatter `decision:` block is REPLACED by a re-ask; the body section keeps every question, its options and its answer.
+
 Asking again on a card whose decision is OPEN is refused, naming the open question — pass
 `--replace` to withdraw it and ask a new one. Asking again on a DECIDED card just replaces the
 block (its `decided …` line is already in the `## Log`). `decide` refuses an unknown letter,

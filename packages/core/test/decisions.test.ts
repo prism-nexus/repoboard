@@ -57,7 +57,11 @@ describe('askDecision', () => {
       decidedAt: null,
     } satisfies Decision);
     expect(r.card.body).toBe(
-      'desc\n\n## Log\n' +
+      'desc\n\n## Decision\n' +
+        '- 2026-09-02T22:41:10Z claude/test — asked: Ship it?\n' +
+        '  - A: yes\n' +
+        '  - B: no\n\n' +
+        '## Log\n' +
         '- 2026-09-02T22:41:10Z claude/test — moved todo → decide\n' +
         '- 2026-09-02T22:41:10Z claude/test — asked: Ship it? [A|B]\n',
     );
@@ -83,7 +87,9 @@ describe('askDecision', () => {
     expect(r.card.status).toBe('todo');
     expect(r.card.decision?.returnTo).toBeNull();
     expect(r.card.body).toBe(
-      'desc\n\n## Log\n- 2026-09-02T22:41:10Z claude/test — asked: Ship it?\n',
+      'desc\n\n## Decision\n' +
+        '- 2026-09-02T22:41:10Z claude/test — asked: Ship it?\n\n' +
+        '## Log\n- 2026-09-02T22:41:10Z claude/test — asked: Ship it?\n',
     );
     expect(r.event).toEqual({
       ts: '2026-09-02T22:41:10Z',
@@ -634,6 +640,138 @@ describe('owner tasks (RCB-52): askDecision/decide with kind: task', () => {
     });
     if (!asked.ok) throw new Error(asked.error);
     expect(ownerQueueLine(asked.card)).toBe('RCB-9 · owner: buy the domain');
+  });
+});
+
+describe('## Decision body section (RCB-107)', () => {
+  it('ask with options A/B on body "desc\\n" → body is exactly the Decision section then Log', () => {
+    const card = sampleCard({ status: 'todo', body: 'desc\n' });
+    const r = askDecision(card, {
+      question: 'Ship it?',
+      options: [
+        { letter: 'A', text: 'yes' },
+        { letter: 'B', text: 'no' },
+      ],
+      actor,
+      now: NOW,
+    });
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.card.body).toBe(
+      'desc\n\n## Decision\n' +
+        '- 2026-09-02T22:41:10Z claude/test — asked: Ship it?\n' +
+        '  - A: yes\n' +
+        '  - B: no\n\n' +
+        '## Log\n' +
+        '- 2026-09-02T22:41:10Z claude/test — asked: Ship it? [A|B]\n',
+    );
+  });
+
+  it('then decide A → ## Decision gains "decided A: yes" as its LAST bullet, Log unchanged in shape, section still before ## Log', () => {
+    const card = sampleCard({ status: 'todo', body: 'desc\n' });
+    const asked = askDecision(card, {
+      question: 'Ship it?',
+      options: [
+        { letter: 'A', text: 'yes' },
+        { letter: 'B', text: 'no' },
+      ],
+      actor,
+      now: NOW,
+    });
+    if (!asked.ok) throw new Error(asked.error);
+    const r = decide(asked.card, { letter: 'A', actor, now: NOW });
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    const decisionIdx = r.card.body.indexOf('## Decision');
+    const logIdx = r.card.body.indexOf('## Log');
+    expect(decisionIdx).toBeGreaterThanOrEqual(0);
+    expect(decisionIdx).toBeLessThan(logIdx);
+    const decisionSection = r.card.body.slice(decisionIdx, logIdx);
+    const askedIdx = decisionSection.indexOf('asked: Ship it?');
+    const decidedIdx = decisionSection.indexOf('decided A: yes');
+    expect(askedIdx).toBeGreaterThanOrEqual(0);
+    expect(decidedIdx).toBeGreaterThan(askedIdx);
+    expect(decisionSection.trimEnd().endsWith('decided A: yes')).toBe(true);
+    expect(r.card.body).toContain(
+      '## Log\n' +
+        '- 2026-09-02T22:41:10Z claude/test — asked: Ship it? [A|B]\n' +
+        '- 2026-09-02T22:41:10Z claude/test — decided A\n',
+    );
+  });
+
+  it('body already has ## Notes and ## Log → ## Decision is created before ## Notes', () => {
+    const card = sampleCard({
+      status: 'todo',
+      body: 'desc\n\n## Notes\n- a note\n\n## Log\n- something\n',
+    });
+    const r = askDecision(card, { question: 'Ship it?', actor, now: NOW });
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    const decisionIdx = r.card.body.indexOf('## Decision');
+    const notesIdx = r.card.body.indexOf('## Notes');
+    const logIdx = r.card.body.indexOf('## Log');
+    expect(decisionIdx).toBeGreaterThanOrEqual(0);
+    expect(decisionIdx).toBeLessThan(notesIdx);
+    expect(notesIdx).toBeLessThan(logIdx);
+    expect(r.card.body).toContain('## Notes\n- a note\n');
+  });
+
+  it('re-ask with --replace: Decision has asked #1, question withdrawn, asked #2; frontmatter is #2 but body still keeps #1 options', () => {
+    const card = sampleCard({ status: 'todo', body: 'desc\n' });
+    const first = askDecision(card, {
+      question: 'First?',
+      options: [{ letter: 'A', text: 'yes' }],
+      actor,
+      now: NOW,
+    });
+    if (!first.ok) throw new Error(first.error);
+    const second = askDecision(first.card, {
+      question: 'Second?',
+      actor,
+      now: NOW,
+      replace: true,
+    });
+    expect(second.ok).toBe(true);
+    if (!second.ok) return;
+    expect(second.card.decision?.question).toBe('Second?');
+    const decisionIdx = second.card.body.indexOf('## Decision');
+    const logIdx = second.card.body.indexOf('## Log');
+    expect(decisionIdx).toBeGreaterThanOrEqual(0);
+    const decisionSection = second.card.body.slice(decisionIdx, logIdx);
+    const askedFirstIdx = decisionSection.indexOf('asked: First?');
+    const withdrawnIdx = decisionSection.indexOf('question withdrawn');
+    const askedSecondIdx = decisionSection.indexOf('asked: Second?');
+    expect(askedFirstIdx).toBeGreaterThanOrEqual(0);
+    expect(withdrawnIdx).toBeGreaterThan(askedFirstIdx);
+    expect(askedSecondIdx).toBeGreaterThan(withdrawnIdx);
+    expect(decisionSection).toContain('- A: yes');
+  });
+
+  it('task ask + done with words: Decision gets "owner task: buy it" then "done — \\"renewed\\""', () => {
+    const card = sampleCard({ status: 'todo', body: 'desc\n' });
+    const asked = askDecision(card, { question: 'buy it', kind: 'task', actor, now: NOW });
+    if (!asked.ok) throw new Error(asked.error);
+    const r = decide(asked.card, { words: 'renewed', actor, now: NOW });
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    const decisionIdx = r.card.body.indexOf('## Decision');
+    const logIdx = r.card.body.indexOf('## Log');
+    expect(decisionIdx).toBeGreaterThanOrEqual(0);
+    const decisionSection = r.card.body.slice(decisionIdx, logIdx);
+    const ownerIdx = decisionSection.indexOf('owner task: buy it');
+    const doneIdx = decisionSection.indexOf('done — "renewed"');
+    expect(ownerIdx).toBeGreaterThanOrEqual(0);
+    expect(doneIdx).toBeGreaterThan(ownerIdx);
+  });
+
+  it('words-only decide (no letter, no kind): Decision gets decided — "sure"', () => {
+    const card = sampleCard({ status: 'todo', body: 'desc\n' });
+    const asked = askDecision(card, { question: 'Free text?', actor, now: NOW });
+    if (!asked.ok) throw new Error(asked.error);
+    const r = decide(asked.card, { words: 'sure', actor, now: NOW });
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.card.body).toContain('decided — "sure"');
   });
 });
 

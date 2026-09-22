@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { appendLogLine, formatLogLine } from '../src/log.js';
+import { appendDecisionLine, appendLogLine, formatLogLine } from '../src/log.js';
 
 describe('appendLogLine', () => {
   it('creates the heading preceded by a blank line when absent', () => {
@@ -37,6 +37,32 @@ describe('appendLogLine', () => {
 
   it('does not add a second dash', () => {
     expect(appendLogLine('', 'plain')).toBe('\n## Log\n- plain\n');
+  });
+});
+
+describe('appendDecisionLine (RCB-107)', () => {
+  it('creates the heading immediately before ## Notes when Notes is present', () => {
+    expect(appendDecisionLine('intro\n\n## Notes\nn\n\n## Log\n- one\n', '- a')).toBe(
+      'intro\n\n## Decision\n- a\n\n## Notes\nn\n\n## Log\n- one\n',
+    );
+  });
+
+  it('creates the heading immediately before ## Log when there is no ## Notes', () => {
+    expect(appendDecisionLine('intro\n\n## Log\n- one\n', '- a')).toBe(
+      'intro\n\n## Decision\n- a\n\n## Log\n- one\n',
+    );
+  });
+
+  it('creates the heading at the end, preceded by a blank line, when neither Notes nor Log is present', () => {
+    expect(appendDecisionLine('intro\n', '- a')).toBe('intro\n\n## Decision\n- a\n');
+    expect(appendDecisionLine('', '- a')).toBe('\n## Decision\n- a\n');
+  });
+
+  it('appends at the end of an existing Decision section, keeping its spacing before what follows', () => {
+    expect(appendDecisionLine('## Decision\n- one\n\n## Log\nx\n', '- two')).toBe(
+      '## Decision\n- one\n- two\n\n## Log\nx\n',
+    );
+    expect(appendDecisionLine('## Decision\n- one\n', '- two')).toBe('## Decision\n- one\n- two\n');
   });
 });
 

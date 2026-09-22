@@ -88,7 +88,14 @@ export {
   takeLease,
   WindowSchema,
 } from './leases.js';
-export { appendLogLine, appendNoteLine, formatLogLine, formatNoteLine } from './log.js';
+export {
+  appendDecisionLine,
+  appendLogLine,
+  appendNoteLine,
+  formatDecisionLine,
+  formatLogLine,
+  formatNoteLine,
+} from './log.js';
 export type { AddNoteOptions, AddNoteResult } from './notes.js';
 export { addNote } from './notes.js';
 export type { GateState } from './phases.js';

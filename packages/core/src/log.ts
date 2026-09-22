@@ -1,16 +1,19 @@
 const LOG_HEADING = /^## Log[ \t]*$/m;
 const NOTES_HEADING = /^## Notes[ \t]*$/m;
+const DECISION_HEADING = /^## Decision[ \t]*$/m;
 /** Any heading of level 1 or 2 ends a section (Log or Notes alike). */
 const SECTION_END = /^#{1,2}[ \t]/m;
 
 /**
- * RCB-70: the shared shape `appendLogLine`/`appendNoteLine` both funnel through, so the two
- * sections cannot drift (CLAUDE.md: one function per guarantee).
+ * RCB-70/RCB-107: the shared shape `appendLogLine`/`appendNoteLine`/`appendDecisionLine` all
+ * funnel through, so the sections cannot drift (CLAUDE.md: one function per guarantee).
  * - `heading` present in `body` → the bullet goes at the end of that section (before the next
  *   `#`/`##` heading, or at end of body), trailing blank lines preserved.
- * - `heading` absent and `createBefore` given and found → a new section is created immediately
- *   before that heading, with a blank line above (when there is body text before it) and below.
- * - `heading` absent otherwise → a new section is created at the end, preceded by a blank line.
+ * - `heading` absent and `createBefore` given → each regex is tried against `body` in order, and
+ *   the FIRST one that matches wins: a new section is created immediately before that heading,
+ *   with a blank line above (when there is body text before it) and below.
+ * - `heading` absent and nothing in `createBefore` matches (or none given) → a new section is
+ *   created at the end, preceded by a blank line.
  * Everything else in the body is untouched.
  */
 function appendSectionLine(
@@ -18,12 +21,18 @@ function appendSectionLine(
   heading: RegExp,
   headingText: string,
   line: string,
-  createBefore?: RegExp,
+  createBefore?: RegExp | RegExp[],
 ): string {
   const bullet = line.startsWith('- ') ? line : `- ${line}`;
   const found = heading.exec(body);
   if (!found) {
-    const before = createBefore?.exec(body);
+    const candidates =
+      createBefore === undefined ? [] : Array.isArray(createBefore) ? createBefore : [createBefore];
+    let before: RegExpExecArray | null = null;
+    for (const candidate of candidates) {
+      before = candidate.exec(body);
+      if (before) break;
+    }
     if (before) {
       const at = before.index;
       const head = body.slice(0, at).replace(/\n+$/, '');
@@ -70,7 +79,24 @@ export function appendLogLine(body: string, line: string): string {
  * - If neither is present, `## Notes` is created at the end, the way `## Log` is.
  */
 export function appendNoteLine(body: string, line: string): string {
-  return appendSectionLine(body, NOTES_HEADING, '## Notes', line, LOG_HEADING);
+  return appendSectionLine(body, NOTES_HEADING, '## Notes', line, [LOG_HEADING]);
+}
+
+/**
+ * RCB-107: append one bullet under the `## Decision` heading of a card body — the question and
+ * options `card ask` opened and the answer `decide` gave, kept in the body (not only the
+ * frontmatter `decision:` block, which a re-ask REPLACES) so an earlier question's text survives
+ * every later ask.
+ * - If `## Decision` exists, the line goes at the end of that section, exactly `appendLogLine`'s
+ *   in-section behaviour.
+ * - If absent, `## Decision` is created immediately BEFORE `## Notes` if present, else before
+ *   `## Log` if present, else at the end — so the file reads description → decision → notes → log.
+ */
+export function appendDecisionLine(body: string, line: string): string {
+  return appendSectionLine(body, DECISION_HEADING, '## Decision', line, [
+    NOTES_HEADING,
+    LOG_HEADING,
+  ]);
 }
 
 /** Format a log bullet the way every surface writes it: `- <ISO> <actor> — <message>`. */
@@ -90,3 +116,10 @@ export function formatNoteLine(ts: string, actor: string, text: string): string 
   const continued = normalized.split('\n').join('\n  ');
   return `- ${ts} ${actor} — ${continued}`;
 }
+
+/**
+ * RCB-107: format a decision bullet — same multi-line-safe shape as `formatNoteLine` (a question's
+ * options become nested continuation lines under one bullet), reused rather than copied since a
+ * decision entry is a note about what was asked or answered, not a new shape.
+ */
+export const formatDecisionLine = formatNoteLine;

@@ -12,7 +12,7 @@
  */
 import { findColumn } from './board.js';
 import { isDecided, needsDecision } from './card.js';
-import { appendLogLine, formatLogLine } from './log.js';
+import { appendDecisionLine, appendLogLine, formatDecisionLine, formatLogLine } from './log.js';
 import { toIso } from './time.js';
 import { moveCard } from './transitions.js';
 import type { BoardConfig, Card, Decision, DecisionOption, Event } from './types.js';
@@ -83,6 +83,36 @@ function askedLine(question: string, options: readonly DecisionOption[], kind?: 
 }
 
 /**
+ * RCB-107: the `## Decision` body-section counterpart of `askedLine` — same `asked:`/`owner task:`
+ * wording, but carries each option's TEXT (not just its letter) as a continuation line, so the
+ * body keeps what was offered even after a re-ask replaces the frontmatter `decision:` block.
+ * `formatDecisionLine` (an alias of `formatNoteLine`) turns each `\n` here into a two-space
+ * continuation, nesting the options under the one bullet.
+ */
+function askedDecisionText(
+  question: string,
+  options: readonly DecisionOption[],
+  kind?: 'task',
+): string {
+  if (kind === 'task') return `owner task: ${question}`;
+  return [`asked: ${question}`, ...options.map((o) => `- ${o.letter}: ${o.text}`)].join('\n');
+}
+
+/**
+ * The label an answer is recorded under: just the letter for `## Log` (`decidedLine`), or
+ * `<letter>: <option text>` for the `## Decision` body section (`decidedDecisionText`) — the one
+ * place the two forms differ. Shared here so neither can drift from the other.
+ */
+function decidedBase(label: string | undefined, words: string | undefined, kind?: 'task'): string {
+  if (kind === 'task') return words !== undefined ? `done — "${words}"` : 'done';
+  return label !== undefined && words !== undefined
+    ? `decided ${label} — "${words}"`
+    : label !== undefined
+      ? `decided ${label}`
+      : `decided — "${words}"`;
+}
+
+/**
  * `decided <letter> — "<words>"` · `decided <letter>` · `decided — "<words>"` (no letter).
  * RCB-52: a task (never a letter) logs `done` or `done — "<words>"` instead.
  * RCB-69: when `decide` falls back to `defaultReturnTo` (the card was asked WHILE ALREADY in the
@@ -95,17 +125,27 @@ function decidedLine(
   kind?: 'task',
   defaultedTo?: string,
 ): string {
-  const base =
-    kind === 'task'
-      ? words !== undefined
-        ? `done — "${words}"`
-        : 'done'
-      : letter !== undefined && words !== undefined
-        ? `decided ${letter} — "${words}"`
-        : letter !== undefined
-          ? `decided ${letter}`
-          : `decided — "${words}"`;
+  const base = decidedBase(letter, words, kind);
   return defaultedTo === undefined ? base : `${base} → ${defaultedTo} (default; asked in-column)`;
+}
+
+/**
+ * RCB-107: the `## Decision` body-section counterpart of `decidedLine` — identical wording except
+ * a lettered answer carries the option's TEXT after the letter (`decided A: yes`, not `decided A`);
+ * never carries the `defaultedTo` move annotation, which is about where the card landed, not what
+ * was decided.
+ */
+function decidedDecisionText(
+  letter: string | undefined,
+  words: string | undefined,
+  options: readonly DecisionOption[],
+  kind?: 'task',
+): string {
+  const label =
+    letter === undefined
+      ? undefined
+      : `${letter}: ${options.find((o) => o.letter === letter)?.text ?? ''}`;
+  return decidedBase(label, words, kind);
 }
 
 const decisionColumnOf = (config: BoardConfig | undefined) =>
@@ -145,6 +185,9 @@ function defaultReturnTo(config: BoardConfig): string | null {
  * RCB-69/FPJ-33: when the card is already IN that column, status also stays put, but `returnTo`
  * is set to `defaultReturnTo(config)` rather than `null` — otherwise `decide` would have nowhere
  * real to send the card back to and it would sit decided in the owner's queue column.
+ * RCB-107: the question and its options are also appended to the body's `## Decision` section
+ * (a `question withdrawn` line first, on `--replace`), so the text survives the frontmatter
+ * `decision:` block a later re-ask replaces.
  */
 export function askDecision(card: Card, opts: AskDecisionOptions): AskDecisionResult {
   const question = opts.question;
@@ -171,6 +214,7 @@ export function askDecision(card: Card, opts: AskDecisionOptions): AskDecisionRe
       };
     }
     body = appendLogLine(body, formatLogLine(ts, opts.actor, 'question withdrawn'));
+    body = appendDecisionLine(body, formatDecisionLine(ts, opts.actor, 'question withdrawn'));
   }
 
   // RCB-69: the new `decision` block is set on `working` BEFORE `moveCard` runs (not after, as
@@ -229,12 +273,16 @@ export function askDecision(card: Card, opts: AskDecisionOptions): AskDecisionRe
     };
   }
 
+  const bodyWithLog = appendLogLine(
+    working.body,
+    formatLogLine(ts, opts.actor, askedLine(question, options, opts.kind)),
+  );
   const next: Card = {
     ...working,
     updated: ts,
-    body: appendLogLine(
-      working.body,
-      formatLogLine(ts, opts.actor, askedLine(question, options, opts.kind)),
+    body: appendDecisionLine(
+      bodyWithLog,
+      formatDecisionLine(ts, opts.actor, askedDecisionText(question, options, opts.kind)),
     ),
   };
   return { ok: true, card: next, event, warnings };
@@ -255,6 +303,8 @@ export function askDecision(card: Card, opts: AskDecisionOptions): AskDecisionRe
  * staying — that fallback is what "returnTo <x> missing; stayed" used to mean and no longer does;
  * only a card that is NOT in the decision column (and has no `returnTo`) is left untouched, the
  * `askDecision` "badge only" case.
+ * RCB-107: the answer is also appended to the body's `## Decision` section, a lettered answer
+ * carrying the option's TEXT (`decided A: yes`), not just its letter.
  */
 export function decide(card: Card, opts: DecideOptions): DecideResult {
   const decision = card.decision;
@@ -302,12 +352,19 @@ export function decide(card: Card, opts: DecideOptions): DecideResult {
     ...card,
     decision: nextDecision,
     updated: ts,
-    body: appendLogLine(
-      card.body,
-      formatLogLine(
+    body: appendDecisionLine(
+      appendLogLine(
+        card.body,
+        formatLogLine(
+          ts,
+          opts.actor,
+          decidedLine(opts.letter, opts.words, decision.kind, defaultedTo),
+        ),
+      ),
+      formatDecisionLine(
         ts,
         opts.actor,
-        decidedLine(opts.letter, opts.words, decision.kind, defaultedTo),
+        decidedDecisionText(opts.letter, opts.words, decision.options, decision.kind),
       ),
     ),
   };

@@ -1,2 +1,6 @@
-leases: []
+leases:
+  - resource: RCB-110
+    holder: repoboard builder
+    since: 2026-09-22T18:52:08Z
+    note: RCB-110 A build
 windows: []

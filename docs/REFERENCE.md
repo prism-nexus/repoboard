@@ -613,3 +613,28 @@ plain URL for the primary) — every scoped fetch and the WS go through the one 
 M half a day · L days, investigate first · XL plan-sized — or `null`, shown as a chip on the card
 and sortable/filterable on the web board. On this repo's 31 cards, measured 2026-09-07: 2,529 B
 (table), 7,639 B (`--json`), 20,758 B (`--json --full`).
+
+## 7. Systems detect (RCB-96)
+
+`repoboard systems detect [--root <dir>] [--apply] [--json]` proposes `.repoboard/systems.yml`
+candidates from a FIXED file list — it never walks the tree: `package.json` at root, each
+workspace dir's `package.json` (globs from `pnpm-workspace.yaml` or `package.json` `workspaces`,
+`dir/*`/`dir/**` expanded to direct subdirectories); in root and every workspace dir,
+`wrangler.{toml,jsonc,json}`, `Dockerfile`, `.env.example`, `.dev.vars`,
+`vite/drizzle.config.{ts,js,mts,mjs}`, `prisma/schema.prisma`; at root only, `*compose*.yml` and
+`.github/workflows/*.yml|yaml`. Every read goes through `resolveRepoPath` (K7's guard), so a
+workspace glob can never escape `root`.
+
+**Dry-run by default** (non-negotiable 5): prints the candidate table and exits — nothing is
+written. `--apply` merges the candidates into `.repoboard/systems.yml` (`emptySystemsDoc()` if
+absent) and stamps `source: { detected: <file>, at: <now> }` on every row it touches. **A hand
+row always wins**: a row whose `source` is already `hand` is left byte-for-byte unchanged and
+counted as "kept", never overwritten or deleted. An existing `systems.yml` that fails to parse
+refuses the whole run — errors on stderr, exit 1, nothing written — whether or not `--apply` was
+given. `--apply` with no `.repoboard/` at `root` refuses the same way ("not a repoboard repo").
+
+Table columns: `ID KIND LAYER ENV FROM`, then one `connections: <from>→<to> (<via>)` line per
+connection, then an `unclassified:` block for anything a detector could not place, then a summary
+line with the add/update/keep counts. Exit 0 on a clean dry run or a successful `--apply`; exit 1
+on a parse or refusal error. `--json` prints the whole `DetectRun` (`files`, `candidates`, `plan`,
+`applied`, `path`, `errors`). Measured (fpj read-only report: PH.5).

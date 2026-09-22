@@ -2945,6 +2945,15 @@ describe('repoboard cost', () => {
   );
 });
 
+describe('repoboard systems detect (RCB-96)', () => {
+  it('appears in --help, mentioning --apply', async () => {
+    const root = await freshRepo();
+    const help = await repoboard(root, '--help');
+    expect(help.out).toContain('repoboard systems detect');
+    expect(help.out).toContain('--apply');
+  });
+});
+
 describe('seat: dist staleness (RCB-60)', () => {
   const OLD = new Date('2020-01-01T00:00:00Z');
   const NEW = new Date('2030-01-01T00:00:00Z');

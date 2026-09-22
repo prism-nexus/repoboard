@@ -25,6 +25,7 @@ import {
   findColumn,
   findSeatLine,
   formatCostTable,
+  formatDetectReport,
   formatLogBlock,
   initialStateText,
   isOwnerTask,
@@ -69,6 +70,7 @@ import {
 import { formatResolvedRefs, resolveCardRefs } from './refs.js';
 import { assignRepoKeys, hasBoardDir } from './repo-context.js';
 import { openStore } from './store.js';
+import { runDetect } from './systems-detect.js';
 import { VERSION } from './version.js';
 
 export { VERSION };
@@ -237,6 +239,12 @@ Usage:
                                         8192, or board.yml's claudeMdBudgetBytes); exit 0 otherwise.
                                         An absent CLAUDE.md is reported, never OVER. --root measures
                                         ANY directory, with or without a .repoboard/ board.
+  repoboard systems detect [--root <dir>] [--apply] [--json]
+                                        propose .repoboard/systems.yml candidates from
+                                        package.json/workspaces, wrangler.*, compose, CI, .env,
+                                        vite/drizzle/prisma configs; dry-run by default (table
+                                        only) — --apply merges, stamps provenance, never
+                                        overwrites a hand row (detection proposes; the file is truth)
   repoboard archive [--older-than 14d] [--dry-run] [--as actor]
                                         move every \`done\` card whose \`updated\` is older than the
                                         cutoff (duration 14d/2h/90m, or an ISO-8601 datetime) to
@@ -1614,6 +1622,40 @@ async function cmdCost(args: string[], io: CliIO): Promise<number> {
   return report.over ? 1 : 0;
 }
 
+/**
+ * RCB-96 B: `--root` reuses `costRoot` (K7's own read-only root resolution) — detect can run
+ * against any directory, `.repoboard/` or not; only `--apply` requires one (brief). Errors
+ * (an existing systems.yml that fails to parse, or `--apply` with no `.repoboard/`) skip the
+ * table and print one line each on stderr, exit 1 — a table over a plan that is empty because
+ * nothing could be merged would be misleading, not useful.
+ */
+async function cmdSystemsDetect(args: string[], io: CliIO): Promise<number> {
+  const { values } = parse(args, {
+    root: { type: 'string' },
+    apply: { type: 'boolean', default: false },
+    json: { type: 'boolean', default: false },
+  });
+  const root = await costRoot(values.root, io);
+  const now = io.now?.() ?? new Date();
+  const result = await runDetect(root, { apply: values.apply, now });
+  if (values.json) {
+    io.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+    return result.errors.length > 0 ? 1 : 0;
+  }
+  if (result.errors.length > 0) {
+    const err = io.stderr ?? io.stdout;
+    for (const e of result.errors) err.write(`${e}\n`);
+    return 1;
+  }
+  io.stdout.write(`${formatDetectReport(result.candidates, result.plan)}\n`);
+  io.stdout.write(
+    result.applied
+      ? `wrote .repoboard/systems.yml (${result.plan.added.length} added, ${result.plan.updated.length} updated, ${result.plan.skipped.length} hand rows kept)\n`
+      : 'dry run — nothing written; --apply merges into .repoboard/systems.yml\n',
+  );
+  return 0;
+}
+
 // ---- archive / sync-issues (P8.5) -----------------------------------------------------------
 
 async function cmdArchive(args: string[], io: CliIO): Promise<number> {
@@ -1896,6 +1938,10 @@ export async function run(argv: string[], io: CliIO): Promise<number> {
     if (cmd === 'check') return await cmdCheck(argv.slice(1), io);
     if (cmd === 'local') return await cmdLocal(sub, rest, io);
     if (cmd === 'cost') return await cmdCost(argv.slice(1), io);
+    if (cmd === 'systems') {
+      if (sub === 'detect') return await cmdSystemsDetect(rest, io);
+      throw new UserError(`unknown systems command "${sub ?? ''}" (detect)`);
+    }
     if (cmd === 'archive') return await cmdArchive(argv.slice(1), io);
     if (cmd === 'sync-issues') return await cmdSyncIssues(argv.slice(1), io);
     throw new UserError(`unknown command "${cmd}" (try repoboard --help)`);

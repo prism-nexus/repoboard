@@ -21,3 +21,5 @@ export type {
   UpdateOutcome,
 } from './store.js';
 export { CardStore, compareCardIds, openStore } from './store.js';
+export type { DetectRun } from './systems-detect.js';
+export { detectSystems, runDetect } from './systems-detect.js';

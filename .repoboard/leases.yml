@@ -1,6 +1,2 @@
-leases:
-  - resource: RCB-114
-    holder: repoboard builder
-    since: 2026-09-22T22:16:14Z
-    note: vitest-lock pid fix
+leases: []
 windows: []

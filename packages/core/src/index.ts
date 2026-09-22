@@ -26,11 +26,18 @@ export {
   SizeSchema,
   serializeCard,
 } from './card.js';
-export type { CostEntry, CostReport, CostWhy, SummarizeCostOptions } from './cost.js';
+export type {
+  CostEntry,
+  CostReport,
+  CostWhy,
+  FlaggedLinkedPath,
+  SummarizeCostOptions,
+} from './cost.js';
 export {
   approxTokens,
   DEFAULT_CLAUDE_MD_BUDGET_BYTES,
   extractLinkedPaths,
+  extractLinkedPathsFlagged,
   formatCostTable,
   MCP_SCHEMA_NOTE,
   summarizeCost,

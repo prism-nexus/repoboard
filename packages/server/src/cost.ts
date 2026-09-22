@@ -10,7 +10,7 @@ import {
   type CostEntry,
   type CostReport,
   type CostWhy,
-  extractLinkedPaths,
+  extractLinkedPathsFlagged,
   summarizeCost,
 } from '@repoboard/core';
 import { resolveRepoPath } from './refs.js';
@@ -89,9 +89,10 @@ export async function gatherCost(root: string, budget: number): Promise<CostRepo
       text = null;
     }
     if (text !== null) {
-      for (const raw of extractLinkedPaths(text)) {
+      for (const { path: raw, frozen } of extractLinkedPathsFlagged(text)) {
         if (already.has(raw)) continue; // already counted as root/agents — never double-billed
-        const entry = await fileEntry(root, raw, 'linked from CLAUDE.md');
+        const why: CostWhy = frozen ? 'frozen' : 'linked from CLAUDE.md';
+        const entry = await fileEntry(root, raw, why);
         if (entry) {
           entries.push(entry);
           already.add(entry.file);

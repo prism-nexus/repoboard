@@ -148,6 +148,8 @@ export {
   renderState,
   SECTION_PLACEHOLDER,
   setStateSection,
+  splitLandings,
+  trimLandings,
 } from './state.js';
 export { toIso } from './time.js';
 export type {

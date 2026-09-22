@@ -17,6 +17,8 @@ import {
   renderState,
   SECTION_PLACEHOLDER,
   setStateSection,
+  splitLandings,
+  trimLandings,
 } from '../src/state.js';
 import type { Card, LeasesDoc } from '../src/types.js';
 import { sampleCard } from './helpers.js';
@@ -853,5 +855,73 @@ describe('exitCodeForFindings', () => {
     const findings = [{ kind: 'needs-decision', level: 'info', message: 'x' } as const];
     expect(exitCodeForFindings(findings, false)).toBe(0);
     expect(exitCodeForFindings(findings, true)).toBe(0);
+  });
+});
+
+describe('splitLandings / trimLandings (RCB-92)', () => {
+  // 4 entries: a 2-line preamble (stays attached to entry 1), entry 1 is multi-line with a
+  // nested `- ` bullet (fpj's `-38. **K101…` shape), entry 2 is the `0. ` style, entries 3–4 are
+  // the plain `1. `/`2. ` style. Blank-line separated, exactly as `.repoboard/STATE.md` renders.
+  const body = [
+    'Some preamble line one.',
+    'Some preamble line two.',
+    '',
+    '-38. **K101 fixed the thing**',
+    '    - detail bullet under it',
+    '    more text on the same entry',
+    '',
+    '0. K117 voice stuff landed',
+    '',
+    '1. Lane scripts landed',
+    '',
+    '2. Something else landed',
+  ].join('\n');
+
+  it('splitLandings finds 4 entries, preamble attached to the first', () => {
+    const entries = splitLandings(body);
+    expect(entries).toHaveLength(4);
+    expect(entries[0]).toContain('Some preamble line one.');
+    expect(entries[0]).toContain('Some preamble line two.');
+    expect(entries[0]).toContain('-38. **K101 fixed the thing**');
+    expect(entries[0]).toContain('- detail bullet under it');
+    expect(entries[1]).toBe('0. K117 voice stuff landed');
+    expect(entries[2]).toBe('1. Lane scripts landed');
+    expect(entries[3]).toBe('2. Something else landed');
+  });
+
+  it('SECTION_PLACEHOLDER splits to no entries', () => {
+    expect(splitLandings(SECTION_PLACEHOLDER)).toEqual([]);
+  });
+
+  it('a body with no start line is one entry', () => {
+    expect(splitLandings('just prose, no numbered entries')).toEqual([
+      'just prose, no numbered entries',
+    ]);
+  });
+
+  it('trimLandings(body, 2): kept has 2, archived has the other 2 verbatim, invariant holds', () => {
+    const { kept, archived } = trimLandings(body, 2);
+    expect(splitLandings(kept)).toHaveLength(2);
+    expect(archived).toHaveLength(2);
+    expect(archived[0]).toBe('1. Lane scripts landed');
+    expect(archived[1]).toBe('2. Something else landed');
+    // Invariant: nothing lost, nothing reordered.
+    expect([...splitLandings(kept), ...archived].join('\n\n')).toBe(body.trim());
+  });
+
+  it('keep=10 (more than the entry count): archived is empty, kept is everything', () => {
+    const { kept, archived } = trimLandings(body, 10);
+    expect(archived).toEqual([]);
+    expect(splitLandings(kept)).toHaveLength(4);
+  });
+
+  it('keep=0: archived is every entry, kept is empty', () => {
+    const { kept, archived } = trimLandings(body, 0);
+    expect(kept).toBe('');
+    expect(archived).toHaveLength(4);
+  });
+
+  it('keep < 0 throws a plain Error', () => {
+    expect(() => trimLandings(body, -1)).toThrow(Error);
   });
 });

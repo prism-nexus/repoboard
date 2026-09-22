@@ -724,15 +724,17 @@ selects the card and switches to Board.
 `GET /api/dashboard` (per served repo, always 200 — the same "well-formed answer even when
 everything is null" reasoning as `/api/cost` and `/api/systems`) returns `{now, health, commits,
 coverage, coverageSource}`. **`health`** never re-runs a check (CLAUDE.md non-negotiable 2): a seat
-records its own result with `repoboard gate record --as <seat> [--tests <passed>|<skipped>]
-[--failed n] [--files n] [--typecheck n] [--lint n] [--build n] [--sha s] [--note t]` — one JSONL
+records its own result with `repoboard gate record --as <seat> [--tests <passed>|<skipped>
+--failed n] [--files n] [--typecheck n] [--lint n] [--build n] [--sha s] [--note t]` — one JSONL
 line appended to `.repoboard/local/gate.jsonl` when that directory exists, else
 `.repoboard/gate.jsonl` (`gateLedgerPath`, the one function the reader and `cli.ts`'s writer both
 call); `sha` defaults to `git rev-parse --short HEAD` (null outside a repo); no check given is exit
-1 and nothing written. `repoboard gate show [--json]` prints the newest result per check (`tests`,
-`typecheck`, `lint`, `build`), ordering by each record's `at` — not file position, so an older
-passing line after a newer failing one still reports the failure — and `no gate recorded` for a
-check with no line yet. **`commits`** is read live from git (never stored): the last 10 on `HEAD`
+1 and nothing written; `--tests` requires `--failed` (0 means a clean run) — given without it, exit
+1 and nothing written (RCB-116), since an unstated failed count would read as `tests: FAIL`.
+`repoboard gate show [--json]` prints the newest result per check (`tests`, `typecheck`, `lint`,
+`build`), ordering by each record's `at` — not file position, so an older passing line after a
+newer failing one still reports the failure, and a tie on `at` (same-second precision) goes to the
+later line in the ledger (RCB-116) — and `no gate recorded` for a check with no line yet. **`commits`** is read live from git (never stored): the last 10 on `HEAD`
 and on `origin/main` (null when that ref does not resolve), plus a 14-UTC-day commit count and a
 per-`agent ?? author` count from `git log --since=<UTC midnight 13 days ago>`; `agent` is a
 commit's first `Co-Authored-By` trailer name, email stripped. **`coverage`** is RCB-110 A's

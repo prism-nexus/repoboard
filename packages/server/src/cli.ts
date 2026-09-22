@@ -227,14 +227,15 @@ Usage:
                                         .repoboard/systems.yml that fails to parse), systems-stale
                                         (warning; blocks only with --strict — a detected system no
                                         longer matches its source file)
-  repoboard gate record --as <seat> [--tests <passed>|<skipped>] [--failed n] [--files n]
+  repoboard gate record --as <seat> [--tests <passed>|<skipped> --failed n] [--files n]
                         [--typecheck n] [--lint n] [--build n] [--sha s] [--note t]
                                         append one line to the gate ledger (RCB-112 A) — a
                                         SEAT'S OWN RECORD of a check it already ran, never a
                                         re-run; --sha defaults to \`git rev-parse --short HEAD\`
                                         (null outside a repo); needs at least one of --tests,
                                         --typecheck, --lint, --build — none given is exit 1,
-                                        nothing written
+                                        nothing written; --tests requires --failed (0 means a
+                                        clean run) — without it, exit 1, nothing written (RCB-116)
   repoboard gate show [--json]         the newest recorded result per check (tests, typecheck,
                                         lint, build); \`no gate recorded\` for any check with no
                                         line yet
@@ -1565,12 +1566,15 @@ function parseTestsFlag(v: string | undefined): { passed: number | null; skipped
 }
 
 /**
- * RCB-112 A: `repoboard gate record --as <seat> [--tests p|s] [--failed n] [--files n]
+ * RCB-112 A: `repoboard gate record --as <seat> [--tests p|s --failed n] [--files n]
  * [--typecheck n] [--lint n] [--build n] [--sha s] [--note t]` — one JSONL line appended to the
  * gate ledger (`gateLedgerPath`). `sha` defaults to `git rev-parse --short HEAD` (null outside a
  * git repo, or with no commits); CLAUDE.md non-negotiable 2: this NEVER runs the checks it
  * records — it only writes down a number the caller already produced. No check given (none of
  * `--tests`/`--typecheck`/`--lint`/`--build`) is a usage error: exit 1, nothing written.
+ * `--tests` without `--failed` is also a usage error (RCB-116): a recorded run with an unstated
+ * failed count reads as `tests: FAIL` (null = unknown = not ok), which is not what the caller
+ * meant to write down.
  */
 async function cmdGateRecord(args: string[], io: CliIO): Promise<number> {
   const { values } = parse(args, {
@@ -1590,6 +1594,9 @@ async function cmdGateRecord(args: string[], io: CliIO): Promise<number> {
   const failed = parseIntFlag('failed', values.failed);
   const files = parseIntFlag('files', values.files);
   const { passed, skipped } = parseTestsFlag(values.tests);
+  if (values.tests !== undefined && failed === null) {
+    throw new UserError('gate record --tests needs --failed <n> (0 means a clean run)');
+  }
   const hasTests = values.tests !== undefined || failed !== null || files !== null;
   const typecheck = parseIntFlag('typecheck', values.typecheck);
   const lint = parseIntFlag('lint', values.lint);

@@ -197,7 +197,7 @@ function latestFor<T>(
     if (v === null) continue;
     const parsed = Date.parse(r.at);
     const time = Number.isNaN(parsed) ? Number.NEGATIVE_INFINITY : parsed;
-    if (best === null || time > bestTime) {
+    if (best === null || time >= bestTime) {
       best = { record: r, value: v };
       bestTime = time;
     }
@@ -215,8 +215,11 @@ function latestFor<T>(
 /**
  * Per check, the record with the newest `at` that carries a non-null value for THAT check —
  * order by `at`, never by file/array position, so an older passing line after a newer failing one
- * still reports the failure. `ok` is `failed === 0` for tests, `exit code === 0` for the rest; a
- * `null` failed/exit code (recorded but unknown) reads as not-ok, never a guessed pass.
+ * still reports the failure; a tie on `at` (same-second precision, two `gate record` calls in one
+ * second) is broken by ledger (append) order — the LATER element wins, since the ledger is
+ * append-only and a later line is the later record. `ok` is `failed === 0` for tests, `exit code
+ * === 0` for the rest; a `null` failed/exit code (recorded but unknown) reads as not-ok, never a
+ * guessed pass.
  */
 export function latestChecks(
   records: readonly GateRecord[],

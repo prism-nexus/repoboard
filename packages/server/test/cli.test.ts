@@ -3057,6 +3057,39 @@ describe('repoboard gate (RCB-112 A)', () => {
     expect(bad.err).toMatch(/--tests must be/);
   });
 
+  it('--tests without --failed is a usage error (RCB-116): exit 1, ledger unchanged/absent', async () => {
+    const root = await freshRepo();
+    expect(existsSync(join(root, '.repoboard', 'gate.jsonl'))).toBe(false);
+
+    const missingFailed = await repoboard(
+      root,
+      'gate',
+      'record',
+      '--as',
+      'builder',
+      '--tests',
+      '5|1',
+    );
+    expect(missingFailed.code).toBe(1);
+    expect(missingFailed.err).toMatch(/--failed <n>/);
+    expect(existsSync(join(root, '.repoboard', 'gate.jsonl'))).toBe(false);
+
+    const withFailed = await repoboard(
+      root,
+      'gate',
+      'record',
+      '--as',
+      'builder',
+      '--tests',
+      '5|1',
+      '--failed',
+      '0',
+    );
+    expect(withFailed.code).toBe(0);
+    const shown = await repoboard(root, 'gate', 'show');
+    expect(shown.out).toContain('tests: ok');
+  });
+
   it('appends to .repoboard/local/gate.jsonl once .repoboard/local/ exists (gateLedgerPath, shared with the reader)', async () => {
     const root = await freshRepo();
     const init = await repoboard(root, 'local', 'init');

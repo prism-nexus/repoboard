@@ -106,6 +106,29 @@ describe('latestChecks (RCB-112 A)', () => {
     expect(latestChecks([])).toEqual({ tests: null, typecheck: null, lint: null, build: null });
   });
 
+  it(
+    'a tie on `at` (same-second precision) is broken by ledger order — the LATER element wins, ' +
+      'in the order given (RCB-116)',
+    () => {
+      const first = REC({
+        at: '2026-09-22T22:42:27Z',
+        sha: 'ae317d6',
+        typecheck: 0,
+      });
+      const second = REC({
+        at: '2026-09-22T22:42:27Z',
+        sha: 'a52a4e2',
+        typecheck: 0,
+      });
+
+      const checks = latestChecks([first, second]);
+      expect(checks.typecheck?.sha).toBe('a52a4e2');
+
+      const checksReversed = latestChecks([second, first]);
+      expect(checksReversed.typecheck?.sha).toBe('ae317d6');
+    },
+  );
+
   it('a null failed count is NOT treated as a pass', () => {
     const records = [REC({ tests: { files: 5, passed: 5, skipped: 0, failed: null } })];
     const checks = latestChecks(records);

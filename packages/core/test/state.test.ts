@@ -451,6 +451,66 @@ describe('checkFindings', () => {
     expect(findings.some((f) => f.kind === 'stale-state')).toBe(true);
   });
 
+  it('future-stamp: a block stamped 5 min ahead of the clock is ignored for stale-state and reported as a warning (RCB-90)', () => {
+    const state = stateAt('2026-09-17T21:00:00Z'); // == NOW
+    const blocks: LogBlock[] = [
+      { seat: 'BUILDER', ts: '2026-09-17T21:05:00Z', title: 'x', text: 'y' },
+    ];
+    const findings = checkFindings({
+      state,
+      logs: [{ date: '2026-09-17', mtimeMs: Date.parse('2026-09-17T20:00:00Z'), blocks }],
+      cards: [],
+      config,
+      leases: emptyLeases(),
+      now: NOW,
+    });
+    // This is the control: with the future-stamp ignore reverted in `newestLogMoment`, the block's
+    // 21:05:00 header becomes "newest" against a 21:00:00 stamp, and this assertion fails.
+    expect(findings.some((f) => f.kind === 'stale-state')).toBe(false);
+    const future = findings.filter((f) => f.kind === 'future-stamp');
+    expect(future).toHaveLength(1);
+    expect(future[0]?.level).toBe('warning');
+    expect(future[0]?.message).toContain('2026-09-17');
+    expect(future[0]?.message).toContain('BUILDER 2026-09-17T21:05:00Z');
+    expect(future[0]?.message).toContain('300 s ahead');
+  });
+
+  it('future-stamp does not swallow real staleness (RCB-90)', () => {
+    const state = stateAt('2026-09-17T20:50:00Z'); // 10 min before NOW
+    const blocks: LogBlock[] = [
+      { seat: 'OPS', ts: '2026-09-17T20:55:00Z', title: 'x', text: 'y' }, // 5 min before NOW
+    ];
+    const findings = checkFindings({
+      state,
+      logs: [{ date: '2026-09-17', mtimeMs: Date.parse('2026-09-17T20:50:00Z'), blocks }],
+      cards: [],
+      config,
+      leases: emptyLeases(),
+      now: NOW,
+    });
+    expect(findings.some((f) => f.kind === 'stale-state')).toBe(true);
+    expect(findings.some((f) => f.kind === 'future-stamp')).toBe(false);
+  });
+
+  it('future-stamp respects the 60s tolerance: a block 30s ahead is not a future-stamp and compares normally', () => {
+    const state = stateAt('2026-09-17T21:00:00Z'); // == NOW
+    const blocks: LogBlock[] = [
+      { seat: 'OPS', ts: '2026-09-17T21:00:30Z', title: 'x', text: 'y' }, // 30s ahead of NOW
+    ];
+    const findings = checkFindings({
+      state,
+      logs: [{ date: '2026-09-17', mtimeMs: Date.parse('2026-09-17T20:00:00Z'), blocks }],
+      cards: [],
+      config,
+      leases: emptyLeases(),
+      now: NOW,
+    });
+    expect(findings.some((f) => f.kind === 'future-stamp')).toBe(false);
+    // within tolerance, so it counts toward "newest" like any other header — the STATE stamp
+    // (21:00:00) is 30 real seconds behind it, so stale-state fires normally.
+    expect(findings.some((f) => f.kind === 'stale-state')).toBe(true);
+  });
+
   it('active-without-lease: a card in an active column, assignee holds no live lease — warning-grade', () => {
     const state = stateAt('2026-09-17T21:00:00Z');
     const card = sampleCard({

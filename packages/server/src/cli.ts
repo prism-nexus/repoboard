@@ -172,11 +172,12 @@ Usage:
   repoboard seat <name> [--json]       the cold-start bundle for one seat: its SEATS line, its last
                                         log block, the coordinator's, its next todo card, the open
                                         decisions — one command instead of the three-file ritual
-  repoboard seat <name> --up "<text>" [--force] | --down "<text>"
+  repoboard seat <name> --up "<text>" [--force] | --down "<text>" | --update "<text>"
                                         replace ONLY this seat's own SEATS bullet and restamp
                                         STATE.md; appends the bullet if the seat has none; --up
                                         refuses a second UP inside activeWindowMinutes unless
-                                        --force (RCB-87, audited in the log)
+                                        --force (RCB-87, audited in the log); --update rewrites
+                                        only the body, keeps the standing stamp, no guard (RCB-88)
   repoboard check [--json] [--strict]  exit 0 "ok" / 1 with one line per finding: stale-state
                                         (also reads board.yml's logDir, P8.6 — an extra daily-log
                                         directory alongside .repoboard/log/, read-only),
@@ -190,7 +191,11 @@ Usage:
                                         local-unsynced (warning; blocks only with --strict —
                                         uncommitted changes or unpushed commits in
                                         .repoboard/local/), local-no-remote (informational, never
-                                        fails — .repoboard/local/ has no origin, RCB-83)
+                                        fails — .repoboard/local/ has no origin, RCB-83),
+                                        future-stamp (warning; blocks only with --strict — a log
+                                        block's header time is more than a minute ahead of the
+                                        clock, so it was ignored for stale-state; hand-typed header
+                                        or clock skew, RCB-90)
   repoboard local init [--remote <url>]
                                         create .repoboard/local/ — a gitignored, separate git repo
                                         for machine facts (scaffolds RIG.md, adds the exact line
@@ -384,6 +389,7 @@ function nextAgentPromptText(): string {
     '2. Take the card: `repoboard card move <id> doing --as <seat>`; log as you go',
     '   (`repoboard log --as <seat>`); `repoboard check` before you start and before you stop.',
     '3. Stand down: log block first, then `repoboard seat <seat> --down "<≤3 lines>"` LAST.',
+    '   Blocks come from `repoboard log --as <seat>` (the CLI stamps them); never hand-type a `#####` header.',
     '',
   ].join('\n');
 }
@@ -1260,15 +1266,46 @@ async function cmdSeat(args: string[], io: CliIO): Promise<number> {
     json: { type: 'boolean', default: false },
     up: { type: 'string' },
     down: { type: 'string' },
+    update: { type: 'string' },
     force: { type: 'boolean', default: false },
   });
   const [name] = positionals;
   if (!name)
     throw new UserError(
-      'usage: repoboard seat <name> [--json] [--up "<text>" [--force] | --down "<text>"]',
+      'usage: repoboard seat <name> [--json] [--up "<text>" [--force] | --down "<text>" | --update "<text>"]',
     );
   const root = await requireRoot(io);
   const store = await openStore(root, { watch: false, now: io.now });
+
+  // RCB-88: --update rewrites only the body, keeping the standing status + stamp — no guard, no
+  // audit block, handled entirely separately from the --up/--down restamp path below.
+  if (values.update !== undefined) {
+    if (values.up !== undefined || values.down !== undefined) {
+      throw new UserError('seat: --up, --down and --update are exclusive');
+    }
+    if (values.update.trim().length === 0) {
+      throw new UserError('seat --update needs the bullet text');
+    }
+    const res = await store.updateSeatBullet(name, values.update);
+    if (!res.ok) throw new UserError(res.error);
+    if (await hasLocal(root)) {
+      const sync = await localSync(root, `${name}: seat update`);
+      if (sync.pushed === false) {
+        (io.stderr ?? io.stdout).write(`warning: local: push failed: ${sync.error}\n`);
+      }
+    }
+    const bullet = findSeatLine(res.doc.sections.seats, name) ?? '';
+    if (values.json) {
+      io.stdout.write(
+        `${JSON.stringify({ name, status: res.status, stamp: res.stamp, bullet }, null, 2)}\n`,
+      );
+    } else {
+      io.stdout.write(`updated SEATS ${name}: ${res.status} ${res.stamp} kept\n`);
+    }
+    const staleness = await distStaleness(selfRepoRoot(io));
+    if (staleness) (io.stderr ?? io.stdout).write(`warning: ${staleness}\n`);
+    return 0;
+  }
 
   // RCB-58: a seat restamps ONLY its own SEATS bullet — a write, kept separate from the bundle
   // read below (never printed together) so the permission classifier sees one small write.

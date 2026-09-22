@@ -351,6 +351,13 @@ entry's text; `decide`, `lease take`, `window check` and `log` each round-trip t
 `sed` edit within 1 s on the dashboard; `repoboard check` exits 1 on a STATE older than the log and 0
 after STATE is rewritten; every new surface's bytes are in `docs/AGENTS.md` alongside O3's table.
 
+### P9 Systems flow — one model of a repo's systems, two views (owner decision O12, 2026-09-22)
+The plan is `docs/SYSTEMS-FLOW-PLAN.md` (proposal accepted as written, RCB-80 decided A on the web
+2026-09-22 03:58Z). Steps are cards PH.0–PH.7 under parent RCB-80 (RCB-94–RCB-101); the card is the
+status, this section only routes. Shapes for `.repoboard/systems.yml`, `GET /api/systems` and the
+`systems` wire field land in §2–§4 when PH.1 lands, not before. PH.7 (the plan-on-the-board
+experiment) runs first, per Q6.
+
 ## §6 Repo layout
 ```
 packages/core/      domain, I/O-free
@@ -477,3 +484,11 @@ Answered 2026-09-17:
   is dropped (the badge and inline letters stay); a board with no `decision: true` column keeps the
   card where it is (the badge alone). O6's rule stands: anyone who wants `review` adds it to
   `board.yml`. This repo's own `board.yml` changes in the same commit; no card was in `review`.
+
+Answered 2026-09-22:
+- **O12 — RCB-80 systems flow: A, every recommendation in `docs/SYSTEMS-FLOW-PLAN.md` §7 as
+  written** (decided on the web 03:58Z; the owner's word in chat 04:0xZ: "answered all proposals
+  looked reasonable, lets do it rcb-80 is a go"). Q1 detection proposes, the file is truth; Q2 own
+  layered layout in core, inline SVG, no diagram library; Q3 a third top-level view `flow`; Q4
+  repoboard first, then freshpickedjobs read-only; Q5 4,096 B default budget for `systems.yml`,
+  `board.yml` override; Q6 the PH.7 board experiment runs before PH.1. Phase P9.

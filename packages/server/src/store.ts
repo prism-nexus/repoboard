@@ -34,6 +34,7 @@ import {
   type Event,
   exitCodeForFindings,
   type Finding,
+  findSeatLine,
   formatLogBlock,
   formatLogLine,
   formatSeatBullet,
@@ -52,6 +53,7 @@ import {
   type ReleaseLeaseInput,
   releaseLease,
   replaceSeatBullet,
+  rewriteSeatBulletBody,
   type SeatBundle,
   type StateDoc,
   type StateSectionName,
@@ -160,6 +162,13 @@ export type LeaseOutcome =
 /** P8.3: `setStateSection` outcome. */
 export type SetStateOutcome =
   | { ok: true; doc: StateDoc; text: string }
+  | { ok: false; error: string; readOnly?: boolean };
+
+/** RCB-88: `updateSeatBullet` outcome — `SetStateOutcome`'s ok branch plus the rewrite's own
+ * `status`/`stamp` (the ones KEPT, not restamped), so the CLI can echo them without re-parsing
+ * the bullet it just got back. */
+export type UpdateSeatOutcome =
+  | { ok: true; doc: StateDoc; text: string; status: 'UP' | 'DOWN'; stamp: string }
   | { ok: false; error: string; readOnly?: boolean };
 
 /**
@@ -628,6 +637,61 @@ export class CardStore extends EventEmitter<StoreEvents> {
       if (!reparsed.ok)
         throw new Error(`setSeatBullet produced unparseable text: ${reparsed.error}`);
       return { ok: true as const, doc: reparsed.doc, text: res.text };
+    });
+  }
+
+  /**
+   * RCB-88: rewrite ONLY `name`'s own SEATS bullet's BODY — the standing label/status/stamp are
+   * kept byte-for-byte (`rewriteSeatBulletBody`, no restamp), while STATE.md's own line-3 stamp
+   * IS restamped as `name`, same as every other STATE write (this is what keeps `check` green
+   * after a mid-session log block — see `setStateSection`). Unlike `setSeatBullet`, a missing
+   * STATE.md or a missing/unparseable bullet is REFUSED, not scaffolded or appended — there is
+   * nothing to keep in either case.
+   */
+  updateSeatBullet(name: string, text: string): Promise<UpdateSeatOutcome> {
+    return this.mutate(async () => {
+      this.refuseWriteWithoutBoard();
+      let raw: string;
+      try {
+        raw = await readFile(this.statePath, 'utf8');
+      } catch (e) {
+        if ((e as NodeJS.ErrnoException).code !== 'ENOENT') throw e;
+        return {
+          ok: false as const,
+          error: `seat ${name} has no standing bullet to update; use --up or --down`,
+        };
+      }
+      const parsed = parseState(raw);
+      if (!parsed.ok) return { ok: false as const, error: parsed.error };
+      const line = findSeatLine(parsed.doc.sections.seats, name);
+      if (line === null) {
+        return {
+          ok: false as const,
+          error: `seat ${name} has no standing bullet to update; use --up or --down`,
+        };
+      }
+      const rewrite = rewriteSeatBulletBody(line, text);
+      if (rewrite === null) {
+        return {
+          ok: false as const,
+          error: `seat ${name}'s bullet has no UP|DOWN stamp to keep; use --up or --down`,
+        };
+      }
+      const now = this.now();
+      const newSeats = replaceSeatBullet(parsed.doc.sections.seats, name, rewrite.bullet);
+      const res = setStateSectionCore(raw, 'seats', newSeats, { now, actor: name });
+      if (!res.ok) return { ok: false as const, error: res.error };
+      await this.writeState(res.text);
+      const reparsed = parseState(res.text);
+      if (!reparsed.ok)
+        throw new Error(`updateSeatBullet produced unparseable text: ${reparsed.error}`);
+      return {
+        ok: true as const,
+        doc: reparsed.doc,
+        text: res.text,
+        status: rewrite.status,
+        stamp: rewrite.stamp,
+      };
     });
   }
 

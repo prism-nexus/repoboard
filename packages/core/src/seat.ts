@@ -183,6 +183,16 @@ export function replaceSeatBullet(seatsSection: string, name: string, bullet: st
 }
 
 /**
+ * RCB-58/RCB-88: a bullet's BODY, formatted exactly one way — trimmed, with internal newlines
+ * turned into continuation lines (each `\n` becomes `\n  `, two spaces, so a ≤3-line bullet's
+ * second/third lines stay inside it). `formatSeatBullet` and `rewriteSeatBulletBody` both call
+ * this ONE function so the body rule cannot drift between the two.
+ */
+function formatSeatBulletBody(text: string): string {
+  return text.trim().replace(/\n/g, '\n  ');
+}
+
+/**
  * RCB-58: format one SEATS bullet — `- **<name>: <UP|DOWN> <YYYY-MM-DD HH:MMZ>.** <text>`, `text`
  * trimmed with internal newlines turned into continuation lines (each `\n` becomes `\n  `, two
  * spaces, so a ≤3-line bullet's second/third lines stay inside it). `HH:MM` is UTC from `now`,
@@ -199,8 +209,34 @@ export function formatSeatBullet(
 ): string {
   const iso = toIso(now);
   const stamp = `${iso.slice(0, 10)} ${iso.slice(11, 16)}Z`;
-  const body = text.trim().replace(/\n/g, '\n  ');
+  const body = formatSeatBulletBody(text);
   return `- **${name}: ${status} ${stamp}.** ${body}`;
+}
+
+/**
+ * RCB-88: rewrite a seat's own bullet's BODY, keeping its first line's label, status and stamp
+ * BYTE-FOR-BYTE — the raw `SEAT_BULLET_RE` captures, not reformatted or reparsed, so even a stamp
+ * that fails to parse (`18:0xZ`) survives verbatim. `null` when the first line is not a seat
+ * bullet at all (same shape check as `parseSeatStamp`) — there is nothing to keep. Pure, no I/O,
+ * no clock: this function never restamps.
+ */
+export function rewriteSeatBulletBody(
+  bullet: string,
+  text: string,
+): { bullet: string; status: 'UP' | 'DOWN'; stamp: string } | null {
+  const firstLine = bullet.split('\n')[0] ?? '';
+  const m = SEAT_BULLET_RE.exec(firstLine);
+  if (!m) return null;
+  const label = m[1] ?? '';
+  const status = m[2] as 'UP' | 'DOWN';
+  const date = m[3] ?? '';
+  const time = m[4] ?? '';
+  const body = formatSeatBulletBody(text);
+  return {
+    bullet: `- **${label}: ${status} ${date} ${time}Z.** ${body}`,
+    status,
+    stamp: `${date} ${time}Z`,
+  };
 }
 
 /**

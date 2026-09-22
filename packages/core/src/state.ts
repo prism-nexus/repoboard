@@ -210,7 +210,8 @@ export interface Finding {
     | 'gated-steps'
     | 'cost-over-budget'
     | 'local-unsynced'
-    | 'local-no-remote';
+    | 'local-no-remote'
+    | 'future-stamp';
   level: FindingLevel;
   message: string;
 }
@@ -255,20 +256,34 @@ export function costFinding(report: CostReport | null | undefined): Finding | nu
   };
 }
 
-/** The later of a log file's own mtime and the newest parseable `#####` header time inside it. */
-function newestMomentOf(log: LogFileInfo): number {
+/** A block stamped further ahead of `now` than this is a hand-typed or clock-skewed header, not a
+ * real newer moment (RCB-90) — see `newestLogMoment`. */
+export const FUTURE_STAMP_TOLERANCE_MS = 60_000;
+
+/**
+ * The later of a log file's own mtime and the newest parseable `#####` header time inside it —
+ * except a header more than `FUTURE_STAMP_TOLERANCE_MS` ahead of `now` is ignored here. A
+ * hand-typed block (the CLI stamps them; a human does not) can carry a clock-error timestamp
+ * minutes or hours in the future; counting it as "newest" made every OTHER seat's STATE.md read
+ * as permanently stale until the clock caught up, with nothing naming the cause (RCB-90, fpj
+ * builder block stamped 03:30Z at ≈03:24Z). The file's own mtime still counts regardless — only
+ * the parsed header time is discounted.
+ */
+function newestMomentOf(log: LogFileInfo, nowMs: number): number {
   let m = log.mtimeMs;
   for (const b of log.blocks) {
     const t = Date.parse(b.ts);
-    if (!Number.isNaN(t) && t > m) m = t;
+    if (Number.isNaN(t)) continue;
+    if (t - nowMs > FUTURE_STAMP_TOLERANCE_MS) continue;
+    if (t > m) m = t;
   }
   return m;
 }
 
-function newestLogMoment(logs: readonly LogFileInfo[]): number | null {
+function newestLogMoment(logs: readonly LogFileInfo[], nowMs: number): number | null {
   let max: number | null = null;
   for (const log of logs) {
-    const m = newestMomentOf(log);
+    const m = newestMomentOf(log, nowMs);
     if (max === null || m > max) max = m;
   }
   return max;
@@ -282,7 +297,8 @@ function newestLogMoment(logs: readonly LogFileInfo[]): number | null {
 export function checkFindings(input: CheckInput): Finding[] {
   const findings: Finding[] = [];
 
-  const newest = newestLogMoment(input.logs);
+  const nowMs = input.now.getTime();
+  const newest = newestLogMoment(input.logs, nowMs);
   if (newest !== null) {
     const stampMs = input.state ? Date.parse(input.state.stamp) : Number.NaN;
     // The stamp is written at SECOND resolution (`toIso`), a file's mtime carries milliseconds:
@@ -295,6 +311,24 @@ export function checkFindings(input: CheckInput): Finding[] {
         kind: 'stale-state',
         level: 'error',
         message: 'stale-state: STATE.md stamp is older than the newest log entry',
+      });
+    }
+  }
+
+  // RCB-90: surface every block ignored above so the cause is visible — warning, not error, so a
+  // hand-typed future stamp in ONE seat's log can never block another seat's `check` (that
+  // blocking was the bug).
+  for (const log of input.logs) {
+    for (const b of log.blocks) {
+      const t = Date.parse(b.ts);
+      if (Number.isNaN(t)) continue;
+      const aheadMs = t - nowMs;
+      if (aheadMs <= FUTURE_STAMP_TOLERANCE_MS) continue;
+      const aheadSec = Math.round(aheadMs / 1000);
+      findings.push({
+        kind: 'future-stamp',
+        level: 'warning',
+        message: `future-stamp: ${log.date} log block "${b.seat} ${b.ts}" is ${aheadSec} s ahead of the clock — hand-typed header? blocks come from \`repoboard log --as <seat>\``,
       });
     }
   }

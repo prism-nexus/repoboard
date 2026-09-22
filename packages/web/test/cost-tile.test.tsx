@@ -52,6 +52,8 @@ function okReport(): CostReport {
     over: false,
     mcpServers: [],
     mcpNote: 'note',
+    frozenBytes: 0,
+    frozenTokensApprox: 0,
   };
 }
 
@@ -65,6 +67,8 @@ function overReport(): CostReport {
     over: true,
     mcpServers: ['repoboard'],
     mcpNote: "schema bytes are per-harness; repoboard's own is measured in AGENTS.md",
+    frozenBytes: 0,
+    frozenTokensApprox: 0,
   };
 }
 
@@ -130,6 +134,8 @@ describe('CostTile (P8.4)', () => {
       over: false,
       mcpServers: [],
       mcpNote: 'note',
+      frozenBytes: 0,
+      frozenTokensApprox: 0,
     });
     openMap();
     const tile = await screen.findByTestId('cost-tile');

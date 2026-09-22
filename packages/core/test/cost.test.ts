@@ -12,6 +12,7 @@ import {
   type CostEntry,
   DEFAULT_CLAUDE_MD_BUDGET_BYTES,
   extractLinkedPaths,
+  extractLinkedPathsFlagged,
   formatCostTable,
   MCP_SCHEMA_NOTE,
   summarizeCost,
@@ -216,5 +217,108 @@ describe('formatCostTable', () => {
       summarizeCost([], { budget: 8192, claudeMdBytes: null, mcpServers: [] }),
     );
     expect(text).not.toContain('mcp servers');
+  });
+});
+
+// ---- RCB-91: a FROZEN-linked path is billed separately and left out of the total ----------
+
+describe('extractLinkedPathsFlagged — the frozen flag, SENTENCE-scoped (RCB-91 pass 2)', () => {
+  const TEXT = [
+    '`docs/HOT.md` is read fresh, every time.',
+    '`docs/COLD.md` is FROZEN history — read a section it is pointed at, never append to it.',
+  ].join('\n');
+
+  it('flags only the path whose own sentence says FROZEN', () => {
+    expect(extractLinkedPathsFlagged(TEXT)).toEqual([
+      { path: 'docs/HOT.md', frozen: false },
+      { path: 'docs/COLD.md', frozen: true },
+    ]);
+  });
+
+  it('extractLinkedPaths (unchanged) returns the same bare path list, in the same order', () => {
+    expect(extractLinkedPaths(TEXT)).toEqual(['docs/HOT.md', 'docs/COLD.md']);
+  });
+
+  it('a path named twice is frozen per its FIRST occurrence’s sentence only', () => {
+    const text = [
+      '`docs/A.md` is FROZEN as of today.',
+      'See `docs/A.md` again here, plainly.',
+    ].join('\n');
+    expect(extractLinkedPathsFlagged(text)).toEqual([{ path: 'docs/A.md', frozen: true }]);
+
+    const reversed = [
+      'See `docs/A.md` here, plainly.',
+      '`docs/A.md` is FROZEN as of today, on its second mention.',
+    ].join('\n');
+    expect(extractLinkedPathsFlagged(reversed)).toEqual([{ path: 'docs/A.md', frozen: false }]);
+  });
+
+  it('the `\\b` word boundary: "unfrozen" prose does NOT flag (one word, no boundary before "frozen")', () => {
+    expect(extractLinkedPathsFlagged('`docs/A.md` stays unfrozen and editable.')).toEqual([
+      { path: 'docs/A.md', frozen: false },
+    ]);
+  });
+
+  it('a path whose own name contains "frozen" does NOT self-flag on an otherwise plain sentence', () => {
+    expect(extractLinkedPathsFlagged('See `docs/frozen-yogurt.md` for the recipe.')).toEqual([
+      { path: 'docs/frozen-yogurt.md', frozen: false },
+    ]);
+  });
+
+  it('a capitalised "Frozen" on its own IS the word', () => {
+    expect(extractLinkedPathsFlagged('`docs/A.md` — Frozen as of today.')).toEqual([
+      { path: 'docs/A.md', frozen: true },
+    ]);
+  });
+
+  it('RCB-91 pass 2: the span and "FROZEN" sit on DIFFERENT lines of ONE sentence — still flags (this is freshpickedjobs’ own docs/HANDOFF.md shape: the backtick span ends one source line, "is FROZEN history..." opens the next, same sentence, no terminator between)', () => {
+    const text = ['`docs/A.md`', 'is FROZEN as of today, continuing this very sentence.'].join(
+      '\n',
+    );
+    expect(extractLinkedPathsFlagged(text)).toEqual([{ path: 'docs/A.md', frozen: true }]);
+  });
+
+  it('RCB-91 pass 2: "FROZEN" in the NEXT sentence, even on the SAME source line, must NOT flag', () => {
+    const text = '`docs/A.md` is fine here. FROZEN shows up in the very next sentence, same line.';
+    expect(extractLinkedPathsFlagged(text)).toEqual([{ path: 'docs/A.md', frozen: false }]);
+  });
+
+  it('a blank line (paragraph break) ends a sentence even with no terminator before it', () => {
+    const text = ['`docs/A.md` has no period here', '', 'FROZEN starts a new paragraph.'].join(
+      '\n',
+    );
+    expect(extractLinkedPathsFlagged(text)).toEqual([{ path: 'docs/A.md', frozen: false }]);
+  });
+});
+
+describe('summarizeCost / formatCostTable — a frozen entry is billed out of the total (RCB-91)', () => {
+  const entries: CostEntry[] = [
+    { file: 'docs/HOT.md', bytes: 300, why: 'linked from CLAUDE.md' },
+    { file: 'docs/COLD.md', bytes: 700, why: 'frozen' },
+  ];
+
+  it('totalBytes excludes the frozen entry; frozenBytes sums it separately', () => {
+    const report = summarizeCost(entries, { budget: 8192, claudeMdBytes: 100, mcpServers: [] });
+    expect(report.totalBytes).toBe(300);
+    expect(report.totalTokensApprox).toBe(approxTokens(300));
+    expect(report.frozenBytes).toBe(700);
+    expect(report.frozenTokensApprox).toBe(approxTokens(700));
+  });
+
+  it('formatCostTable: the frozen row reads "frozen — not in total"; a frozen line follows total', () => {
+    const report = summarizeCost(entries, { budget: 8192, claudeMdBytes: 100, mcpServers: [] });
+    const text = formatCostTable(report);
+    expect(text).toContain('frozen — not in total');
+    expect(text).toContain(`total  300  ≈${approxTokens(300)}`);
+    expect(text).toContain(`frozen  700  ≈${approxTokens(700)}  (linked as FROZEN, not in total)`);
+  });
+
+  it('omits the frozen line entirely when frozenBytes is 0', () => {
+    const report = summarizeCost(
+      [{ file: 'docs/HOT.md', bytes: 300, why: 'linked from CLAUDE.md' }],
+      { budget: 8192, claudeMdBytes: 100, mcpServers: [] },
+    );
+    expect(report.frozenBytes).toBe(0);
+    expect(formatCostTable(report)).not.toContain('frozen');
   });
 });

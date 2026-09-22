@@ -36,14 +36,18 @@ path; the agents bring the intelligence, and the board only shows it.
 
 Three surfaces write the same files through the same core code. Use them in this order — the
 ranking is by tokens; per-operation costs measured 2026-09-03 on the built binary, standing costs
-and list sizes re-measured 2026-09-07 on 31 cards (bytes on the wire, ≈4 bytes per token;
-plan §11 O3):
+and list sizes re-measured 2026-09-07 on 31 cards, standing costs re-measured 2026-09-22 (RCB-100)
+(bytes on the wire, ≈4 bytes per token; plan §11 O3):
 
 | Surface | Standing cost | Per move | Per list |
 |---|---|---|---|
-| **CLI** — `repoboard card move RB-12 doing --as claude/dev` | `docs/AGENTS.md` read once: 11.5 KB | ~40 B in, 33 B out | table 2,529 B; `--json` 7,639 B; `--json --full` 20,758 B |
-| **MCP** — `claude mcp add repoboard -- npx repoboard mcp` | tool schema 8.6 KB per turn where the harness loads it | ~80 B call, ~200 B result | 7,638 B — the same formatter, to the byte |
+| **CLI** — `repoboard card move RB-12 doing --as claude/dev` | `docs/AGENTS.md` read once: 20.9 KB | ~40 B in, 33 B out | table 2,529 B; `--json` 7,639 B; `--json --full` 20,758 B |
+| **MCP** — `claude mcp add repoboard -- npx repoboard mcp` | tool schema 31.3 KB (25 tools) per turn where the harness loads it | ~80 B call, ~200 B result | 7,638 B — the same formatter, to the byte |
 | **File edit** — `sed -i 's/^status: todo$/status: doing/' .repoboard/cards/RB-12.md` | same AGENTS.md | ~60 B, but a correct move also bumps `updated` and appends a `## Log` line | n/a |
+
+The systems model adds a 66 B `seat` line and `.repoboard/systems.yml` (2,693 B here) to the cold
+read; `repoboard systems` is 631 B; `systems show <id>` resolves pointers and can run to tens of
+KB — docs/REFERENCE.md §7.
 
 A card can also carry a `decision:` block (P8.1) — `repoboard card ask RB-12 "Ship it?" --option
 "A ship now" --option "B wait"` and `repoboard card decide RB-12 A` (or `--words "<verbatim>"`),
@@ -78,6 +82,15 @@ or `board.yml`'s `claudeMdBudgetBytes:`) — the same check `repoboard check`'s 
 finding makes error-grade. `--root` measures ANY directory, board or no board — the motivating
 measurement was freshpickedjobs' own `CLAUDE.md`, which reached 32,620 B before anyone measured
 it. MCP `cost`, HTTP `GET /api/cost`, and a tile on the Map view. See `docs/REFERENCE.md` §4.
+
+`.repoboard/systems.yml` (RCB-95–99) is the one architecture model: systems with kind/layer/env
+and pointers into the repo, connections between them, both dev and prod environments, provenance
+on every row. `repoboard systems [--json]` lists it, `repoboard systems show <id> [--json]`
+resolves a row's pointers, `repoboard systems detect [--apply]` proposes rows from the files
+already on disk (dry-run by default, a hand row always wins, provenance stamped on every merge).
+`repoboard seat <name>` prints one Systems line, `repoboard check` gains `systems-invalid` and
+`systems-stale`, and the Flow view draws it. This repo's own file is 5 systems, 3 connections,
+prod none. See `docs/REFERENCE.md` §7, §8.
 
 `repoboard archive [--older-than 14d] [--dry-run]` (P8.5) moves `done` cards older than the
 cutoff to `.repoboard/archive/` — `git mv` when tracked, else a rename, always byte-identical; the

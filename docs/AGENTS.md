@@ -15,13 +15,20 @@ plain top-bar links (each opens in a new tab; zero siblings shows nothing). `ser
 <name>=<url>` (repeatable) adds more for that process only, on top of board.yml's own list; **on a
 name collision the flag wins.** Both require an `http:`/`https:` url — nothing else is a valid link.
 
+`.repoboard/systems.yml` is the one architecture model (plan docs/SYSTEMS-FLOW-PLAN.md §3.1) —
+systems with kind/layer/env/pointers, connections, both environments, provenance on every row;
+`repoboard systems` reads it (one line per system), `systems show <id>` resolves a row's pointers,
+`systems detect` proposes rows (dry-run; `--apply` merges, a hand row always wins), `seat` prints
+one Systems line, the Flow view draws it. Point, don't paste: never inline the file. →
+docs/REFERENCE.md §7, §8.
+
 Use the surfaces in the order below. Per-operation costs measured 2026-09-03, standing costs
-re-measured 2026-09-07 (bytes on the wire, ≈4 bytes per token): the CLI costs ~40 B in and 33 B
-out per move with no standing cost beyond reading this page once (17.8 KB); MCP costs 8.6 KB of
-tool schema per turn where the harness loads it, ~80 B per call and ~200 B per result; a direct
-`sed` is ~60 B but a correct move also bumps `updated` and appends a log line. The CLI is
-cheapest per operation; MCP pays off when you have no shell or your harness loads schemas on
-demand; the file edit always works.
+re-measured 2026-09-22 (bytes on the wire, ≈4 bytes per token): the CLI costs ~40 B in and 33 B
+out per move with no standing cost beyond reading this page once (20.9 KB); MCP
+costs 31.3 KB (25 tools) of tool schema per turn where the harness loads it, ~80 B per call and
+~200 B per result; a direct `sed` is ~60 B but a correct move also bumps `updated` and appends a
+log line. The CLI is cheapest per operation; MCP pays off when you have no shell or your harness
+loads schemas on demand; the file edit always works.
 
 This page is for a seat working the maintainers' own board. An outside contributor to this repo
 does not file cards here — see `CONTRIBUTING.md`.
@@ -49,8 +56,14 @@ published). It finds `.repoboard/` by walking up from the current directory.
 | `repoboard seat <name> [--json]` | `repoboard seat claude/builder` — the cold-start bundle (docs/REFERENCE.md §3, §6) |
 | `repoboard check [--json] [--strict]` | `repoboard check` — exit 0 `ok`, or 1 with findings (docs/REFERENCE.md §3) |
 | `repoboard cost [--root <dir>] [--budget <bytes>] [--json]` | `repoboard cost --root /path/to/other/repo` — "cold context" bytes vs budget (docs/REFERENCE.md §4, §6) |
+| `repoboard systems [--json]` | `repoboard systems` — one line per system (docs/REFERENCE.md §7) |
+| `repoboard systems show <id> [--json]` | `repoboard systems show repoboard` — resolves the row's pointers (docs/REFERENCE.md §7) |
+| `repoboard systems detect [--root <dir>] [--apply] [--json]` | `repoboard systems detect --apply` — proposes rows, dry-run by default (docs/REFERENCE.md §7) |
 | `repoboard serve [--root <dir>]... [--port 4242] [--open] [--no-fun] [--watch-cap 20000] [--sibling <name>=<url>]...` | `repoboard serve --open` — the dashboard on 127.0.0.1 (docs/REFERENCE.md §6) |
 | `repoboard mcp [--root <dir>]` | `repoboard mcp` — the MCP server on stdio (section 3) |
+
+`systems show <id>` resolves every pointer's text — 33,770 B for a 4-pointer row; run `systems`
+(631 B) first.
 
 Server internals (watcher, multi-root routes, the web's repo select): docs/REFERENCE.md §6.
 
@@ -125,8 +138,8 @@ launched from somewhere else. Tools: `list_cards`, `get_card`, `create_card`, `m
 `get_state`, `set_state_section`, `append_repo_log`, `check` (P8.3, docs/REFERENCE.md §3),
 `cost` (P8.4, docs/REFERENCE.md §4), `list_systems`, `get_system` (RCB-97, docs/REFERENCE.md §7),
 `archive_cards`, `sync_issues` (P8.5, docs/REFERENCE.md §5).
-All 23 tools' schema, via client.listTools() summing each tool's own JSON.stringify: **26,401 B**
-(2026-09-19, RCB-70; was 24,795 B for 22 tools, RCB-65).
+All 25 tools' schema, via client.listTools() summing each tool's own JSON.stringify: **31,301 B**
+(2026-09-22, RCB-100; was 26,401 B for 23 tools, RCB-70).
 Call `list_cards` or `board_summary` first: they
 are cheap and return the column ids. `list_cards` takes optional `status`, `assignee`, `label`
 filters (exact match, AND) and `full: true` to include bodies; without it, rows are the same
@@ -249,6 +262,8 @@ NO `## Log` line, so the same event is never recorded twice.
 > task needs a human decision, `repoboard card ask RB-12 "<question>" --option "A <text>"...`
 > instead of guessing or waiting on a chat relay — docs/REFERENCE.md §1. If you dispatch
 > subagents, `docs/SUBAGENTS.md` is the brief-and-control practice this board expects.
+> Architecture: `.repoboard/systems.yml` — `repoboard systems` lists it, `repoboard systems show
+> <id>` resolves a system's pointers; don't paste the file.
 
 ## 8. Everything else
 
@@ -276,6 +291,8 @@ Everything below is wire shapes, byte tables and RCB-nn history — read the mat
 - Cost — what a cold agent loads, against a budget (P8.4) — docs/REFERENCE.md §4
 - Archive and issue sync — `repoboard archive`, `repoboard sync-issues` (P8.5) —
   docs/REFERENCE.md §5
+- Systems and the Flow view — `systems`, `systems show`, `systems detect`, the seat line, `check`'s
+  two findings (RCB-95–99) — docs/REFERENCE.md §7, §8
 
 ## 9. Your local setup
 

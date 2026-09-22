@@ -637,7 +637,8 @@ Table columns: `ID KIND LAYER ENV FROM`, then one `connections: <from>→<to> (<
 connection, then an `unclassified:` block for anything a detector could not place, then a summary
 line with the add/update/keep counts. Exit 0 on a clean dry run or a successful `--apply`; exit 1
 on a parse or refusal error. `--json` prints the whole `DetectRun` (`files`, `candidates`, `plan`,
-`applied`, `path`, `errors`). Measured (fpj read-only report: PH.5).
+`applied`, `path`, `errors`). Measured read-only against freshpickedjobs (PH.5): 14 systems, 13
+connections, 7 unclassified, ≈3 hand corrections; report 3,580 B.
 
 ### Surfaces over `.repoboard/systems.yml` (PH.3, RCB-97)
 
@@ -662,6 +663,27 @@ detect proposes one` / `Systems: systems.yml invalid (<k> errors) — repoboard 
 check` gains `systems-invalid` (error — the file failed to parse) and `systems-stale` (warning —
 a `source.detected` row no longer matches its source file; blocks only with `--strict`); an
 absent file raises neither (§3.1: unconfigured is inert).
+
+### Bytes (O3), measured 2026-09-22 on this repo's own systems.yml (5 systems, 3 connections, RCB-99)
+
+| Surface | Bytes |
+|---|---|
+| `.repoboard/systems.yml` | 2,693 B (budget 4,096) |
+| `repoboard cost` total with it | 87,559 B (was 84,866) |
+| `repoboard seat <name>` Systems line | 66 B |
+| `repoboard systems` | 631 B |
+| `repoboard systems --json` | 4,383 B |
+| `repoboard systems show repoboard` (4 source-file pointers, each truncated at the K7 cap) | 33,770 B; `--json` 36,049 B |
+| `repoboard systems show freshpickedjobs` (0 pointers) | 400 B |
+| `repoboard systems detect` (dry run) | 621 B; `--json` 1,999 B |
+| MCP `list_systems` schema / result | 620 B / 2,776 B |
+| MCP `get_system` schema / result for `repoboard` / for `freshpickedjobs` | 606 B / 37,366 B / 936 B |
+| MCP `check` schema (names the two systems findings) | 665 B |
+| MCP tool schema, **25 tools**, `client.listTools()` summing each tool's own `JSON.stringify` | **31,301 B** (was 26,401 B for 23 tools, RCB-70, 2026-09-19) |
+
+`show` and `get_system` resolve pointer TEXT (K7 cap per file), so a row with source-file pointers
+costs tens of KB while the list costs 631 B — list first, show one row. The seat line is 66 B
+standing, the file 2,693 B in the cold read, both under plan §3.1's 4,096 B budget.
 
 ## 8. Flow view (RCB-98)
 

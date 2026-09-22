@@ -137,22 +137,19 @@ function SystemDrawer({ system, doc, cards, onClose, onOpenCard }: SystemDrawerP
         </button>
       </div>
       <h2 className="drawer__title">{system.name}</h2>
-      <dl className="drawer__fields mono">
-        <dt>kind</dt>
-        <dd>{system.kind}</dd>
-        <dt>layer</dt>
-        <dd>{system.layer}</dd>
-        <dt>env</dt>
-        <dd>{system.env.join(', ')}</dd>
-        <dt>runtime dev</dt>
-        <dd>{system.runtime.dev ?? '—'}</dd>
-        <dt>runtime prod</dt>
-        <dd>{system.runtime.prod ?? '—'}</dd>
-        <dt>owner</dt>
-        <dd>{system.owner ?? '—'}</dd>
-        <dt>source</dt>
-        <dd>{sourceText(system.source)}</dd>
-      </dl>
+      <p className="drawer__meta mono">
+        {system.kind} · {system.layer} · {system.env.join('+')}
+      </p>
+      <div className="drawer__fields">
+        <div className="field">
+          <span className="field__label">runtime dev</span>
+          <span className="mono field__static">{system.runtime.dev ?? '—'}</span>
+        </div>
+        <div className="field">
+          <span className="field__label">runtime prod</span>
+          <span className="mono field__static">{system.runtime.prod ?? '—'}</span>
+        </div>
+      </div>
       {system.why ? (
         <section className="drawer__section">
           <h3>Why</h3>
@@ -167,8 +164,11 @@ function SystemDrawer({ system, doc, cards, onClose, onOpenCard }: SystemDrawerP
           <ul className="drawer__files mono">
             {connections.map((c, i) => (
               <li key={`${c.from}-${c.to}-${i.toString()}`}>
-                {c.from} → {c.to}
-                {c.via ? ` (${c.via})` : ''}
+                <div>
+                  {c.from === system.id ? <strong>{c.from}</strong> : c.from} →{' '}
+                  {c.to === system.id ? <strong>{c.to}</strong> : c.to}
+                </div>
+                {c.via ? <span className="muted">via {c.via}</span> : null}
               </li>
             ))}
           </ul>
@@ -199,7 +199,7 @@ function SystemDrawer({ system, doc, cards, onClose, onOpenCard }: SystemDrawerP
               <div className="drawer__ref-error">{refs.message}</div>
             </div>
           ) : (
-            <RefsList refs={refs.refs} />
+            <RefsList refs={refs.refs} collapsed />
           )}
         </section>
       ) : null}
@@ -219,6 +219,9 @@ function SystemDrawer({ system, doc, cards, onClose, onOpenCard }: SystemDrawerP
           </ul>
         )}
       </section>
+      <p className="drawer__provenance mono muted">
+        owner: {system.owner ?? '—'} · {sourceText(system.source)}
+      </p>
     </aside>
   );
 }

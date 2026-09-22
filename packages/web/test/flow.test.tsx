@@ -286,7 +286,7 @@ describe('Flow view (RCB-98)', () => {
 
     fireEvent.click(screen.getByTestId('flow-svg').querySelector('[data-box="api"]') as Element);
     const drawer = screen.getByTestId('flow-drawer');
-    expect(within(drawer).getByText('service')).toBeInTheDocument();
+    expect(within(drawer).getByText('service · app · dev+prod')).toBeInTheDocument();
     expect(within(drawer).getByText('Connections (3)')).toBeInTheDocument();
     // `api`'s pointers are [] — no dead fetch for a system with nothing to resolve.
     expect(fetchMock).not.toHaveBeenCalled();
@@ -296,7 +296,22 @@ describe('Flow view (RCB-98)', () => {
     );
     const gatewayDrawer = await screen.findByTestId('flow-drawer');
     expect(fetchMock).toHaveBeenCalledWith('/api/systems/gateway/refs');
-    await within(gatewayDrawer).findByText('export {};');
+    const refsSection = await screen.findByTestId('flow-drawer-refs');
+    // Waits for resolution: the `· N lines` span only exists once refs.kind === 'ok'.
+    await within(refsSection).findByText(/1 lines/);
+    expect(refsSection).toHaveTextContent('apps/gateway/src/index.ts:1');
+    expect(refsSection.querySelectorAll('pre')).toHaveLength(0);
+    expect(refsSection).not.toHaveTextContent('export {};');
+
+    const toggle = within(refsSection).getByRole('button', { name: 'show' });
+    expect(toggle).toHaveAttribute('aria-expanded', 'false');
+    fireEvent.click(toggle);
+    await within(refsSection).findByText('export {};');
+    expect(refsSection.querySelectorAll('pre')).toHaveLength(1);
+
+    fireEvent.click(within(refsSection).getByRole('button', { name: 'hide' }));
+    expect(refsSection.querySelectorAll('pre')).toHaveLength(0);
+
     const backlinks = within(gatewayDrawer).getByTestId('flow-drawer-backlinks');
     expect(backlinks).toHaveTextContent('RB-2');
     expect(backlinks).toHaveTextContent(backlinkCard.title);
@@ -305,5 +320,17 @@ describe('Flow view (RCB-98)', () => {
     fireEvent.click(within(backlinks).getByText(new RegExp(backlinkCard.title)));
     expect(store.getState().selectedId).toBe('RB-2');
     expect(store.getState().view).toBe('board');
+  });
+
+  it('7. the `api` drawer (no pointers) shows the meta line, connection strongs+via, and provenance', () => {
+    openFlow({ doc: TWO_ENV(), errors: [], exists: true });
+    fireEvent.click(screen.getByTestId('flow-svg').querySelector('[data-box="api"]') as Element);
+    const drawer = screen.getByTestId('flow-drawer');
+    expect(within(drawer).getByText('service · app · dev+prod')).toBeInTheDocument();
+    expect(within(drawer).getByText('Connections (3)')).toBeInTheDocument();
+    // Every one of api's 3 connections names api as `from` or `to` — each <li> bolds it.
+    expect(within(drawer).getAllByText('api', { selector: 'strong' })).toHaveLength(3);
+    expect(within(drawer).getAllByText(/^via /)).toHaveLength(3);
+    expect(drawer).toHaveTextContent('hand: owner');
   });
 });

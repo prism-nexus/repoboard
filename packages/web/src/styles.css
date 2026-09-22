@@ -1297,6 +1297,21 @@ button {
   text-decoration: underline;
 }
 
+/* RCB-109: flow drawer's meta line, provenance line, and collapsed-refs toggle */
+.drawer__meta {
+  margin: 4px 0 10px;
+}
+.drawer__provenance {
+  margin-top: 12px;
+  font-size: 11px;
+}
+.drawer__ref-toggle {
+  display: inline;
+  border: none;
+  color: var(--accent);
+  cursor: pointer;
+  font-size: 11px;
+}
 /* K7: referenced lines, live from the file */
 .drawer__ref {
   margin: 8px 0 0;

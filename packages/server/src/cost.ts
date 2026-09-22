@@ -101,6 +101,11 @@ export async function gatherCost(root: string, budget: number): Promise<CostRepo
     }
   }
 
+  // RCB-97 (plan §3.3): `.repoboard/systems.yml` counts in the cold read like every other file
+  // here — `fileEntry` already skips it silently when absent, same as every other entry above.
+  const systemsEntry = await fileEntry(root, '.repoboard/systems.yml', 'systems');
+  if (systemsEntry) entries.push(systemsEntry);
+
   const mcpServers = await mcpServerNames(root);
   return summarizeCost(entries, { budget, claudeMdBytes, mcpServers });
 }

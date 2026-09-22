@@ -2956,6 +2956,15 @@ describe('repoboard systems detect (RCB-96)', () => {
   });
 });
 
+describe('repoboard systems / systems show / check systems findings (RCB-97): help text', () => {
+  it('--help mentions "systems show" and "systems-stale"', async () => {
+    const root = await freshRepo();
+    const help = await repoboard(root, '--help');
+    expect(help.out).toContain('systems show');
+    expect(help.out).toContain('systems-stale');
+  });
+});
+
 describe('seat: dist staleness (RCB-60)', () => {
   const OLD = new Date('2020-01-01T00:00:00Z');
   const NEW = new Date('2030-01-01T00:00:00Z');

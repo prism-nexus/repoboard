@@ -75,13 +75,15 @@ const LEASE_TOOLS = ['take_lease', 'release_lease', 'list_leases', 'add_window',
 const STATE_TOOLS = ['get_state', 'set_state_section', 'append_repo_log', 'check'];
 /** P8.4: one new tool, same terse-description budget. */
 const COST_TOOLS = ['cost'];
+/** RCB-97: `.repoboard/systems.yml`'s two read tools, same terse-description budget. */
+const SYSTEMS_TOOLS = ['list_systems', 'get_system'];
 /** P8.5: archive + sync-issues, described for a newcomer like the card tools. */
 const ISSUE_TOOLS = ['archive_cards', 'sync_issues'];
 /** RCB-56: the one board/config write tool, terse like the lease/window tools (no CARD_INTRO). */
 const CONFIG_TOOLS = ['set_columns'];
 
 describe('repoboard mcp: handshake and tool list', () => {
-  it('lists exactly the twenty-three tools of the brief, card tools described for a newcomer', async () => {
+  it('lists exactly the twenty-five tools of the brief, card tools described for a newcomer', async () => {
     const r = await rig();
     const { tools } = await r.client.listTools();
     expect(tools.map((t) => t.name).sort()).toEqual([...MCP_TOOL_NAMES].sort());
@@ -90,6 +92,7 @@ describe('repoboard mcp: handshake and tool list', () => {
         LEASE_TOOLS.length +
         STATE_TOOLS.length +
         COST_TOOLS.length +
+        SYSTEMS_TOOLS.length +
         ISSUE_TOOLS.length +
         CONFIG_TOOLS.length,
     );

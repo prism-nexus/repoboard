@@ -638,3 +638,27 @@ connection, then an `unclassified:` block for anything a detector could not plac
 line with the add/update/keep counts. Exit 0 on a clean dry run or a successful `--apply`; exit 1
 on a parse or refusal error. `--json` prints the whole `DetectRun` (`files`, `candidates`, `plan`,
 `applied`, `path`, `errors`). Measured (fpj read-only report: PH.5).
+
+### Surfaces over `.repoboard/systems.yml` (PH.3, RCB-97)
+
+`repoboard systems [--json]` prints two `dev:`/`prod:` environment lines then the
+`ID KIND LAYER ENV RUNTIME` table (file order, ≤80 B/row); no file: the one "no systems.yml yet"
+line, exit 0; invalid: each parse error on stderr, exit 1. `repoboard systems show <id> [--json]`
+prints one row plus its `pointers` resolved the way `card show --resolve` does; unknown id: exit
+1. `--json` on either mirrors `store.systems()` (`{doc, errors, exists}`) / `{system,
+connections, pointers}`.
+
+MCP gains `list_systems` (`{exists, errors, environments, systems: [{id, kind, layer, env,
+runtime}], connections}`, rows trimmed to five keys) and `get_system` (`{id}` →
+`{system, connections, pointers}`, pointers resolved live); `check`'s description names the two
+new findings. `GET /api/systems` is always 200 (an invalid file is a well-formed answer, like
+`/api/cost`); the WS `snapshot` gains a `systems` field and a `systems` message on file change
+(watcher already existed for `leases.yml`, same shape).
+
+`repoboard seat <name>` gains exactly one line in every state: `Systems: <n> systems, <m>
+connections, <envs> — repoboard systems` / `Systems: no systems.yml yet — repoboard systems
+detect proposes one` / `Systems: systems.yml invalid (<k> errors) — repoboard check`.
+`repoboard cost` counts `.repoboard/systems.yml` (`why: "systems"`) when present. `repoboard
+check` gains `systems-invalid` (error — the file failed to parse) and `systems-stale` (warning —
+a `source.detected` row no longer matches its source file; blocks only with `--strict`); an
+absent file raises neither (§3.1: unconfigured is inert).

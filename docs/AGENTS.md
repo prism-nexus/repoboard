@@ -123,7 +123,8 @@ launched from somewhere else. Tools: `list_cards`, `get_card`, `create_card`, `m
 (P8.1, docs/REFERENCE.md §1), `take_lease`, `release_lease`, `list_leases`, `add_window`, `check_window`
 (P8.2, docs/REFERENCE.md §2),
 `get_state`, `set_state_section`, `append_repo_log`, `check` (P8.3, docs/REFERENCE.md §3),
-`cost` (P8.4, docs/REFERENCE.md §4), `archive_cards`, `sync_issues` (P8.5, docs/REFERENCE.md §5).
+`cost` (P8.4, docs/REFERENCE.md §4), `list_systems`, `get_system` (RCB-97, docs/REFERENCE.md §7),
+`archive_cards`, `sync_issues` (P8.5, docs/REFERENCE.md §5).
 All 23 tools' schema, via client.listTools() summing each tool's own JSON.stringify: **26,401 B**
 (2026-09-19, RCB-70; was 24,795 B for 22 tools, RCB-65).
 Call `list_cards` or `board_summary` first: they

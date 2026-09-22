@@ -27,6 +27,8 @@ import {
   formatCostTable,
   formatDetectReport,
   formatLogBlock,
+  formatSystemRow,
+  formatSystemsTable,
   initialStateText,
   isOwnerTask,
   isSiblingUrl,
@@ -49,6 +51,7 @@ import {
   serializeLeases,
   splitLandings,
   stepsOf,
+  systemsSummary,
   toIso,
   trimLandings,
 } from '@repoboard/core';
@@ -67,7 +70,7 @@ import {
   toWindowRow,
   type WindowRow,
 } from './mcp.js';
-import { formatResolvedRefs, resolveCardRefs } from './refs.js';
+import { formatResolvedRefs, resolveCardRefs, resolveRefSpec } from './refs.js';
 import { assignRepoKeys, hasBoardDir } from './repo-context.js';
 import { openStore } from './store.js';
 import { runDetect } from './systems-detect.js';
@@ -214,7 +217,10 @@ Usage:
                                         future-stamp (warning; blocks only with --strict — a log
                                         block's header time is more than a minute ahead of the
                                         clock, so it was ignored for stale-state; hand-typed header
-                                        or clock skew, RCB-90)
+                                        or clock skew, RCB-90), systems-invalid (error — a
+                                        .repoboard/systems.yml that fails to parse), systems-stale
+                                        (warning; blocks only with --strict — a detected system no
+                                        longer matches its source file)
   repoboard local init [--remote <url>] [--move-record]
                                         create .repoboard/local/ — a gitignored, separate git repo
                                         for machine facts (scaffolds RIG.md, adds the exact line
@@ -239,6 +245,12 @@ Usage:
                                         8192, or board.yml's claudeMdBudgetBytes); exit 0 otherwise.
                                         An absent CLAUDE.md is reported, never OVER. --root measures
                                         ANY directory, with or without a .repoboard/ board.
+  repoboard systems [--json]           one line per system: id kind layer env runtime(dev→prod);
+                                        no file: "no systems.yml yet"; invalid: each error on
+                                        stderr, exit 1
+  repoboard systems show <id> [--json]
+                                        one system's full row, plus its \`pointers\` resolved the
+                                        way \`card show --resolve\` does; unknown id: exit 1
   repoboard systems detect [--root <dir>] [--apply] [--json]
                                         propose .repoboard/systems.yml candidates from
                                         package.json/workspaces, wrangler.*, compose, CI, .env,
@@ -1623,6 +1635,62 @@ async function cmdCost(args: string[], io: CliIO): Promise<number> {
 }
 
 /**
+ * RCB-97 (plan §3.3): `repoboard systems [--json]` — the whole `.repoboard/systems.yml` table.
+ * No file: the one `systemsSummary(null, []).line` ("no systems.yml yet"), exit 0. Invalid: each
+ * parse error on stderr, exit 1. `--json` mirrors `store.systems()` (`{doc, errors, exists}`) in
+ * every state.
+ */
+async function cmdSystems(args: string[], io: CliIO): Promise<number> {
+  const { values } = parse(args, { json: { type: 'boolean', default: false } });
+  const root = await requireRoot(io);
+  const store = await openStore(root, { watch: false, now: io.now });
+  const { doc, errors, exists } = store.systems();
+  if (values.json) {
+    io.stdout.write(`${JSON.stringify({ doc, errors, exists }, null, 2)}\n`);
+    return errors.length > 0 ? 1 : 0;
+  }
+  if (errors.length > 0) {
+    const err = io.stderr ?? io.stdout;
+    for (const e of errors) err.write(`${e}\n`);
+    return 1;
+  }
+  if (doc === null) {
+    io.stdout.write(`${systemsSummary(null, []).line}\n`);
+    return 0;
+  }
+  io.stdout.write(formatSystemsTable(doc));
+  return 0;
+}
+
+/**
+ * RCB-97 (plan §3.3): `repoboard systems show <id> [--json]` — one row plus its `pointers`
+ * resolved the way `card show --resolve` does (`cmdCardShow`). Unknown id (or no systems.yml at
+ * all/invalid) → stderr, exit 1. `--json` returns `{ system, connections, pointers }`.
+ */
+async function cmdSystemsShow(args: string[], io: CliIO): Promise<number> {
+  const { values, positionals } = parse(args, { json: { type: 'boolean', default: false } });
+  const [id] = positionals;
+  if (!id) throw new UserError('usage: repoboard systems show <id> [--json]');
+  const root = await requireRoot(io);
+  const store = await openStore(root, { watch: false, now: io.now });
+  const { doc } = store.systems();
+  const system = doc?.systems.find((s) => s.id === id);
+  if (!doc || !system) throw new UserError(`unknown system "${id}"`);
+  const connections = doc.connections.filter((c) => c.from === id || c.to === id);
+  const pointers = await Promise.all(system.pointers.map((p) => resolveRefSpec(root, p)));
+  if (values.json) {
+    io.stdout.write(`${JSON.stringify({ system, connections, pointers }, null, 2)}\n`);
+    return 0;
+  }
+  const row = formatSystemRow(doc, id);
+  io.stdout.write(row ?? '');
+  if (pointers.length > 0) {
+    io.stdout.write(`\n${formatResolvedRefs(pointers)}`);
+  }
+  return 0;
+}
+
+/**
  * RCB-96 B: `--root` reuses `costRoot` (K7's own read-only root resolution) — detect can run
  * against any directory, `.repoboard/` or not; only `--apply` requires one (brief). Errors
  * (an existing systems.yml that fails to parse, or `--apply` with no `.repoboard/`) skip the
@@ -1940,7 +2008,8 @@ export async function run(argv: string[], io: CliIO): Promise<number> {
     if (cmd === 'cost') return await cmdCost(argv.slice(1), io);
     if (cmd === 'systems') {
       if (sub === 'detect') return await cmdSystemsDetect(rest, io);
-      throw new UserError(`unknown systems command "${sub ?? ''}" (detect)`);
+      if (sub === 'show') return await cmdSystemsShow(rest, io);
+      return await cmdSystems(argv.slice(1), io);
     }
     if (cmd === 'archive') return await cmdArchive(argv.slice(1), io);
     if (cmd === 'sync-issues') return await cmdSyncIssues(argv.slice(1), io);

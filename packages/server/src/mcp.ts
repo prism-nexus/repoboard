@@ -26,7 +26,7 @@ import {
 } from '@repoboard/core';
 import { z } from 'zod';
 import { applySyncPlan, computeSyncPlan } from './issues.js';
-import { resolveCardRefs } from './refs.js';
+import { resolveCardRefs, resolveRefSpec } from './refs.js';
 import { type CardStore, openStore } from './store.js';
 import { VERSION } from './version.js';
 
@@ -52,6 +52,8 @@ export const MCP_TOOL_NAMES = [
   'append_repo_log',
   'check',
   'cost',
+  'list_systems',
+  'get_system',
   'archive_cards',
   'sync_issues',
 ] as const;
@@ -767,9 +769,9 @@ export function createMcpServer(opts: McpServerOptions): McpServer {
       title: 'Health check: STATE, leases, decisions',
       description:
         'Call before starting and before stopping (locked practice). Returns {findings, ' +
-        'exitCode}: stale-state, active-without-lease (warning, only blocks strict), stale-lease, ' +
-        'needs-ask (warning, only blocks strict — no open ask in a decision column), ' +
-        'cost-over-budget, and needs-decision (informational). Empty findings means ok.',
+        'exitCode}: stale-state, active-without-lease (warning, strict-only), stale-lease, ' +
+        'needs-ask (warning, strict-only — no open ask), cost-over-budget, systems-invalid ' +
+        '(error), systems-stale (warning), needs-decision (info). Empty findings means ok.',
       inputSchema: {
         strict: z.boolean().optional().describe('Also block on warning-grade findings.'),
       },
@@ -792,6 +794,61 @@ export function createMcpServer(opts: McpServerOptions): McpServer {
       annotations: { readOnlyHint: true },
     },
     async ({ budget }) => ok(await store.cost(budget)),
+  );
+
+  server.registerTool(
+    'list_systems',
+    {
+      title: 'List systems',
+      description:
+        "RCB-97 (plan §3.3): `.repoboard/systems.yml`'s inventory. Returns {exists, errors, " +
+        'environments, systems: [{id, kind, layer, env, runtime}], connections}. exists:false ' +
+        'means no systems.yml yet (repoboard systems detect proposes one); errors non-empty ' +
+        'means the file failed to parse (systems/connections empty then). Use get_system for ' +
+        "one system's full row plus resolved pointers.",
+      inputSchema: {},
+      annotations: { readOnlyHint: true },
+    },
+    () => {
+      const { doc, errors, exists } = store.systems();
+      return ok({
+        exists,
+        errors,
+        environments: doc?.environments ?? null,
+        systems: (doc?.systems ?? []).map((s) => ({
+          id: s.id,
+          kind: s.kind,
+          layer: s.layer,
+          env: s.env,
+          runtime: s.runtime,
+        })),
+        connections: doc?.connections ?? [],
+      });
+    },
+  );
+
+  server.registerTool(
+    'get_system',
+    {
+      title: 'Get one system',
+      description:
+        "RCB-97 (plan §3.3): one system's full row from .repoboard/systems.yml, every " +
+        'connection touching it, and its pointers resolved live (same engine as get_card ' +
+        'resolveRefs: [{spec, path, start, end, text, truncated, error}]). Use list_systems to ' +
+        'find ids.',
+      inputSchema: {
+        id: z.string().describe('The system id, e.g. gateway (list_systems shows the ids).'),
+      },
+      annotations: { readOnlyHint: true },
+    },
+    async ({ id }) => {
+      const { doc } = store.systems();
+      const system = doc?.systems.find((s) => s.id === id);
+      if (!doc || !system) return fail(`id: unknown system "${id}" (list_systems shows the ids)`);
+      const connections = doc.connections.filter((c) => c.from === id || c.to === id);
+      const pointers = await Promise.all(system.pointers.map((p) => resolveRefSpec(store.root, p)));
+      return ok({ system, connections, pointers });
+    },
   );
 
   server.registerTool(

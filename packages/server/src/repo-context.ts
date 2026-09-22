@@ -652,6 +652,11 @@ export async function openRepoContext(key: string, opts: RepoContextOptions): Pr
     };
   };
 
+  // RCB-97 (plan §3.3): one payload for `GET /api/systems` and the `systems` half of the WS
+  // snapshot — same reasoning as `leasesPayload`. Always 200/present: an invalid file is a
+  // well-formed answer (`errors` non-empty), like `/api/cost`'s `over: true`.
+  const systemsPayload = () => store.systems();
+
   // P8.3: one payload for `GET /api/state` and the `state` half of the WS snapshot. OWNER QUEUE
   // is generated fresh from cards that need a decision on every call (P8.1) — the doc's own
   // recorded `stamp`/`actor` are reused as the render clock so a READ never looks like a rewrite
@@ -794,6 +799,7 @@ export async function openRepoContext(key: string, opts: RepoContextOptions): Pr
     broadcast({ type: 'config', config: { ...store.config, fun }, siblings: mergedSiblings() });
   const onInvalid = (invalid: unknown) => broadcast({ type: 'invalid', invalid });
   const onLeases = () => broadcast({ type: 'leases', leases: leasesPayload() });
+  const onSystems = () => broadcast({ type: 'systems', ...systemsPayload() });
   const onState = () => broadcast({ type: 'state', state: statePayload() });
   const onLog = (payload: { date: string; text: string }) =>
     broadcast({ type: 'log', date: payload.date, text: payload.text });
@@ -803,6 +809,7 @@ export async function openRepoContext(key: string, opts: RepoContextOptions): Pr
   store.on('config', onConfig);
   store.on('invalid', onInvalid);
   store.on('leases', onLeases);
+  store.on('systems', onSystems);
   store.on('state', onState);
   store.on('log', onLog);
 
@@ -852,6 +859,7 @@ export async function openRepoContext(key: string, opts: RepoContextOptions): Pr
           board: boardPayload(),
           repo,
           leases: leasesPayload(),
+          systems: systemsPayload(),
           state: statePayload(),
           log,
         }),
@@ -968,6 +976,9 @@ export async function openRepoContext(key: string, opts: RepoContextOptions): Pr
       }
       return sendJson(res, 200, await store.cost(budget));
     }
+    // RCB-97 (plan §3.3): a pure read, always 200 — an invalid systems.yml is a well-formed
+    // answer (`errors` non-empty), same reasoning as `/api/cost`'s `over: true`.
+    if (method === 'GET' && path === '/api/systems') return sendJson(res, 200, systemsPayload());
     // P8.5: archive/sync-issues. Both are POST-only (they can write) and both accept a `dryRun`
     // that never calls a store writer at all — the same "pure read, always 200" reasoning as
     // `/api/leases/check/:resource` and `/api/cost` does not apply here (a real run DOES write),
@@ -1135,6 +1146,7 @@ export async function openRepoContext(key: string, opts: RepoContextOptions): Pr
       store.off('config', onConfig);
       store.off('invalid', onInvalid);
       store.off('leases', onLeases);
+      store.off('systems', onSystems);
       store.off('state', onState);
       store.off('log', onLog);
       if (repoWatcher) await repoWatcher.close();

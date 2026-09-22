@@ -49,6 +49,7 @@ import {
   parseLeases,
   parseLogBlocks,
   parseState,
+  parseSystems,
   pruneWindows,
   type ReleaseLeaseInput,
   releaseLease,
@@ -57,12 +58,15 @@ import {
   type SeatBundle,
   type StateDoc,
   type StateSectionName,
+  type SystemsDoc,
   seatBundle as seatBundleCore,
   selectArchivable as selectArchivableCore,
   serializeBoard,
   serializeCard,
   serializeLeases,
   setStateSection as setStateSectionCore,
+  staleDetected,
+  systemsSummary,
   type TakeLeaseInput,
   takeLease,
   toIso,
@@ -72,6 +76,7 @@ import { watch as chokidarWatch, type FSWatcher } from 'chokidar';
 import { type ArchiveMoveMethod, archiveMoveFile } from './archive.js';
 import { gatherCost } from './cost.js';
 import { localDir, localStatus } from './local.js';
+import { detectSystems } from './systems-detect.js';
 
 /** One line of `.repoboard/events.jsonl`: core's `Event` (K2). Kept as a name for the package index. */
 export type StoreEvent = Event;
@@ -95,6 +100,8 @@ export interface StoreEvents {
   state: [doc: StateDoc | null];
   /** P8.3: a `.repoboard/log/<date>.md` file changed — an append here, or an external edit. */
   log: [payload: { date: string; text: string }];
+  /** RCB-97: `.repoboard/systems.yml` changed — an external edit or its creation/removal. */
+  systems: [payload: { doc: SystemsDoc | null; errors: string[]; exists: boolean }];
 }
 
 export interface OpenStoreOptions {
@@ -240,6 +247,8 @@ export class CardStore extends EventEmitter<StoreEvents> {
   readonly boardPath: string;
   readonly eventsPath: string;
   readonly leasesPath: string;
+  /** RCB-97: `.repoboard/systems.yml`. */
+  readonly systemsPath: string;
   /** RCB-83: `local/STATE.md` when `.repoboard/local/` exists, else `.repoboard/STATE.md` — set
    * in `load()`, so not ctor-`readonly` (see `hasLocalLayer`). */
   statePath: string;
@@ -252,6 +261,12 @@ export class CardStore extends EventEmitter<StoreEvents> {
   private cfg: BoardConfig = defaultBoardConfig();
   private leasesDoc: LeasesDoc = { leases: [], windows: [] };
   private stateDoc: StateDoc | null = null;
+  /** RCB-97: `.repoboard/systems.yml`'s parsed doc, `null` when absent OR invalid — an invalid
+   * file is `doc: null` + `systemsErrors`, never the last good doc (unlike `leasesDoc`): `check`
+   * must see the breakage, not a stale copy. */
+  private systemsDoc: SystemsDoc | null = null;
+  private systemsErrors: string[] = [];
+  private systemsExists = false;
   private board = false;
   private readonly cards = new Map<string, Card>();
   /** Per file: the card id it currently holds (null when invalid) and the content hash. */
@@ -285,6 +300,7 @@ export class CardStore extends EventEmitter<StoreEvents> {
     this.boardPath = join(this.repoboardDir, 'board.yml');
     this.eventsPath = join(this.repoboardDir, 'events.jsonl');
     this.leasesPath = join(this.repoboardDir, 'leases.yml');
+    this.systemsPath = join(this.repoboardDir, 'systems.yml');
     this.statePath = join(this.repoboardDir, 'STATE.md');
     this.logDir = join(this.repoboardDir, 'log');
     this.now = opts.now ?? (() => new Date());
@@ -323,6 +339,16 @@ export class CardStore extends EventEmitter<StoreEvents> {
    */
   leases(): LeasesDoc {
     return this.leasesDoc;
+  }
+
+  /**
+   * RCB-97 (plan §3.3): the current `.repoboard/systems.yml` — `exists: false` means no such
+   * file (`doc: null`, `errors: []`, inert per §3.1); `exists: true` with `doc: null` means the
+   * file is there but failed to parse (`errors` non-empty) — worse than none, never the last
+   * good doc.
+   */
+  systems(): { doc: SystemsDoc | null; errors: string[]; exists: boolean } {
+    return { doc: this.systemsDoc, errors: this.systemsErrors, exists: this.systemsExists };
   }
 
   /** P8.3: the current parsed `.repoboard/STATE.md`, or `null` when it does not exist. */
@@ -371,6 +397,7 @@ export class CardStore extends EventEmitter<StoreEvents> {
     await this.loadConfig();
     this.logDir = this.resolveLogDir();
     await this.loadLeases();
+    await this.loadSystems();
     await this.loadState();
     let names: string[] = [];
     try {
@@ -849,6 +876,10 @@ export class CardStore extends EventEmitter<StoreEvents> {
       cards: this.list(),
       rig,
       config: this.config,
+      // RCB-97 (plan §3.3): the seat ALWAYS gets exactly one Systems line — `systemsSummary`
+      // itself renders the "no systems.yml yet" line when both args are the absent-file shape,
+      // which is exactly `this.systemsDoc`/`this.systemsErrors` when there is no file.
+      systems: systemsSummary(this.systemsDoc, this.systemsErrors),
     });
   }
 
@@ -887,8 +918,34 @@ export class CardStore extends EventEmitter<StoreEvents> {
       now,
       cost,
       local,
+      systems: await this.gatherSystemsCheck(),
     });
     return { findings, exitCode: exitCodeForFindings(findings, strict) };
+  }
+
+  /**
+   * RCB-97: `check`'s `systems` input — `null` when there is no `systems.yml` at all (§3.1:
+   * unconfigured is inert). Otherwise `{ errors, stale }`: `stale` is only ever computed when
+   * `doc` parsed AND has at least one `source.detected` row (an invalid file has no rows to
+   * stale-check); a detection failure yields `stale: []` — a `check` call must never throw over
+   * this (mirrors `cost`'s and `local`'s own "gather never fails" rule above).
+   */
+  private async gatherSystemsCheck(): Promise<{
+    errors: readonly string[];
+    stale: readonly string[];
+  } | null> {
+    const { doc, errors, exists } = this.systems();
+    if (!exists) return null;
+    let stale: string[] = [];
+    if (doc?.systems.some((s) => 'detected' in s.source)) {
+      try {
+        const { candidates } = await detectSystems(this.root);
+        stale = staleDetected(doc, candidates);
+      } catch {
+        stale = [];
+      }
+    }
+    return { errors, stale };
   }
 
   /**
@@ -1279,6 +1336,33 @@ export class CardStore extends EventEmitter<StoreEvents> {
   }
 
   /**
+   * RCB-97: unlike `loadLeases`, an invalid `systems.yml` does NOT keep the last good doc — it
+   * becomes `doc: null` + `errors` (§3.2: "a file that will not parse is worse than none"),
+   * because `check`'s `systems-invalid` finding must see the breakage, not a stale copy.
+   */
+  private async loadSystems(): Promise<void> {
+    let text: string;
+    try {
+      text = await readFile(this.systemsPath, 'utf8');
+    } catch (e) {
+      if ((e as NodeJS.ErrnoException).code !== 'ENOENT') throw e;
+      this.systemsDoc = null;
+      this.systemsErrors = [];
+      this.systemsExists = false;
+      return;
+    }
+    this.systemsExists = true;
+    const res = parseSystems(text);
+    if (res.ok) {
+      this.systemsDoc = res.doc;
+      this.systemsErrors = [];
+    } else {
+      this.systemsDoc = null;
+      this.systemsErrors = res.errors;
+    }
+  }
+
+  /**
    * Read `board.yml`. Returns `changed: false` — and touches neither `cfg` nor `boardHash` —
    * when the bytes on disk are exactly the hash already recorded (RCB-34: `setColumns` records
    * its own write's hash before the watcher ever sees the rename, so that echo is a no-op here).
@@ -1459,6 +1543,11 @@ export class CardStore extends EventEmitter<StoreEvents> {
         if (rel === 'leases.yml') {
           return this.loadLeases().then(() => {
             this.emit('leases', this.leasesDoc);
+          });
+        }
+        if (rel === 'systems.yml') {
+          return this.loadSystems().then(() => {
+            this.emit('systems', this.systems());
           });
         }
         if (rel === stateRel) {

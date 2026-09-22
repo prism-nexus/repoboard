@@ -111,3 +111,57 @@ export function rollup(
   }
   return { total: steps.length, done, blockedOn };
 }
+
+/** RCB-108: a "plan parent" is any card some other card names as `parent:` — it has at least one
+ * `stepsOf` result. A parent is a container that shows its progress through `rollup`, not itself
+ * a unit of work in its column, which is why `wipCount` treats it specially. */
+export function isPlanParent(card: Card, cards: readonly Card[]): boolean {
+  return stepsOf(card.id, cards).length > 0;
+}
+
+/**
+ * RCB-108, the owner's flip (2026-09-22, PH.7 gap 6): a plan parent sitting in `doing` while its
+ * OWN steps do the actual work should not itself count against `doing`'s WIP limit. Reversible —
+ * flip this to `true` and `wipCount`/`wipCountsForMove` count parents like any other card, no
+ * other code path to change.
+ */
+export const WIP_COUNTS_PARENTS = false;
+
+/**
+ * THE one WIP count. Every surface that needs "how many cards are in this column, for WIP
+ * purposes" — `presence.ts`'s `wipBreaches`, `store.ts`'s move-time warning, the web column
+ * header — asks this, never a raw `cards.filter(...).length`. Cards in `status`, minus plan
+ * parents unless `WIP_COUNTS_PARENTS` is flipped on.
+ */
+export function wipCount(status: string, cards: readonly Card[]): number {
+  let n = 0;
+  for (const c of cards) {
+    if (c.status !== status) continue;
+    if (!WIP_COUNTS_PARENTS && isPlanParent(c, cards)) continue;
+    n++;
+  }
+  return n;
+}
+
+/**
+ * The move-time WIP warning's `columnCounts` (`transitions.ts`'s `moveCard`/`askDecision`/
+ * `decide`, all fed from `store.ts`): `undefined` when `card` itself is an uncounted plan parent —
+ * it adds 0 to whatever column it lands in, so it can never breach a limit, and `moveCard` skips
+ * the WIP check entirely when `columnCounts` is absent. Otherwise, `wipCount` per status over
+ * every OTHER card (the mover excluded, as `store.ts` has always done) — but each card's
+ * plan-parent status is still judged against `cards`, the FULL board, not the reduced set, so
+ * excluding the mover from the count can never flip some other card's parent-ness.
+ */
+export function wipCountsForMove(
+  card: Card,
+  cards: readonly Card[],
+): Record<string, number> | undefined {
+  if (!WIP_COUNTS_PARENTS && isPlanParent(card, cards)) return undefined;
+  const counts: Record<string, number> = {};
+  for (const c of cards) {
+    if (c.id === card.id) continue;
+    if (!WIP_COUNTS_PARENTS && isPlanParent(c, cards)) continue;
+    counts[c.status] = (counts[c.status] ?? 0) + 1;
+  }
+  return counts;
+}

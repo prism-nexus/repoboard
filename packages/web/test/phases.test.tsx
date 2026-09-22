@@ -142,6 +142,70 @@ describe('Board swimlanes', () => {
   });
 });
 
+describe('Board swimlanes: phase chain on the lane head (RCB-108)', () => {
+  it('renders the chain in phase order, with done/here classes for the other columns', () => {
+    const store = testStore();
+    const parent = card('RB-1', 'todo', { title: 'Phase H' });
+    const steps = [
+      card('RB-2', 'done', { parent: 'RB-1', phase: 'PH.0' }),
+      card('RB-3', 'doing', { parent: 'RB-1', phase: 'PH.1' }),
+      card('RB-4', 'backlog', { parent: 'RB-1', phase: 'PH.2' }),
+    ];
+    snapshot(store, [parent, ...steps]);
+    renderApp(store);
+    // The lane for RB-1 in "Doing" (RB-3's own column): PH.0 is done, PH.1 is HERE, PH.2 is plain.
+    const doing = screen.getByRole('region', { name: 'Doing' });
+    const chain = within(doing).getByTestId('lane-chain-RB-1');
+    const chips = chain.querySelectorAll('.lane__step');
+    expect(Array.from(chips).map((c) => c.textContent)).toEqual(['PH.0', 'PH.1', 'PH.2']);
+    expect(chips[0]).toHaveClass('lane__step--done');
+    expect(chips[0]).toHaveAttribute('title', 'RB-2 · done');
+    expect(chips[1]).toHaveClass('lane__step--here');
+    expect(chips[1]).not.toHaveClass('lane__step--done');
+    expect(chips[2]).not.toHaveClass('lane__step--done');
+    expect(chips[2]).not.toHaveClass('lane__step--here');
+    expect(chain.querySelectorAll('.lane__chain-arrow')).toHaveLength(2);
+  });
+
+  it('within a lane, DOM card order is phase order even when `updated` order is the reverse', () => {
+    const store = testStore();
+    const parent = card('RB-1', 'todo');
+    // step10 is the most recently updated (default sort is updated desc) but PH.2 < PH.10.
+    const step10 = card('RB-2', 'doing', {
+      parent: 'RB-1',
+      phase: 'PH.10',
+      updated: '2026-09-02T23:00:00Z',
+    });
+    const step2 = card('RB-3', 'doing', {
+      parent: 'RB-1',
+      phase: 'PH.2',
+      updated: '2026-09-02T20:00:00Z',
+    });
+    snapshot(store, [parent, step10, step2]);
+    renderApp(store);
+    const doing = screen.getByRole('region', { name: 'Doing' });
+    const cardEls = within(doing).getAllByTestId(/^card-/);
+    expect(cardEls.map((el) => el.getAttribute('data-testid'))).toEqual(['card-RB-3', 'card-RB-2']);
+  });
+});
+
+describe('Column WIP count: parents excluded (RCB-108)', () => {
+  it('column__count reads the WIP-adjusted count, with a note naming how many parents were excluded', () => {
+    const store = testStore();
+    const parent = card('RB-1', 'doing'); // a plan parent: RB-2 below names it
+    const step = card('RB-2', 'todo', { parent: 'RB-1', phase: 'PH.1' });
+    const plains = [card('RB-3', 'doing'), card('RB-4', 'doing'), card('RB-5', 'doing')];
+    snapshot(store, [parent, step, ...plains]);
+    renderApp(store);
+    const doing = screen.getByRole('region', { name: 'Doing' });
+    // 4 raw cards in "doing" (RB-1, RB-3, RB-4, RB-5), but RB-1 is a plan parent: 3 / 3, no breach.
+    const count = within(doing).getByText('3 / 3');
+    expect(count).not.toHaveClass('column__count--breach');
+    const note = within(doing).getByText('parents not counted');
+    expect(note).toHaveAttribute('title', '1 parent not counted');
+  });
+});
+
 describe('Drawer: Phase block (RCB-68)', () => {
   it('on a step: parent (opens it), phase chip, and the gate state line', () => {
     const store = testStore();

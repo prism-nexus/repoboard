@@ -8,11 +8,20 @@ interface Props {
   children: ReactNode;
   /** P8.5: present only for the `done` column — "archive older than 14d". */
   onArchive?: () => void;
+  /**
+   * RCB-108: the WIP-adjusted count (plan parents excluded by default) — `Board` computes this
+   * against the FULL board, a parent's steps can sit in a different column. Omitted, this falls
+   * back to `column.cards.length`, so a column with no parent in it renders byte-identical to
+   * before RCB-108.
+   */
+  wipCount?: number;
 }
 
-export function Column({ column, children, onArchive }: Props) {
+export function Column({ column, children, onArchive, wipCount }: Props) {
   const { setNodeRef, isOver } = useDroppable({ id: column.id, data: { type: 'column' } });
-  const count = column.cards.length;
+  const rawCount = column.cards.length;
+  const count = wipCount ?? rawCount;
+  const excludedParents = rawCount - count;
   const breached = column.wip !== undefined && count > column.wip;
   const cls = [
     'column',
@@ -41,6 +50,14 @@ export function Column({ column, children, onArchive }: Props) {
           {column.wip !== undefined ? ` / ${column.wip}` : ''}
         </span>
         {column.unconfigured ? <span className="column__note">not in board.yml</span> : null}
+        {column.wip !== undefined && excludedParents >= 1 ? (
+          <span
+            className="column__note"
+            title={`${excludedParents} parent${excludedParents === 1 ? '' : 's'} not counted`}
+          >
+            parents not counted
+          </span>
+        ) : null}
         {column.done && onArchive ? (
           <button
             type="button"
@@ -59,7 +76,7 @@ export function Column({ column, children, onArchive }: Props) {
         >
           {children}
         </SortableContext>
-        {count === 0 ? <p className="column__empty">Drop a card here</p> : null}
+        {rawCount === 0 ? <p className="column__empty">Drop a card here</p> : null}
       </div>
     </section>
   );

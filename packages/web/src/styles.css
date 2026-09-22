@@ -1072,6 +1072,29 @@ button {
   font-family: var(--font-mono);
   overflow-wrap: anywhere;
 }
+.lane__chain {
+  flex: 0 0 100%;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 3px;
+  font-family: var(--font-mono);
+}
+.lane__chain-arrow {
+  color: var(--line-strong);
+}
+.lane__step {
+  color: var(--muted);
+}
+.lane__step--done {
+  color: var(--ok);
+  font-weight: 600;
+}
+.lane__step--here {
+  color: var(--accent);
+  font-weight: 700;
+  text-decoration: underline;
+}
 .drawer__phase-step {
   display: flex;
   align-items: center;

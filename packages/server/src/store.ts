@@ -71,6 +71,7 @@ import {
   takeLease,
   toIso,
   updateCard,
+  wipCountsForMove,
 } from '@repoboard/core';
 import { watch as chokidarWatch, type FSWatcher } from 'chokidar';
 import { type ArchiveMoveMethod, archiveMoveFile } from './archive.js';
@@ -489,10 +490,9 @@ export class CardStore extends EventEmitter<StoreEvents> {
     return this.mutate(async () => {
       const card = this.cards.get(id);
       if (!card) return { ok: false, error: `unknown card "${id}"`, notFound: true };
-      const columnCounts: Record<string, number> = {};
-      for (const c of this.cards.values()) {
-        if (c.id !== id) columnCounts[c.status] = (columnCounts[c.status] ?? 0) + 1;
-      }
+      // RCB-108: `undefined` when `card` is itself an uncounted plan parent (it adds 0 to any
+      // column, so it cannot breach a limit) — else per-status counts over every other card.
+      const columnCounts = wipCountsForMove(card, [...this.cards.values()]);
       const res = moveCard(card, status, {
         actor,
         now: this.now(),
@@ -539,10 +539,9 @@ export class CardStore extends EventEmitter<StoreEvents> {
     return this.mutate(async () => {
       const card = this.cards.get(id);
       if (!card) return { ok: false, error: `unknown card "${id}"`, notFound: true };
-      const columnCounts: Record<string, number> = {};
-      for (const c of this.cards.values()) {
-        if (c.id !== id) columnCounts[c.status] = (columnCounts[c.status] ?? 0) + 1;
-      }
+      // RCB-108: `undefined` when `card` is itself an uncounted plan parent (it adds 0 to any
+      // column, so it cannot breach a limit) — else per-status counts over every other card.
+      const columnCounts = wipCountsForMove(card, [...this.cards.values()]);
       const res = askDecision(card, {
         question: input.question,
         options: input.options,
@@ -568,10 +567,9 @@ export class CardStore extends EventEmitter<StoreEvents> {
     return this.mutate(async () => {
       const card = this.cards.get(id);
       if (!card) return { ok: false, error: `unknown card "${id}"`, notFound: true };
-      const columnCounts: Record<string, number> = {};
-      for (const c of this.cards.values()) {
-        if (c.id !== id) columnCounts[c.status] = (columnCounts[c.status] ?? 0) + 1;
-      }
+      // RCB-108: `undefined` when `card` is itself an uncounted plan parent (it adds 0 to any
+      // column, so it cannot breach a limit) — else per-status counts over every other card.
+      const columnCounts = wipCountsForMove(card, [...this.cards.values()]);
       const res = decideCard(card, {
         letter: input.letter,
         words: input.words,
@@ -1037,10 +1035,9 @@ export class CardStore extends EventEmitter<StoreEvents> {
     return this.mutate(async () => {
       const card = this.cards.get(id);
       if (!card) return { ok: false, error: `unknown card "${id}"`, notFound: true };
-      const columnCounts: Record<string, number> = {};
-      for (const c of this.cards.values()) {
-        if (c.id !== id) columnCounts[c.status] = (columnCounts[c.status] ?? 0) + 1;
-      }
+      // RCB-108: `undefined` when `card` is itself an uncounted plan parent (it adds 0 to any
+      // column, so it cannot breach a limit) — else per-status counts over every other card.
+      const columnCounts = wipCountsForMove(card, [...this.cards.values()]);
       const res = closeSyncedCard(card, {
         actor,
         now: this.now(),

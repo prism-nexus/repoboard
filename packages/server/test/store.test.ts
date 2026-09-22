@@ -280,6 +280,61 @@ describe('move and update', () => {
   });
 });
 
+// ---- RCB-108: a plan parent doesn't count against WIP -----------------------------------------
+describe('move: parents not counted for WIP (RCB-108)', () => {
+  /** A repo with `doing`'s wip lowered to 2, so 2 plain cards already fill it. */
+  async function repoWithDoingWip2(cards: Record<string, string>): Promise<TempRepo> {
+    const repo = await repoWith(cards);
+    const config: BoardConfig = {
+      ...defaultBoardConfig(),
+      columns: defaultBoardConfig().columns.map((c) => (c.id === 'doing' ? { ...c, wip: 2 } : c)),
+    };
+    await writeFile(join(repo.root, '.repoboard', 'board.yml'), serializeBoard(config));
+    return repo;
+  }
+
+  it('2 plain cards fill doing (wip 2); moving a third plain in warns', async () => {
+    const repo = await repoWithDoingWip2({
+      'RB-1.md': cardText('RB-1', 'doing'),
+      'RB-2.md': cardText('RB-2', 'doing'),
+      'RB-3.md': cardText('RB-3', 'todo'),
+    });
+    const store = await open(repo, false);
+    const res = await store.move('RB-3', 'doing', 't');
+    expect(res.ok && res.warnings[0]).toMatch(/WIP limit exceeded/);
+  });
+
+  it('1 plain + 1 parent fill doing (wip 2); moving a plain in does not warn — the parent is excluded', async () => {
+    const repo = await repoWithDoingWip2({
+      'RB-1.md': cardText('RB-1', 'doing'), // plain
+      'RB-2.md': cardText('RB-2', 'doing'), // a plan parent — RB-3 below names it
+      'RB-3.md': cardText('RB-3', 'backlog').replace(
+        'status: backlog\n',
+        'status: backlog\nparent: RB-2\n',
+      ),
+      'RB-4.md': cardText('RB-4', 'todo'),
+    });
+    const store = await open(repo, false);
+    const res = await store.move('RB-4', 'doing', 't');
+    expect(res.ok && res.warnings).toEqual([]);
+  });
+
+  it('moving a plan parent itself into a full doing does not warn — it adds 0, so it cannot breach', async () => {
+    const repo = await repoWithDoingWip2({
+      'RB-1.md': cardText('RB-1', 'doing'),
+      'RB-2.md': cardText('RB-2', 'doing'), // doing is already AT the wip 2 limit
+      'RB-3.md': cardText('RB-3', 'todo'), // the parent being moved — RB-4 below names it
+      'RB-4.md': cardText('RB-4', 'backlog').replace(
+        'status: backlog\n',
+        'status: backlog\nparent: RB-3\n',
+      ),
+    });
+    const store = await open(repo, false);
+    const res = await store.move('RB-3', 'doing', 't');
+    expect(res.ok && res.warnings).toEqual([]);
+  });
+});
+
 describe('ask and decide (P8.1)', () => {
   it('ask writes the file, moves into decide, appends both log lines, one events.jsonl row', async () => {
     const repo = await repoWith({ 'RB-1.md': cardText('RB-1', 'todo') });

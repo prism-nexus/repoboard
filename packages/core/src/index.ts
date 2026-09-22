@@ -99,7 +99,16 @@ export {
 export type { AddNoteOptions, AddNoteResult } from './notes.js';
 export { addNote } from './notes.js';
 export type { GateState } from './phases.js';
-export { blockedReason, gateState, rollup, stepsOf } from './phases.js';
+export {
+  blockedReason,
+  gateState,
+  isPlanParent,
+  rollup,
+  stepsOf,
+  WIP_COUNTS_PARENTS,
+  wipCount,
+  wipCountsForMove,
+} from './phases.js';
 export type { Avatar, BoardSummary, WipBreach } from './presence.js';
 export {
   AVATAR_COLORS,

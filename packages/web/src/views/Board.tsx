@@ -15,8 +15,11 @@ import {
   type Column as ColumnConfig,
   findColumn,
   isActive,
+  isPlanParent,
   rollup,
   type Size,
+  stepsOf,
+  WIP_COUNTS_PARENTS,
 } from '@repoboard/core';
 import { Fragment, useCallback, useMemo, useState } from 'react';
 import { BoardTools } from '../components/BoardTools.jsx';
@@ -42,6 +45,29 @@ import {
  * lane's first step (an orphan lane) — `undefined` only for the always-present un-parented lane. */
 function laneParentId(lane: Lane): string | undefined {
   return lane.parent ? lane.parent.id : lane.cards[0]?.parent;
+}
+
+/**
+ * RCB-108: the WIP-adjusted count for a column's SHOWN cards (`colCards`, already run through the
+ * size filter) — a plan parent doesn't count by default (`WIP_COUNTS_PARENTS`). Parent-ness is
+ * judged against `cards`, the FULL board (same reasoning as the RCB-67 comment above on
+ * `laneColumns`): a step hidden by the size filter must not flip whether its parent counts.
+ */
+function wipCountFor(colCards: Card[], cards: readonly Card[]): number {
+  if (WIP_COUNTS_PARENTS) return colCards.length;
+  return colCards.filter((c) => !isPlanParent(c, cards)).length;
+}
+
+/** RCB-108: a lane-chain chip's class — `done` in a `done: true` column, `here` in THIS column
+ * (the column the chain itself is rendered in), plain otherwise. */
+function laneStepClass(
+  step: Card,
+  columnId: string,
+  isDoneColumn: (status: string) => boolean,
+): string {
+  if (isDoneColumn(step.status)) return 'lane__step lane__step--done';
+  if (step.status === columnId) return 'lane__step lane__step--here';
+  return 'lane__step';
 }
 
 /** Where a drop lands: a column id, or the column of the card it was dropped on. */
@@ -208,7 +234,12 @@ export function Board() {
       >
         <div className={`board ${selectedId ? 'board--drawer' : ''}`} data-testid="board">
           {laneColumns.map((col) => (
-            <Column key={col.id} column={col} onArchive={col.done ? archiveDone : undefined}>
+            <Column
+              key={col.id}
+              column={col}
+              wipCount={wipCountFor(col.cards, cards)}
+              onArchive={col.done ? archiveDone : undefined}
+            >
               {col.lanes.map((lane) => {
                 const parentId = laneParentId(lane);
                 const parentRollup = lane.parent ? rollup(lane.parent, cards, config) : null;
@@ -234,6 +265,21 @@ export function Board() {
                               ? ` · blocked on ${gateChipText(parentRollup.blockedOn)}`
                               : ''}
                           </span>
+                        ) : null}
+                        {lane.parent ? (
+                          <div className="lane__chain" data-testid={`lane-chain-${parentId}`}>
+                            {stepsOf(lane.parent.id, cards).map((step, i) => (
+                              <Fragment key={step.id}>
+                                {i > 0 ? <span className="lane__chain-arrow">→</span> : null}
+                                <span
+                                  className={laneStepClass(step, col.id, isDoneColumn)}
+                                  title={`${step.id} · ${step.status}`}
+                                >
+                                  {step.phase ?? step.id}
+                                </span>
+                              </Fragment>
+                            ))}
+                          </div>
                         ) : null}
                       </div>
                     ) : null}

@@ -4,7 +4,14 @@
  */
 import { describe, expect, it } from 'vitest';
 import { defaultBoardConfig } from '../src/board.js';
-import { blockedReason, gateState, rollup, stepsOf } from '../src/phases.js';
+import {
+  blockedReason,
+  gateState,
+  rollup,
+  stepsOf,
+  wipCount,
+  wipCountsForMove,
+} from '../src/phases.js';
 import type { BoardConfig, Card, Decision } from '../src/types.js';
 
 const CREATED = '2026-09-19T00:00:00Z';
@@ -250,5 +257,34 @@ describe('rollup', () => {
     expect(rollup(grandparent, all, config)).toEqual({ total: 1, done: 0, blockedOn: null });
     // The child IS a phase card of its own, with its own rollup over the grandchild.
     expect(rollup(child, all, config)).toEqual({ total: 1, done: 1, blockedOn: null });
+  });
+});
+
+describe('wipCount / wipCountsForMove (RCB-108: parents not counted for WIP)', () => {
+  it('wipCount excludes a plan parent, but counts a step and a plain card', () => {
+    const parent = makeCard({ id: 'RCB-1', status: 'doing' });
+    const step = makeCard({ id: 'RCB-2', parent: 'RCB-1', phase: 'PH.1', status: 'doing' });
+    const plain = makeCard({ id: 'RCB-3', status: 'doing' });
+    const elsewhere = makeCard({ id: 'RCB-4', status: 'todo' });
+    const all = [parent, step, plain, elsewhere];
+    expect(wipCount('doing', all)).toBe(2); // step + plain; parent excluded
+  });
+
+  it('wipCountsForMove is undefined for a parent mover — it adds 0, so it cannot breach', () => {
+    const parent = makeCard({ id: 'RCB-1', status: 'backlog' });
+    const step = makeCard({ id: 'RCB-2', parent: 'RCB-1', phase: 'PH.1', status: 'doing' });
+    const plain = makeCard({ id: 'RCB-3', status: 'doing' });
+    const all = [parent, step, plain];
+    expect(wipCountsForMove(parent, all)).toBeUndefined();
+  });
+
+  it('wipCountsForMove excludes the mover itself otherwise, and still excludes other parents', () => {
+    const parent = makeCard({ id: 'RCB-1', status: 'doing' });
+    const step = makeCard({ id: 'RCB-2', parent: 'RCB-1', phase: 'PH.1', status: 'doing' });
+    const mover = makeCard({ id: 'RCB-3', status: 'todo' });
+    const other = makeCard({ id: 'RCB-4', status: 'doing' });
+    const all = [parent, step, mover, other];
+    // doing has step + other = 2 — the mover (not in doing anyway) and the parent are excluded.
+    expect(wipCountsForMove(mover, all)).toEqual({ doing: 2 });
   });
 });

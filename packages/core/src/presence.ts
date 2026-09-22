@@ -1,5 +1,6 @@
 import { findColumn } from './board.js';
 import { needsDecision } from './decisions.js';
+import { wipCount } from './phases.js';
 import type { BoardConfig, Card } from './types.js';
 
 /**
@@ -123,7 +124,7 @@ export function computeBoardSummary(cards: Card[], config: BoardConfig, now: Dat
 
   const wipBreaches: WipBreach[] = [];
   for (const col of config.columns) {
-    const count = perColumn[col.id] ?? 0;
+    const count = wipCount(col.id, cards); // RCB-108: a plan parent doesn't count against WIP
     if (col.wip !== undefined && count > col.wip) {
       wipBreaches.push({ column: col.id, count, wip: col.wip });
     }

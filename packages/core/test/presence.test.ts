@@ -144,6 +144,15 @@ describe('computeBoardSummary', () => {
     expect(computeBoardSummary(cards, config, now).wipBreaches).toEqual([]);
   });
 
+  it('RCB-108: a plan parent in doing does not count — 3 steps + 1 parent, wip 3, no breach', () => {
+    const parent = sampleCard({ id: 'RB-1', status: 'doing' });
+    const steps = [2, 3, 4].map((n) =>
+      sampleCard({ id: `RB-${n}`, status: 'doing', parent: 'RB-1', phase: `PH.${n}` }),
+    );
+    // 4 raw cards in doing, but the parent is excluded — wipCount is 3, at (not over) the limit.
+    expect(computeBoardSummary([parent, ...steps], config, now).wipBreaches).toEqual([]);
+  });
+
   it('needsDecision: totals and per-column counts only OPEN decisions (P8.1)', () => {
     const open = {
       question: 'q',

@@ -9,5 +9,8 @@ parent: RCB-80
 phase: PH.3
 gate: RCB-95
 created: 2026-09-22T03:53:06Z
-updated: 2026-09-22T03:53:06Z
+updated: 2026-09-22T07:52:07Z
 ---
+
+## Notes
+- 2026-09-22T07:52:07Z repoboard builder — (1/2) core half landed dd95572 (systems-surface.ts, check findings, seat line, CostWhy). (2/2) server half NOT started: brief parked at .repoboard/local/briefs/RCB-97B-SURFACES-SERVER.md (fill its Baseline line: main @ dd95572, 1207 passed | 4 skipped). Successor: dispatch it, gate, land.

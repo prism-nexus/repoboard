@@ -10,10 +10,11 @@
 # Lock dir:   ${VITEST_LOCK_DIR:-${TMPDIR:-/tmp}/repoboard-vitest.lock}
 # Owner file: <lock dir>/owner, ONE line: "<pid> <cwd> <ISO time> <session>"
 #   <session> is $REPOBOARD_SESSION if set, else "-".
-#   <pid> is ${VITEST_LOCK_PID:-$PPID} — the CALLER's shell pid. A script's own $$ dies when the
-#   script exits, so a later `release` invocation (a separate process) could never match it
-#   against a `take` done by the same $$. The parent shell's pid is what persists across the
-#   take and the release, as long as both run from the same shell session.
+#   <pid> is ${VITEST_LOCK_PID:-${CLAUDE_PID:-$PPID}} — whichever pid outlives both the take and
+#   the release. The script's own $$ dies when it exits. In a human terminal $PPID is the shell,
+#   which persists. An agent seat's Bash tool opens a one-shot shell per call, so $PPID is dead a
+#   second later and the seat's own release reads "NOT ours"; Claude Code exports $CLAUDE_PID
+#   (the long-lived `claude` process) into every tool shell, so it comes first (RCB-114).
 # Lane windows: ${FPJ_LANE_WINDOWS:-}, unset means no lane-file check. Suite lead
 #   ${REPOBOARD_SUITE_MINUTES:-5} min. This script ships with neutral defaults; a rig that needs
 #   fpj's paths sets them in .repoboard/local/env (sourced below, gitignored, per-machine).
@@ -30,7 +31,7 @@ if [ -f "$RIG_ENV" ]; then . "$RIG_ENV"; fi
 # Trailing slash in $TMPDIR is not stripped — "/tmp//x" is a fine path, no need to normalize it.
 LOCK="${VITEST_LOCK_DIR:-${TMPDIR:-/tmp}/repoboard-vitest.lock}"
 OWNER_FILE="$LOCK/owner"
-SELF_PID="${VITEST_LOCK_PID:-$PPID}"
+SELF_PID="${VITEST_LOCK_PID:-${CLAUDE_PID:-$PPID}}"
 SESSION="${REPOBOARD_SESSION:--}"
 MIN="${REPOBOARD_SUITE_MINUTES:-5}"  # suite lead in minutes: ours runs ≈1 min; fpj's shim uses 20.
 

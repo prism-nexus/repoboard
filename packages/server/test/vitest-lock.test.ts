@@ -200,3 +200,113 @@ describe('vitest-lock.sh — neutral defaults (RCB-86)', () => {
     expect(text).not.toMatch(/fpj-vitest|fpj-lane-windows|Repos\/freshpickedjobs/);
   });
 });
+
+/**
+ * RCB-114 — an agent seat's every Bash tool call is a fresh one-shot shell whose parent is the
+ * long-lived `claude` process, not a shell that survives to the next tool call. `SELF_PID` must
+ * therefore prefer `$CLAUDE_PID` (which Claude Code exports into every tool shell) over `$PPID`,
+ * or `take` records a pid that's already dead by the time the same seat's own `release` runs.
+ *
+ * Each case runs the script through a wrapper, `sh -c 'sh "$0" "$@"; exit $?' SCRIPT verb`, so the script's
+ * own `$PPID` is that wrapper shell — which exits as soon as the verb returns. This is what
+ * reproduces the bug: a direct `spawnSync('sh', [SCRIPT, verb])` hides it, because `$PPID` there
+ * is node itself, which never dies mid-test.
+ */
+describe('vitest-lock.sh — owner pid survives one-shot shells (RCB-114)', () => {
+  function runWrapped(verb: string, env: NodeJS.ProcessEnv): TakeResult {
+    // The trailing `exit $?` keeps the wrapper alive as the script's parent: without it, sh
+    // execs its last command and the script's $PPID is node again, which hides the bug.
+    const res = spawnSync('sh', ['-c', 'sh "$0" "$@"; exit $?', SCRIPT, verb], {
+      cwd: REPO_ROOT,
+      encoding: 'utf8',
+      env,
+    });
+    return { status: res.status, stdout: res.stdout };
+  }
+
+  function ownerPid(lockDir: string): string {
+    const line = readFileSync(join(lockDir, 'owner'), 'utf8').split('\n')[0] ?? '';
+    return line.split(' ')[0] ?? '';
+  }
+
+  /** Scratch lock dir and a no-board fpj root, as the existing cases above use. The base env has
+   * `VITEST_LOCK_PID` and `CLAUDE_PID` deleted before applying `overrides` —
+   * the suite itself may run under Claude, so the real values (if any) must not leak into a case
+   * that means to test them unset. */
+  async function scratchEnv(
+    overrides: Record<string, string>,
+  ): Promise<{ lockDir: string; env: NodeJS.ProcessEnv }> {
+    const root = await makeTempDir('rcb-114-');
+    cleanups.push(() => rmSync(root, { recursive: true, force: true }));
+    const fpjRoot = join(root, 'no-fpj');
+    mkdirSync(fpjRoot, { recursive: true });
+    const lockDir = join(root, 'lock');
+    const base: NodeJS.ProcessEnv = { ...process.env };
+    delete base.VITEST_LOCK_PID;
+    delete base.CLAUDE_PID;
+    delete base.FPJ_LANE_WINDOWS;
+    // A path that never exists: deleting FPJ_LANE_WINDOWS is not enough, the rig env file would
+    // put /tmp/fpj-lane-windows back and a live fpj window would refuse `take` with exit 3.
+    const laneFile = join(root, 'no-lanes');
+    return {
+      lockDir,
+      env: {
+        ...base,
+        VITEST_LOCK_DIR: lockDir,
+        FPJ_ROOT: fpjRoot,
+        FPJ_LANE_WINDOWS: laneFile,
+        ...overrides,
+      },
+    };
+  }
+
+  it.skipIf(!hasCli)(
+    '(a) CLAUDE_PID set (agent seat): take records it, status live, same-seat release succeeds',
+    async () => {
+      const { lockDir, env } = await scratchEnv({
+        CLAUDE_PID: String(process.pid),
+      });
+
+      const took = runWrapped('take', env);
+      expect(took.status).toBe(0);
+      expect(took.stdout).toContain('took vitest-lock');
+      expect(ownerPid(lockDir)).toBe(String(process.pid));
+
+      const status = runWrapped('status', env);
+      expect(status.stdout).toContain('live');
+
+      const released = runWrapped('release', env);
+      expect(released.status).toBe(0);
+      expect(released.stdout).toContain('released vitest-lock');
+      expect(existsSync(lockDir)).toBe(false);
+    },
+  );
+
+  it.skipIf(!hasCli)(
+    '(b) neither VITEST_LOCK_PID nor CLAUDE_PID set: owner pid is the wrapper shell, not ' +
+      'process.pid — same-seat release without --force fails NOT ours (human-terminal fallback unchanged)',
+    async () => {
+      const { lockDir, env } = await scratchEnv({});
+
+      const took = runWrapped('take', env);
+      expect(took.status).toBe(0);
+      expect(ownerPid(lockDir)).not.toBe(String(process.pid));
+
+      const released = runWrapped('release', env);
+      expect(released.status).toBe(1);
+      expect(released.stdout).toContain('NOT ours');
+      expect(existsSync(lockDir)).toBe(true);
+    },
+  );
+
+  it.skipIf(!hasCli)('(c) VITEST_LOCK_PID=1 overrides CLAUDE_PID: owner pid is 1', async () => {
+    const { lockDir, env } = await scratchEnv({
+      VITEST_LOCK_PID: '1',
+      CLAUDE_PID: String(process.pid),
+    });
+
+    const took = runWrapped('take', env);
+    expect(took.status).toBe(0);
+    expect(ownerPid(lockDir)).toBe('1');
+  });
+});

@@ -1841,6 +1841,120 @@ describe('repoboard state', () => {
   });
 });
 
+describe('repoboard state --trim-landings (RCB-92)', () => {
+  const THREE_ENTRIES = [
+    '2. Newest landing here',
+    '',
+    '1. Middle landing here',
+    '',
+    '0. Oldest landing here',
+  ].join('\n');
+
+  it("keeps the newest n, archives the rest to today's log, and check stays clean", async () => {
+    const root = await freshRepo({});
+    await repoboard(root, 'init', '--practices');
+    await repoboardStdin(root, THREE_ENTRIES, 'state', '--set-section', 'LAST-LANDINGS', '--stdin');
+
+    // `state --trim-landings` makes two sequential store writes inside one command (log append,
+    // then the state restamp) — an auto-advancing clock gives each its own instant, the way a
+    // real (non-frozen) clock would in production, so the log-before-state order the code chooses
+    // is actually observable here: the log's own content timestamp lands on the FIRST tick. The
+    // `stale-state` finding also weighs the log FILE's real filesystem mtime (not just its parsed
+    // content) — this sandbox's real wall clock runs ~20 days ahead of this fixture's 2026-09-02
+    // dates, which would read as stale regardless of ordering, so the mtime is pinned to match the
+    // log's own content tick — same technique as store.test.ts's "check aggregates findings" test.
+    let clock = NOW;
+    const advancingNow = (): Date => {
+      const c = clock;
+      clock = new Date(clock.getTime() + 60_000);
+      return c;
+    };
+    const stdout = new Sink();
+    const stderr = new Sink();
+    const code = await run(['state', '--trim-landings', '1', '--as', 'tester'], {
+      cwd: root,
+      stdout,
+      stderr,
+      env: { REPOBOARD_ACTOR: 'test-actor' },
+      now: advancingNow,
+    });
+    expect(code).toBe(0);
+    expect(stdout.text).toBe(
+      'trimmed LAST LANDINGS: kept 1, archived 2 → .repoboard/log/2026-09-02.md\n',
+    );
+
+    const logPath = join(root, '.repoboard', 'log', '2026-09-02.md');
+    await utimes(logPath, NOW, NOW); // the log block's own content ts — the first clock tick
+
+    const printed = await repoboard(root, 'state');
+    expect(printed.out).toContain('2. Newest landing here');
+    expect(printed.out).not.toContain('1. Middle landing here');
+    expect(printed.out).not.toContain('0. Oldest landing here');
+    expect(printed.out).toContain(
+      '_(older entries: .repoboard/log/2026-09-02.md "LAST LANDINGS archived", 2 moved',
+    );
+
+    const shown = await repoboard(root, 'log', 'show');
+    expect(shown.out).toContain(
+      '##### TESTER 2026-09-02T22:41:10Z: LAST LANDINGS archived: 2 entries beyond the newest 1',
+    );
+    expect(shown.out).toContain('1. Middle landing here');
+    expect(shown.out).toContain('0. Oldest landing here');
+
+    // The archived block's TEXT, verbatim — entries 2-3 exactly, not just present somewhere.
+    const lastBlock = await repoboard(root, 'log', '--last', 'tester');
+    expect(lastBlock.out).toBe(
+      '##### TESTER 2026-09-02T22:41:10Z: LAST LANDINGS archived: 2 entries beyond the newest 1' +
+        '\n\n1. Middle landing here\n\n0. Oldest landing here\n',
+    );
+
+    const check = await repoboard(root, 'check');
+    expect(check.out).not.toContain('stale-state');
+
+    // Nothing left to trim below what's already kept.
+    const stateBefore = await readFile(join(root, '.repoboard', 'STATE.md'), 'utf8');
+    const nothing = await repoboard(root, 'state', '--trim-landings', '5', '--as', 'tester');
+    expect(nothing.code).toBe(0);
+    expect(nothing.out).toBe('nothing to trim: 1 entries ≤ 5\n');
+    const stateAfter = await readFile(join(root, '.repoboard', 'STATE.md'), 'utf8');
+    expect(stateAfter).toBe(stateBefore);
+  });
+
+  it('--set-section and --trim-landings are exclusive', async () => {
+    const root = await freshRepo({});
+    await repoboard(root, 'init', '--practices');
+    const res = await repoboard(
+      root,
+      'state',
+      '--set-section',
+      'LIVE',
+      '--trim-landings',
+      '1',
+      'x',
+    );
+    expect(res.code).toBe(1);
+    expect(res.err).toMatch(/exclusive/);
+  });
+
+  it('a negative n is a user error', async () => {
+    const root = await freshRepo({});
+    await repoboard(root, 'init', '--practices');
+    // node:util's parseArgs treats a bare `-1` as ambiguous with another flag; `=` is its own
+    // documented escape for an option argument starting with a dash.
+    const res = await repoboard(root, 'state', '--trim-landings=-1', '--as', 'tester');
+    expect(res.code).toBe(1);
+    expect(res.err).toMatch(/non-negative integer/);
+  });
+
+  it('a non-integer n is a user error', async () => {
+    const root = await freshRepo({});
+    await repoboard(root, 'init', '--practices');
+    const res = await repoboard(root, 'state', '--trim-landings', 'abc', '--as', 'tester');
+    expect(res.code).toBe(1);
+    expect(res.err).toMatch(/non-negative integer/);
+  });
+});
+
 describe('repoboard log', () => {
   it('append creates the day file, then appends a second block', async () => {
     const root = await freshRepo({});

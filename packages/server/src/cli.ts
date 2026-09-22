@@ -34,6 +34,7 @@ import {
   renderState,
   resolveOlderThan,
   resolveTimeSpec,
+  SECTION_PLACEHOLDER,
   type Sibling,
   type Size,
   type StateSectionName,
@@ -41,7 +42,9 @@ import {
   serializeBoard,
   serializeCard,
   serializeLeases,
+  splitLandings,
   toIso,
+  trimLandings,
 } from '@repoboard/core';
 import * as YAML from 'yaml';
 import { gatherCost } from './cost.js';
@@ -154,6 +157,11 @@ Usage:
                                         fresh from cards that need a decision)
   repoboard state --set-section LIVE|LAST-LANDINGS|SEATS (<text> | --stdin) [--as a]
                                         replace one section's body and restamp
+  repoboard state --trim-landings <n> [--as a]
+                                        keep the newest <n> LAST LANDINGS entries in STATE.md,
+                                        archive the rest verbatim to today's log (RCB-92) —
+                                        "nothing to trim" and no write when there is nothing
+                                        beyond <n>
   repoboard log --as <seat> [--title "…"] (<text> | --stdin)
                                         append one block to today's log — board.yml logDir when
                                         set, else .repoboard/local/log/, else .repoboard/log/
@@ -1066,9 +1074,13 @@ async function cmdWindowCheck(args: string[], io: CliIO): Promise<number> {
 async function cmdState(args: string[], io: CliIO): Promise<number> {
   const { values, positionals } = parse(args, {
     'set-section': { type: 'string' },
+    'trim-landings': { type: 'string' },
     stdin: { type: 'boolean', default: false },
     as: { type: 'string' },
   });
+  if (values['set-section'] !== undefined && values['trim-landings'] !== undefined) {
+    throw new UserError('state: --set-section and --trim-landings are exclusive');
+  }
   const root = await requireRoot(io);
   const store = await openStore(root, { watch: false, now: io.now });
   if (values['set-section'] !== undefined) {
@@ -1085,6 +1097,55 @@ async function cmdState(args: string[], io: CliIO): Promise<number> {
     const res = await store.setStateSection(section, body, actorFrom(values.as, io));
     if (!res.ok) throw new UserError(res.error);
     io.stdout.write(`updated STATE.md ${values['set-section']}\n`);
+    return 0;
+  }
+  if (values['trim-landings'] !== undefined) {
+    const raw = values['trim-landings'];
+    const n = Number.parseInt(raw, 10);
+    if (!Number.isInteger(n) || n < 0 || String(n) !== raw.trim()) {
+      throw new UserError(`--trim-landings must be a non-negative integer (got "${raw}")`);
+    }
+    const before = store.state();
+    const body = before ? before.sections.lastLandings : SECTION_PLACEHOLDER;
+    const total = splitLandings(body).length;
+    const { kept, archived } = trimLandings(body, n);
+    if (archived.length === 0) {
+      io.stdout.write(`nothing to trim: ${total} entries ≤ ${n}\n`);
+      return 0;
+    }
+    // RCB-71: same default-actor rule `repoboard log` uses — no $USER/'cli' fallback, since the
+    // archived entries are logged under this seat's name.
+    const env = io.env ?? process.env;
+    const actor = values.as || env.REPOBOARD_ACTOR;
+    if (!actor) {
+      throw new UserError(
+        'repoboard state --trim-landings needs --as <actor> (or REPOBOARD_ACTOR); the archived ' +
+          'entries are logged under that seat name',
+      );
+    }
+    const title = `LAST LANDINGS archived: ${archived.length} entries beyond the newest ${n}`;
+    // Log FIRST — `check` reads the log's timestamp against STATE.md's stamp, and the state
+    // rewrite below restamps to "now"; writing the log after would leave a window where the
+    // newest log entry postdates the stamp that is supposed to cover it (stale-state).
+    const logRes = await store.appendRepoLog(actor, archived.join('\n\n'), title);
+    if (!logRes.ok) throw new UserError(logRes.error);
+    const logDirRel = relative(root, store.logDir);
+    const pointer =
+      `_(older entries: ${logDirRel}/${logRes.date}.md "LAST LANDINGS archived", ` +
+      `${archived.length} moved ${toIso(store.clock)})_`;
+    const stateRes = await store.setStateSection('lastLandings', `${kept}\n\n${pointer}`, actor);
+    if (!stateRes.ok) throw new UserError(stateRes.error);
+    // RCB-83: same rule as `log`/`seat --up/--down` — sync .repoboard/local/ after the write, a
+    // no-op when there is no local layer.
+    if (await hasLocal(root)) {
+      const sync = await localSync(root, `${actor}: state trim-landings`);
+      if (sync.pushed === false) {
+        (io.stderr ?? io.stdout).write(`warning: local: push failed: ${sync.error}\n`);
+      }
+    }
+    io.stdout.write(
+      `trimmed LAST LANDINGS: kept ${n}, archived ${archived.length} → ${logDirRel}/${logRes.date}.md\n`,
+    );
     return 0;
   }
   const doc = store.state();

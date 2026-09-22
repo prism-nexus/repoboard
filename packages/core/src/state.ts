@@ -435,3 +435,44 @@ export function checkFindings(input: CheckInput): Finding[] {
 export function exitCodeForFindings(findings: readonly Finding[], strict: boolean): 0 | 1 {
   return findings.some((f) => f.level === 'error' || (strict && f.level === 'warning')) ? 1 : 0;
 }
+
+// ---- LAST LANDINGS trim (RCB-92) ---------------------------------------------------------
+
+/** An entry starts at a line like `-38. **K101…`, `0. K117 voice…`, `1. Lane scripts…`. */
+const LANDING_START = /^-?\d+\.\s/gm;
+
+/**
+ * Split a `## LAST LANDINGS` body into entries, file order (top = newest). Text before the
+ * first start line (a preamble) stays attached to the FIRST entry; each entry is the verbatim
+ * slice up to (not including) the next start line, trailing whitespace trimmed. A body with no
+ * start line at all is one entry. `SECTION_PLACEHOLDER` (or anything that trims to empty) → `[]`.
+ */
+export function splitLandings(body: string): string[] {
+  if (body === SECTION_PLACEHOLDER) return [];
+  const starts = [...body.matchAll(LANDING_START)].map((m) => m.index);
+  if (starts.length === 0) {
+    const trimmed = body.replace(/\s+$/, '');
+    return trimmed.length === 0 ? [] : [trimmed];
+  }
+  const entries: string[] = [];
+  for (let i = 0; i < starts.length; i++) {
+    const start = i === 0 ? 0 : (starts[i] ?? 0);
+    const end = i + 1 < starts.length ? (starts[i + 1] ?? body.length) : body.length;
+    entries.push(body.slice(start, end).replace(/\s+$/, ''));
+  }
+  return entries;
+}
+
+/**
+ * `kept` = the first `keep` entries (file order) joined by a blank line; `archived` = the rest,
+ * verbatim, in file order. `keep < 0` throws. `archived` is `[]` when there is nothing beyond
+ * `keep`. Invariant: `[...splitLandings(kept), ...archived].join('\n\n')` reconstructs the
+ * original body (trailing whitespace trimmed) — nothing lost, nothing reordered.
+ */
+export function trimLandings(body: string, keep: number): { kept: string; archived: string[] } {
+  if (keep < 0) throw new Error(`trimLandings: keep must be >= 0 (got ${keep})`);
+  const entries = splitLandings(body);
+  const kept = entries.slice(0, keep).join('\n\n');
+  const archived = entries.slice(keep);
+  return { kept, archived };
+}

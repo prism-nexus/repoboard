@@ -9,5 +9,11 @@ labels:
 refs:
   - .repoboard/local/log/2026-09-21.md
 created: 2026-09-21T22:40:29Z
-updated: 2026-09-21T22:40:29Z
+updated: 2026-09-22T00:38:46Z
 ---
+## Notes
+- 2026-09-22T00:38:46Z repoboard builder — Brief ready: .repoboard/local/briefs/RCB-87-BRIEF.md (core parseSeatStamp/seatUpConflict + cmdSeat guard + --force audited; 10 tests, control named). Not dispatched — the seat hit the wind-down line 2026-09-22 00:0xZ. Next fresh seat: dispatch one sonnet from that brief, gate, land. RCB-79 follows (owner's word).
+
+## Log
+- 2026-09-22T00:37:29Z repoboard builder — moved todo → doing
+- 2026-09-22T00:38:46Z repoboard builder — moved doing → todo

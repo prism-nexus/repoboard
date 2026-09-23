@@ -1,2 +1,6 @@
-leases: []
+leases:
+  - resource: RCB-118
+    holder: repoboard builder
+    since: 2026-09-23T05:00:18Z
+    note: seat empty reason
 windows: []

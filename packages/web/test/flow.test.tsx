@@ -285,6 +285,12 @@ describe('Flow view (RCB-98)', () => {
         files: 1,
         source: 'static: test files that import or name the pointer, read live',
         line: 'tests: 1 file',
+        measured: {
+          pointers: [],
+          pct: null,
+          source: 'coverage: no report at coverage/coverage-summary.json',
+          line: 'lines: n/a (no coverage report)',
+        },
       },
     });
     const backlinkCard = card('RB-2', 'todo', { refs: ['apps/gateway/src/index.ts#x'] });
@@ -406,6 +412,12 @@ describe('Flow view (RCB-98)', () => {
         files: 1,
         source: 'static: test files that import or name the pointer, read live',
         line: 'tests: 1 file',
+        measured: {
+          pointers: [{ pointer: 'apps/gateway/src/index.ts', pct: 92.3, reason: null }],
+          pct: 92.3,
+          source: 'coverage: coverage/coverage-summary.json @ 2026-09-22T00:00:00.000Z',
+          line: 'lines: 92.3% covered',
+        },
       },
     });
     openFlow({ doc: TWO_ENV(), errors: [], exists: true });
@@ -423,6 +435,8 @@ describe('Flow view (RCB-98)', () => {
     await screen.findByTestId('flow-drawer');
     const testsSection = await screen.findByTestId('flow-drawer-tests');
     await within(testsSection).findByText('tests: 1 file');
+    // RCB-113: the measured (coverage) line sits right under the static line, unconditionally.
+    await within(testsSection).findByText('lines: 92.3% covered');
     expect(testsSection).not.toHaveTextContent('test/gateway.test.ts');
 
     fireEvent.click(within(testsSection).getByRole('button', { name: 'show' }));
@@ -430,6 +444,13 @@ describe('Flow view (RCB-98)', () => {
     expect(testsSection).toHaveTextContent('apps/gateway/src/index.ts');
     expect(testsSection).toHaveTextContent(
       'static: test files that import or name the pointer, read live',
+    );
+    // RCB-113: the open toggle also gains each pointer's measured pct and the coverage source.
+    expect(testsSection).toHaveTextContent(
+      'apps/gateway/src/index.ts — 1: test/gateway.test.ts · 92.3%',
+    );
+    expect(testsSection).toHaveTextContent(
+      'coverage: coverage/coverage-summary.json @ 2026-09-22T00:00:00.000Z',
     );
 
     fireEvent.click(within(testsSection).getByRole('button', { name: 'hide' }));
@@ -494,6 +515,12 @@ describe('Flow view (RCB-98)', () => {
         files: 0,
         source: 'static: test files that import or name the pointer, read live',
         line: 'tests: none found',
+        measured: {
+          pointers: [],
+          pct: null,
+          source: 'coverage: no report at coverage/coverage-summary.json',
+          line: 'lines: n/a (no coverage report)',
+        },
       },
     });
     openFlow({ doc: TWO_ENV(), errors: [], exists: true });

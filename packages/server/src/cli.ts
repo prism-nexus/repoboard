@@ -1818,7 +1818,9 @@ async function cmdSystems(args: string[], io: CliIO): Promise<number> {
  * resolved the way `card show --resolve` does (`cmdCardShow`). Unknown id (or no systems.yml at
  * all/invalid) → stderr, exit 1. `--json` returns `{ system, connections, pointers, tests }`.
  * RCB-110: `tests` (core's `SystemTests`) is printed as one line per pointer between the row and
- * the resolved refs.
+ * the resolved refs. RCB-113: `tests.measured` (source B, % lines from the gate's own coverage
+ * report) prints its own line right after `tests.line`, and each pointer line gains a `· <pct>%`
+ * or `· <reason>` suffix from `tests.measured.pointers`.
  */
 async function cmdSystemsShow(args: string[], io: CliIO): Promise<number> {
   const { values, positionals } = parse(args, { json: { type: 'boolean', default: false } });
@@ -1839,13 +1841,20 @@ async function cmdSystemsShow(args: string[], io: CliIO): Promise<number> {
   const row = formatSystemRow(doc, id);
   io.stdout.write(row ?? '');
   io.stdout.write(`${tests.line}\n`);
+  io.stdout.write(`${tests.measured.line}\n`);
   for (const pt of tests.pointers) {
+    // RCB-113: `measured.pointers` walks the SAME `pointers` array in the SAME order, so a match
+    // by pointer string is always exact — `undefined` only when this pointer had no counterpart
+    // at all (never true today, but a suffix of '' degrades safely rather than throwing).
+    const m = tests.measured.pointers.find((p) => p.pointer === pt.pointer);
+    const suffix =
+      m === undefined ? '' : m.pct !== null ? ` · ${m.pct.toFixed(1)}%` : ` · ${m.reason}`;
     if (pt.tests === null) {
-      io.stdout.write(`  ${pt.pointer}: ${pt.reason}\n`);
+      io.stdout.write(`  ${pt.pointer}: ${pt.reason}${suffix}\n`);
     } else if (pt.tests.length === 0) {
-      io.stdout.write(`  ${pt.pointer}: none\n`);
+      io.stdout.write(`  ${pt.pointer}: none${suffix}\n`);
     } else {
-      io.stdout.write(`  ${pt.pointer}: ${pt.tests.length} — ${pt.tests.join(', ')}\n`);
+      io.stdout.write(`  ${pt.pointer}: ${pt.tests.length} — ${pt.tests.join(', ')}${suffix}\n`);
     }
   }
   io.stdout.write(`  source: ${tests.source}\n`);

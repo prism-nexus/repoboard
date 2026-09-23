@@ -3,6 +3,9 @@
  * from the page) + commits (git, read live like the scanner) + coverage (RCB-110's per-system
  * test line, corpus loaded once). Every band degrades to its null state instead of throwing: an
  * empty temp dir with no `.git` and no `.repoboard/` still answers, every field null/empty.
+ *
+ * RCB-113: each coverage band line gains `· <measured.line>` — source B (the gate's own coverage
+ * report) beside source A (the static test-file count), same corpus, same null-state discipline.
  */
 import { readFile } from 'node:fs/promises';
 import { join, relative, sep } from 'node:path';
@@ -153,7 +156,7 @@ async function loadCoverage(
   const coverage = await Promise.all(
     systemsDoc.systems.map(async (s) => {
       const t = await systemTests(root, s.pointers, corpus);
-      return { id: s.id, line: t.line };
+      return { id: s.id, line: `${t.line} · ${t.measured.line}` };
     }),
   );
   return { coverage, source: SYSTEM_TESTS_SOURCE };

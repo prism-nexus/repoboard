@@ -248,9 +248,9 @@ describe('repoDashboard: coverage band — corpus read once (CONTROL)', () => {
     const dash = await repoDashboard(root, doc, NOW);
 
     expect(dash.coverage).toEqual([
-      { id: 'sys-a', line: 'tests: 1 file' },
-      { id: 'sys-b', line: 'tests: 1 file' },
-      { id: 'sys-c', line: 'tests: 1 file' },
+      { id: 'sys-a', line: 'tests: 1 file · lines: n/a (no coverage report)' },
+      { id: 'sys-b', line: 'tests: 1 file · lines: n/a (no coverage report)' },
+      { id: 'sys-c', line: 'tests: 1 file · lines: n/a (no coverage report)' },
     ]);
     expect(dash.coverageSource).toBe(SYSTEM_TESTS_SOURCE);
     // 2 test files in the tree, 3 systems asking about them: the corpus must be read ONCE for

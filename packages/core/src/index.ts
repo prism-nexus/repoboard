@@ -218,6 +218,17 @@ export {
   SYSTEM_LAYERS,
 } from './systems.js';
 export type {
+  CoverageFile,
+  CoverageReport,
+  PointerCoverage,
+  SystemCoverage,
+} from './systems-coverage.js';
+export {
+  COVERAGE_REPORT_PATH,
+  coverageForPointers,
+  parseCoverageSummary,
+} from './systems-coverage.js';
+export type {
   Candidates,
   DetectedConnection,
   DetectedSystem,

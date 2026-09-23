@@ -152,16 +152,27 @@ function useSystemTests(systemId: string, pointers: readonly string[]): SystemTe
   return state;
 }
 
+/** RCB-113: the `· <pct>%` or `· <reason>` suffix `measured.pointers` adds to a pointer's line —
+ * `''` when this pointer has no counterpart there (never true today; `measured.pointers` walks
+ * the same pointer list, in the same order). */
+function measuredSuffix(payload: SystemTestsPayload, pointer: string): string {
+  const m = payload.measured.pointers.find((p) => p.pointer === pointer);
+  if (m === undefined) return '';
+  return m.pct !== null ? ` · ${m.pct.toFixed(1)}%` : ` · ${m.reason}`;
+}
+
 /** One `<li>` per pointer, per the wire contract: a non-null `tests` gives its count and file
- * list, a null `tests` with a `reason` gives the reason, otherwise `none`. */
-function testsLine(p: SystemTestsPayload['pointers'][number]): string {
+ * list, a null `tests` with a `reason` gives the reason, otherwise `none` — plus RCB-113's
+ * measured-coverage suffix. */
+function testsLine(payload: SystemTestsPayload, p: SystemTestsPayload['pointers'][number]): string {
+  const suffix = measuredSuffix(payload, p.pointer);
   if (p.tests !== null) {
     return p.tests.length === 0
-      ? `${p.pointer} — none`
-      : `${p.pointer} — ${p.tests.length}: ${p.tests.join(', ')}`;
+      ? `${p.pointer} — none${suffix}`
+      : `${p.pointer} — ${p.tests.length}: ${p.tests.join(', ')}${suffix}`;
   }
-  if (p.reason !== null) return `${p.pointer} — ${p.reason}`;
-  return `${p.pointer} — none`;
+  if (p.reason !== null) return `${p.pointer} — ${p.reason}${suffix}`;
+  return `${p.pointer} — none${suffix}`;
 }
 
 /** Mirrors `RefsList`'s collapsed toggle (RCB-109): closed shows nothing of `tests[]`, only a
@@ -182,10 +193,11 @@ function TestsToggle({ payload }: { payload: SystemTestsPayload }) {
         <>
           <ul className="drawer__files mono">
             {payload.pointers.map((p) => (
-              <li key={p.pointer}>{testsLine(p)}</li>
+              <li key={p.pointer}>{testsLine(payload, p)}</li>
             ))}
           </ul>
           <p className="mono muted">{payload.source}</p>
+          <p className="mono muted">{payload.measured.source}</p>
         </>
       ) : null}
     </>
@@ -304,6 +316,7 @@ function SystemDrawer({ system, doc, cards, onClose, onOpenCard }: SystemDrawerP
         ) : (
           <>
             <p className="mono">{tests.tests.line}</p>
+            <p className="mono">{tests.tests.measured.line}</p>
             {tests.tests.pointers.some((p) => p.tests !== null) ? (
               <TestsToggle payload={tests.tests} />
             ) : null}

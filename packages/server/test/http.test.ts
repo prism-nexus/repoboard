@@ -966,7 +966,9 @@ connections: []
     const res = await fetch(`${server.url.replace(/\/$/, '')}/api/dashboard`);
     expect(res.status).toBe(200);
     const body = (await json(res)) as DashboardBody;
-    expect(body.coverage).toEqual([{ id: 'api', line: 'tests: 1 file' }]);
+    expect(body.coverage).toEqual([
+      { id: 'api', line: 'tests: 1 file · lines: n/a (no coverage report)' },
+    ]);
   });
 });
 

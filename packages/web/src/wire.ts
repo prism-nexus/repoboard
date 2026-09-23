@@ -62,12 +62,22 @@ export interface SystemsPayload {
  * RCB-110: `GET /api/systems/:id/tests`'s payload — one entry per pointer, whether it resolves to
  * a source file (`files` non-null) or not, plus a provenance sentence and the one-line summary
  * the drawer shows collapsed.
+ *
+ * RCB-113: `measured` rides beside it — source B, % lines covered per pointer from the gate's own
+ * coverage report, with its own provenance (the report's path and mtime) since it can go stale
+ * independently of the static `source` above it.
  */
 export interface SystemTestsPayload {
   pointers: { pointer: string; tests: string[] | null; reason: string | null }[];
   files: number | null;
   source: string;
   line: string;
+  measured: {
+    pointers: { pointer: string; pct: number | null; reason: string | null }[];
+    pct: number | null;
+    source: string;
+    line: string;
+  };
 }
 
 /**

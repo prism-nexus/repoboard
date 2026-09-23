@@ -264,3 +264,9 @@ owner's.
   correction (RCB-99 dogfood: 3 of 3 candidates on this repo). `applyDetected` (core) could drop
   an env whose environment is `none` before merging, with a test on the none-prod fixture. Filed
   2026-09-22 from the first dogfood run.
+- **K16** `serve`'s repo watcher can drop a file change that lands right after chokidar's `ready`
+  (macOS fs.watch; RCB-117 measured it in the K12 T4 test: 2 of 8 full-suite runs, watcher alive,
+  scanCount unchanged for 8000 ms, a later write rescanned normally). The initial scan also runs
+  before the watcher starts, so a file created in that gap waits for the next change. Harmless on
+  a live repo (the next save rescans); a one-shot rescan after `ready` in `repo-context.ts` would
+  close the scan→watch gap but not a dropped event. Filed 2026-09-23.

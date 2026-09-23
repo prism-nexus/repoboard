@@ -98,3 +98,22 @@ export function waitForEvent<T = unknown>(
 export function sleep(ms: number): Promise<void> {
   return new Promise((r) => setTimeout(r, ms));
 }
+
+/** Poll `pred` every `intervalMs`, resolving the first time it is true; rejects on timeout. */
+export function waitUntil(pred: () => boolean, timeoutMs: number, intervalMs = 50): Promise<void> {
+  return new Promise<void>((resolve, reject) => {
+    const start = Date.now();
+    const check = (): void => {
+      if (pred()) {
+        resolve();
+        return;
+      }
+      if (Date.now() - start >= timeoutMs) {
+        reject(new Error(`timed out after ${timeoutMs}ms`));
+        return;
+      }
+      setTimeout(check, intervalMs);
+    };
+    check();
+  });
+}

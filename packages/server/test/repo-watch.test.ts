@@ -10,7 +10,7 @@ import { promisify } from 'node:util';
 import { afterEach, describe, expect, it } from 'vitest';
 import { startServer } from '../src/http.js';
 import { openStore } from '../src/store.js';
-import { makeTempDir, sleep } from './helpers.js';
+import { makeTempDir, sleep, waitUntil } from './helpers.js';
 
 const execFileAsync = promisify(execFile);
 const cleanups: Array<() => Promise<void>> = [];
@@ -117,9 +117,18 @@ describe('K12 T4: an untracked-but-not-ignored new file still triggers a rescan'
     const { server } = await rigOn(root, {});
 
     const scanCountBefore = server.scanCount();
-    await writeFile(join(root, 'fresh.txt'), 'new\n');
-    await sleep(2500); // longer than the 2000ms default debounce
+    // RCB-117: the first write right after `ready` can be dropped by fs.watch on macOS
+    // (measured: 2/8 full-suite runs, watcher alive, a later write rescans); re-writing proves
+    // the file is watched without depending on that first event. Each wait (3000ms) must outlast the
+    // 2000ms debounce: a re-write resets that timer. Bound 3 x 3000ms.
+    const cond = (): boolean =>
+      server.scanCount() > scanCountBefore &&
+      (server.repo()?.files.some((f) => f.path === 'fresh.txt') ?? false);
+    for (let attempt = 0; attempt < 3 && !cond(); attempt++) {
+      await writeFile(join(root, 'fresh.txt'), 'new\n');
+      await waitUntil(cond, 3000).catch(() => {});
+    }
     expect(server.scanCount()).toBeGreaterThan(scanCountBefore);
     expect(server.repo()?.files.map((f) => f.path)).toContain('fresh.txt');
-  });
+  }, 12000);
 });

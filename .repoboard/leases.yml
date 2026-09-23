@@ -1,2 +1,6 @@
-leases: []
+leases:
+  - resource: RCB-113
+    holder: repoboard builder
+    since: 2026-09-23T03:33:01Z
+    note: coverage in gate + systems source B
 windows: []

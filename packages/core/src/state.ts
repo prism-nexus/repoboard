@@ -36,8 +36,19 @@ export type StateParseResult = { ok: true; doc: StateDoc } | { ok: false; error:
 
 /** A freshly scaffolded STATE.md's section bodies (`init --practices`, locked decision 3). */
 export const SECTION_PLACEHOLDER = '_(nothing recorded yet)_';
-/** What the FILE keeps under OWNER QUEUE — the generated content never touches disk. */
+/**
+ * The DISPLAY path's "queue is empty" text (`renderOwnerQueue`) — the generated content never
+ * touches disk. RCB-118: NOT what the file on disk keeps; see `OWNER_QUEUE_FILE_PLACEHOLDER`.
+ */
 export const OWNER_QUEUE_PLACEHOLDER = '_(generated from open decisions)_';
+/**
+ * RCB-118: what the ON-DISK file actually writes under OWNER QUEUE — distinct from
+ * `OWNER_QUEUE_PLACEHOLDER` (the DISPLAY path's "queue is empty" text) so a raw-file reader can
+ * never mistake "not stored here" for "empty". Parsing discards OWNER QUEUE content regardless of
+ * which placeholder is on disk, so a file carrying the OLD placeholder still parses.
+ */
+export const OWNER_QUEUE_FILE_PLACEHOLDER =
+  '_(not stored in this file — generated from open decisions: run `repoboard state`)_';
 
 const STAMP_LINE = /^\*\*Written (\S+) by (.+)\.\*\*\s*$/m;
 const HEADINGS = ['## LIVE', '## LAST LANDINGS', '## OWNER QUEUE', '## SEATS'] as const;
@@ -162,7 +173,7 @@ export function renderState(
 
 /** The ON-DISK rendering: OWNER QUEUE is always the placeholder, never generated content. */
 function renderStateFile(sections: StateSections, opts: { now: Date; actor: string }): string {
-  return renderTemplate(sections, OWNER_QUEUE_PLACEHOLDER, opts);
+  return renderTemplate(sections, OWNER_QUEUE_FILE_PLACEHOLDER, opts);
 }
 
 /** A freshly scaffolded STATE.md (`init --practices`, locked decision 3): every section a placeholder. */

@@ -555,7 +555,11 @@ describe('state and log (P8.3)', () => {
     expect(store.state()).toEqual(res.doc);
     const text = await readFile(join(repo.root, '.repoboard', 'STATE.md'), 'utf8');
     expect(text).toContain('Tree is dev.');
-    expect(text).toContain('_(generated from open decisions)_');
+    // RCB-118: the ON-DISK file writes the FILE placeholder, not the DISPLAY one — a raw-file
+    // reader must never mistake "not stored here" for "queue is empty".
+    expect(text).toContain(
+      '_(not stored in this file — generated from open decisions: run `repoboard state`)_',
+    );
 
     const second = await store.setStateSection('seats', 'ops watching.', 'claude/ops');
     expect(second.ok).toBe(true);

@@ -226,7 +226,7 @@ Tree: dev = origin/main = e000c5d.
 
 ## OWNER QUEUE
 
-_(generated from open decisions)_
+_(not stored in this file — generated from open decisions: run `repoboard state`)_
 
 ## SEATS
 

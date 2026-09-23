@@ -10,6 +10,7 @@ import {
   checkFindings,
   exitCodeForFindings,
   initialStateText,
+  OWNER_QUEUE_FILE_PLACEHOLDER,
   OWNER_QUEUE_PLACEHOLDER,
   ownerQueueLine,
   parseState,
@@ -85,22 +86,35 @@ describe('initialStateText', () => {
         },
       },
     });
-    expect(text).toContain(`## OWNER QUEUE\n\n${OWNER_QUEUE_PLACEHOLDER}`);
+    // RCB-118: the ON-DISK file writes the FILE placeholder, never the DISPLAY one — a raw-file
+    // reader must never mistake "not stored here" for "queue is empty".
+    expect(text).toContain(`## OWNER QUEUE\n\n${OWNER_QUEUE_FILE_PLACEHOLDER}`);
+    expect(text).not.toContain(OWNER_QUEUE_PLACEHOLDER);
   });
 });
 
 describe('parseState / renderState round-trip', () => {
-  it('round-trips a hand-written page, generated OWNER QUEUE substituted on render', () => {
-    const text = initialStateText({ now: NOW, actor: ACTOR });
-    const parsed = parseState(text);
-    expect(parsed.ok).toBe(true);
-    if (!parsed.ok) return;
-    const rendered = renderState(parsed.doc.sections, [], {
-      now: new Date(Date.parse(parsed.doc.stamp)),
-      actor: parsed.doc.actor,
-    });
-    expect(rendered).toBe(text);
-  });
+  it(
+    'round-trips a hand-written page: every section but OWNER QUEUE identical; RCB-118: OWNER ' +
+      'QUEUE differs even with no open decisions — file says "not stored here", display says "empty"',
+    () => {
+      const text = initialStateText({ now: NOW, actor: ACTOR });
+      const parsed = parseState(text);
+      expect(parsed.ok).toBe(true);
+      if (!parsed.ok) return;
+      const rendered = renderState(parsed.doc.sections, [], {
+        now: new Date(Date.parse(parsed.doc.stamp)),
+        actor: parsed.doc.actor,
+      });
+      expect(text).toContain(OWNER_QUEUE_FILE_PLACEHOLDER);
+      expect(rendered).toContain(OWNER_QUEUE_PLACEHOLDER);
+      expect(rendered).not.toBe(text);
+      // Every OTHER byte is identical — only the OWNER QUEUE body differs between the two.
+      expect(rendered.replace(OWNER_QUEUE_PLACEHOLDER, '')).toBe(
+        text.replace(OWNER_QUEUE_FILE_PLACEHOLDER, ''),
+      );
+    },
+  );
 
   it('OWNER QUEUE is generated from cards that need a decision, not from the file', () => {
     const text = [
@@ -139,6 +153,43 @@ describe('parseState / renderState round-trip', () => {
     expect(rendered).toContain('Tree is dev.');
     expect(rendered).toContain('K117 landed.');
     expect(rendered).toContain('ops watching.');
+  });
+
+  it('RCB-118: a file carrying the OLD on-disk placeholder still parses (never a stale-format refusal)', () => {
+    const text = [
+      '# STATE',
+      '',
+      '**Written 2026-09-17T20:00:00Z by claude/ops.**',
+      '',
+      '## LIVE',
+      '',
+      'Tree is dev.',
+      '',
+      '## LAST LANDINGS',
+      '',
+      'K117 landed.',
+      '',
+      '## OWNER QUEUE',
+      '',
+      OWNER_QUEUE_PLACEHOLDER,
+      '',
+      '## SEATS',
+      '',
+      'ops watching.',
+    ].join('\n');
+    const parsed = parseState(text);
+    expect(parsed).toEqual({
+      ok: true,
+      doc: {
+        stamp: '2026-09-17T20:00:00Z',
+        actor: 'claude/ops',
+        sections: {
+          live: 'Tree is dev.',
+          lastLandings: 'K117 landed.',
+          seats: 'ops watching.',
+        },
+      },
+    });
   });
 
   it('missing the stamp line is an error, never a throw', () => {
@@ -257,7 +308,7 @@ describe('setStateSection: restamps and touches nothing else', () => {
   it('the OWNER QUEUE placeholder on disk is never replaced by setStateSection', () => {
     const before = initialStateText({ now: NOW, actor: ACTOR });
     const res = setStateSection(before, 'live', 'x', { now: NOW, actor: ACTOR });
-    expect(res.ok && res.text).toContain(OWNER_QUEUE_PLACEHOLDER);
+    expect(res.ok && res.text).toContain(OWNER_QUEUE_FILE_PLACEHOLDER);
   });
 });
 

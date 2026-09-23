@@ -2297,12 +2297,16 @@ describe('repoboard seat', () => {
     // RCB-89: SeatBundle gained inFlight/owes — updated here, per the brief, rather than left stale.
     // RCB-103: SeatBundle gained nextCardStep — updated here too, same reason.
     // RCB-97: SeatBundle gained systems (the one-line summary) — updated here, same reason.
+    // RCB-118: SeatBundle gained nextCardEmpty — updated here too, same reason (not itself an
+    // on-disk assertion, but a direct, mechanical consequence of the seat.ts change this brief
+    // authorized — left stale it would fail this test for a reason unrelated to the brief).
     expect(Object.keys(parsed).sort()).toEqual(
       [
         'coordinatorBlock',
         'inFlight',
         'name',
         'nextCard',
+        'nextCardEmpty',
         'nextCardReason',
         'nextCardStep',
         'openDecisions',
@@ -2375,7 +2379,10 @@ describe('repoboard seat', () => {
     expect(res.out).toContain('(no SEATS line mentions builder)');
     expect(res.out).toContain('(no log block for builder)');
     expect(res.out).toContain('(no log block for coordinator)');
-    expect(res.out).toContain('(no todo card)');
+    // RCB-118: WHY there's no todo card — a cold, empty board is 0/0/0, printed not omitted.
+    expect(res.out).toContain(
+      '(no todo card for builder — 0 todo assigned to other seats · 0 gated · 0 waiting on the owner)',
+    );
     expect(res.out).toContain('(none)');
   });
 

@@ -63,6 +63,12 @@ export interface SeatBundle {
   nextCardStep: { parentId: string; gateBy: string | null } | null;
   /** `needsDecision(c)`, list order — reused from `decisions.ts`, never re-derived. */
   openDecisions: Card[];
+  /**
+   * RCB-118: non-null exactly when `nextCard` is null — a cold seat's "there is no todo card for
+   * you" broken into WHY, so it can tell an empty board from one whose work is gated, owner-held,
+   * or someone else's. `awaitingOwner` reuses `openDecisions.length` — never re-derived.
+   */
+  nextCardEmpty: { todoForOthers: number; gated: number; awaitingOwner: number } | null;
   /** RCB-83: `.repoboard/local/RIG.md`'s text, `null` when there is none. */
   rig: string | null;
   /** RCB-89: `parseSeatFields(seatsLine)` when `seatsLine` is non-null, else `null`. */
@@ -491,6 +497,28 @@ export function seatBundle(input: SeatBundleInput): SeatBundle {
 
   const openDecisions = input.cards.filter((c) => needsDecision(c));
 
+  /**
+   * RCB-118: WHY `nextCard` is null, computed only in that case (never for a seat that has a next
+   * card — the empty-board question does not apply to it). `todoForOthers` mirrors `assigned`'s
+   * own matching (case-insensitive, trimmed) but the opposite way: assignee set AND not this seat.
+   * `gated` walks every non-done card, not just todo — a card in ANY non-done column can be gated.
+   */
+  const nextCardEmpty =
+    nextCard !== null
+      ? null
+      : {
+          todoForOthers: todoCards.filter((c) => {
+            const a = (c.assignee ?? '').trim().toLowerCase();
+            return a !== '' && a !== wantedAssignee;
+          }).length,
+          gated: input.cards.filter(
+            (c) =>
+              findColumn(config, c.status)?.done !== true &&
+              blockedReason(c, input.cards, config) !== null,
+          ).length,
+          awaitingOwner: openDecisions.length,
+        };
+
   const fields = seatsLine !== null ? parseSeatFields(seatsLine) : { inFlight: null, owes: null };
 
   return {
@@ -502,6 +530,7 @@ export function seatBundle(input: SeatBundleInput): SeatBundle {
     nextCardReason,
     nextCardStep: nextCardReason === 'parent-step' ? nextCardStep : null,
     openDecisions,
+    nextCardEmpty,
     rig: input.rig ?? null,
     inFlight: fields.inFlight,
     owes: fields.owes,
@@ -558,6 +587,11 @@ export function renderSeatBundle(b: SeatBundle, now: Date): string {
           : b.nextCardReason === 'priority'
             ? `(first ${b.nextCard.priority}-priority todo)`
             : '(first todo; nothing assigned, nothing prioritised)',
+    );
+  } else if (b.nextCardEmpty) {
+    const { todoForOthers, gated, awaitingOwner } = b.nextCardEmpty;
+    lines.push(
+      `(no todo card for ${b.name} — ${todoForOthers} todo assigned to other seats · ${gated} gated · ${awaitingOwner} waiting on the owner)`,
     );
   } else {
     lines.push('(no todo card)');

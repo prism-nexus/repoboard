@@ -585,6 +585,83 @@ describe('seatBundle: openDecisions', () => {
   });
 });
 
+function decisionCard(id: string): Card {
+  return card({
+    id,
+    status: 'backlog',
+    decision: {
+      question: 'pick one',
+      options: [],
+      askedBy: 'coordinator',
+      askedAt: '2026-09-18T20:00:00Z',
+      returnTo: null,
+      chosen: null,
+      words: null,
+      decidedBy: null,
+      decidedAt: null,
+    },
+  });
+}
+
+describe('seatBundle: nextCardEmpty (RCB-118)', () => {
+  it('non-null with distinct counts: 1 todo for another seat, 2 gated, 3 awaiting the owner', () => {
+    const cards: Card[] = [
+      card({ id: 'RCB-1', status: 'todo', assignee: 'ops', title: 'not mine' }),
+      card({ id: 'RCB-2', status: 'doing', gate: 'RCB-999', title: 'gated a' }),
+      card({ id: 'RCB-3', status: 'doing', gate: 'RCB-998', title: 'gated b' }),
+      decisionCard('RCB-4'),
+      decisionCard('RCB-5'),
+      decisionCard('RCB-6'),
+    ];
+    const bundle = seatBundle({
+      name: 'builder',
+      now: NOW,
+      seatsSection: null,
+      ownBlock: null,
+      coordinatorBlock: null,
+      cards,
+    });
+    expect(bundle.nextCard).toBeNull();
+    expect(bundle.nextCardEmpty).toEqual({ todoForOthers: 1, gated: 2, awaitingOwner: 3 });
+    const rendered = renderSeatBundle(bundle, NOW);
+    expect(rendered).toContain(
+      '(no todo card for builder — 1 todo assigned to other seats · 2 gated · 3 waiting on the owner)',
+    );
+  });
+
+  it('an all-zero empty board: nextCardEmpty is all zeros, printed as 0 not omitted', () => {
+    const cards: Card[] = [];
+    const bundle = seatBundle({
+      name: 'builder',
+      now: NOW,
+      seatsSection: null,
+      ownBlock: null,
+      coordinatorBlock: null,
+      cards,
+    });
+    expect(bundle.nextCard).toBeNull();
+    expect(bundle.nextCardEmpty).toEqual({ todoForOthers: 0, gated: 0, awaitingOwner: 0 });
+    const rendered = renderSeatBundle(bundle, NOW);
+    expect(rendered).toContain(
+      '(no todo card for builder — 0 todo assigned to other seats · 0 gated · 0 waiting on the owner)',
+    );
+  });
+
+  it('null when a next card exists — the empty-board question does not apply', () => {
+    const cards: Card[] = [card({ id: 'RCB-1', status: 'todo', title: 'first todo, unassigned' })];
+    const bundle = seatBundle({
+      name: 'builder',
+      now: NOW,
+      seatsSection: null,
+      ownBlock: null,
+      coordinatorBlock: null,
+      cards,
+    });
+    expect(bundle.nextCard).not.toBeNull();
+    expect(bundle.nextCardEmpty).toBeNull();
+  });
+});
+
 describe('renderSeatBundle: placeholders for every missing part', () => {
   it('an entirely empty bundle renders a one-line placeholder per section, never an empty section', () => {
     const bundle: SeatBundle = {
@@ -596,6 +673,7 @@ describe('renderSeatBundle: placeholders for every missing part', () => {
       nextCardReason: null,
       nextCardStep: null,
       openDecisions: [],
+      nextCardEmpty: null,
       rig: null,
       inFlight: null,
       owes: null,
@@ -629,6 +707,7 @@ describe('renderSeatBundle: placeholders for every missing part', () => {
       nextCardReason: 'first-todo',
       nextCardStep: null,
       openDecisions: [],
+      nextCardEmpty: null,
       rig: null,
       inFlight: null,
       owes: null,

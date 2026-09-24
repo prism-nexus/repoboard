@@ -951,6 +951,14 @@ export function mergeCandidates(parts: Candidates[]): Candidates {
 // applyDetected / staleDetected
 // ---------------------------------------------------------------------------------------------
 
+/** K15: drop every env whose `doc.environments[env]` is `{ none }` — a prod-none repo should not
+ * need a hand edit on every detected row or connection. Inert rule: never write an empty env
+ * list; if filtering would empty it, keep the candidate's env unchanged. */
+function filterNoneEnvs(doc: SystemsDoc, env: SystemEnv[]): SystemEnv[] {
+  const filtered = env.filter((e) => !('none' in doc.environments[e]));
+  return filtered.length === 0 ? env : filtered;
+}
+
 export function applyDetected(
   doc: SystemsDoc,
   c: Candidates,
@@ -969,7 +977,7 @@ export function applyDetected(
         name: cand.name,
         kind: cand.kind,
         layer: cand.layer,
-        env: cand.env,
+        env: filterNoneEnvs(doc, cand.env),
         runtime: { dev: cand.runtime.dev ?? null, prod: cand.runtime.prod ?? null },
         owner: null,
         pointers: cand.pointers,
@@ -991,7 +999,7 @@ export function applyDetected(
       name: cand.name,
       kind: cand.kind,
       layer: cand.layer,
-      env: cand.env,
+      env: filterNoneEnvs(doc, cand.env),
       runtime: { dev: cand.runtime.dev ?? null, prod: cand.runtime.prod ?? null },
       owner: existing.owner,
       pointers: cand.pointers,
@@ -1011,7 +1019,7 @@ export function applyDetected(
         from: cand.from,
         to: cand.to,
         via: cand.via,
-        env: cand.env,
+        env: filterNoneEnvs(doc, cand.env),
         source: { detected: cand.detected, at },
       });
       added.push(key);
@@ -1027,7 +1035,7 @@ export function applyDetected(
       from: cand.from,
       to: cand.to,
       via: cand.via,
-      env: cand.env,
+      env: filterNoneEnvs(doc, cand.env),
       source: { detected: cand.detected, at },
     };
     updated.push(key);

@@ -17,6 +17,9 @@ import {
   formatDetectReport,
   mergeCandidates,
   parseSystems,
+  type SystemEnv,
+  type SystemRow,
+  type SystemsDoc,
   serializeSystems,
   staleDetected,
   toSystemId,
@@ -851,6 +854,96 @@ describe('systems detect (RCB-96)', () => {
       const first = applyDetected(twoEnvDoc(), candidates(), AT);
       const second = applyDetected(first.doc, candidates(), AT);
       expect(serializeSystems(second.doc)).toEqual(serializeSystems(first.doc));
+    });
+  });
+
+  describe('applyDetected — K15 drops a none environment', () => {
+    const K15_AT = '2026-09-24T00:00:00Z';
+
+    const noneProdDoc = (systems: SystemRow[] = []): SystemsDoc => ({
+      environments: { dev: { note: 'local dev' }, prod: { none: 'no prod by design' } },
+      systems,
+      connections: [],
+    });
+
+    const bothNotesDoc = (systems: SystemRow[] = []): SystemsDoc => ({
+      environments: { dev: { note: 'local dev' }, prod: { note: 'Cloudflare Workers' } },
+      systems,
+      connections: [],
+    });
+
+    const svcCandidate = (env: SystemEnv[]): Candidates => ({
+      ...emptyCandidates(),
+      systems: [
+        {
+          id: 'svc',
+          name: 'service',
+          kind: 'service',
+          layer: 'app',
+          env,
+          runtime: { dev: 'node server', prod: null },
+          pointers: ['apps/svc/src'],
+          detected: 'package.json@svc',
+        },
+      ],
+    });
+
+    it('add branch: prod none drops prod, [dev, prod] candidate → added row env [dev]', () => {
+      const result = applyDetected(noneProdDoc(), svcCandidate(['dev', 'prod']), K15_AT);
+      expect(result.added).toEqual(['svc']);
+      const row = result.doc.systems.find((s) => s.id === 'svc');
+      expect(row?.env).toEqual(['dev']);
+    });
+
+    it('update branch: prod none drops prod on an existing detected row', () => {
+      const existing: SystemRow = {
+        id: 'svc',
+        name: 'service v1',
+        kind: 'service',
+        layer: 'app',
+        env: ['dev', 'prod'],
+        runtime: { dev: 'node server', prod: 'node server' },
+        owner: null,
+        pointers: ['apps/svc/src'],
+        docs: [],
+        why: null,
+        source: { detected: 'package.json@svc', at: '2026-09-01T00:00:00Z' },
+      };
+      const result = applyDetected(noneProdDoc([existing]), svcCandidate(['dev', 'prod']), K15_AT);
+      expect(result.updated).toEqual(['svc']);
+      const row = result.doc.systems.find((s) => s.id === 'svc');
+      expect(row?.env).toEqual(['dev']);
+    });
+
+    it('both envs have notes: env unchanged [dev, prod] (no over-filtering)', () => {
+      const result = applyDetected(bothNotesDoc(), svcCandidate(['dev', 'prod']), K15_AT);
+      const row = result.doc.systems.find((s) => s.id === 'svc');
+      expect(row?.env).toEqual(['dev', 'prod']);
+    });
+
+    it('inert rule: candidate [prod] only with prod none keeps env [prod]', () => {
+      const result = applyDetected(noneProdDoc(), svcCandidate(['prod']), K15_AT);
+      const row = result.doc.systems.find((s) => s.id === 'svc');
+      expect(row?.env).toEqual(['prod']);
+    });
+
+    it('connection add branch: prod none drops prod, [dev, prod] candidate → added connection env [dev]', () => {
+      const connCandidate: Candidates = {
+        ...emptyCandidates(),
+        connections: [
+          {
+            from: 'cli',
+            to: 'svc',
+            via: 'child process',
+            env: ['dev', 'prod'],
+            detected: 'package.json@svc',
+          },
+        ],
+      };
+      const result = applyDetected(noneProdDoc(), connCandidate, K15_AT);
+      expect(result.added).toEqual(['cli→svc']);
+      const conn = result.doc.connections.find((c) => c.from === 'cli' && c.to === 'svc');
+      expect(conn?.env).toEqual(['dev']);
     });
   });
 

@@ -208,6 +208,12 @@ repoboard`.<!-- /npm:omit --> `repoboard@0.2.0` packs to a 339.7 kB tarball of 8
 published, bundled into the CLI (`packages/server/tsup.config.ts`'s `noExternal`) — depend on
 `repoboard`.
 
+Install-time weight, not tarball weight: installing `repoboard` resolves 98 production transitive packages for
+`packages/server` (`pnpm-lock.yaml`, measured 2026-09-24); 93 exist only because of the SDK's HTTP/OAuth
+transport (express, hono, ajv, jose, eventsource, and their own deps) — about 23.8 MB of `node_modules/.pnpm`
+(the SDK package itself is 5.9 MB of that). `mcp.ts` imports only `McpServer` and `StdioServerTransport`, the
+stdio transport; a dependency-free stdio implementation removing this weight is planned (`.repoboard/cards/RCB-152.md`).
+
 ## Known issues
 (numbered `K1` upward; a commit that closes one says `Closes K<n>` and edits this list)
 - ~~**K1** A card whose `title:` contains a colon is invalid YAML unless quoted~~ Closed

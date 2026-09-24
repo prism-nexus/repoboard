@@ -5,7 +5,7 @@ import { basename, dirname, join } from 'node:path';
 import { promisify } from 'node:util';
 import { type Card, defaultBoardConfig, parseBoard, serializeBoard, toIso } from '@repoboard/core';
 import { afterEach, describe, expect, it } from 'vitest';
-import { findRoot, formatStepsTable, formatTable, run } from '../src/cli.js';
+import { findRoot, formatCrash, formatStepsTable, formatTable, run } from '../src/cli.js';
 import { cardText, makeTempDir, makeTempRepoboard, makeTempRepoNoBoard, NOW } from './helpers.js';
 
 const execFileAsync = promisify(execFile);
@@ -342,17 +342,108 @@ describe('repoboard card', () => {
 });
 
 describe('repoboard help and errors', () => {
-  it('--help exits 0, no args exits 1 with help, unknown command exits 1', async () => {
+  it('--help exits 0, unknown command exits 1', async () => {
     const root = await freshRepo();
     const help = await repoboard(root, '--help');
     expect(help.code).toBe(0);
     expect(help.out).toContain('repoboard card move');
-    expect((await repoboard(root)).code).toBe(1);
     const unknown = await repoboard(root, 'frobnicate');
     expect(unknown.code).toBe(1);
     expect(unknown.err).toMatch(/unknown command "frobnicate"/);
     expect((await repoboard(root, 'card', 'nope')).code).toBe(1);
     expect((await repoboard(root, '--version')).out).toMatch(/^\d+\.\d+\.\d+\n$/);
+  });
+
+  // RCB-134: a bare `repoboard` used to print all 212 HELP lines and exit 1. Now it is a short
+  // quickstart, exit 0 — the old assertion (`.code`.toBe(1)) is gone; this replaces it.
+  it('bare run: exit 0, a short quickstart (<=10 lines), mentions `repoboard init`', async () => {
+    const root = await freshRepo();
+    const bare = await repoboard(root);
+    expect(bare.code).toBe(0);
+    const lines = bare.out.split('\n').filter((l) => l.length > 0);
+    expect(lines.length).toBeLessThanOrEqual(10);
+    expect(bare.out).toContain('repoboard init');
+  });
+
+  // RCB-134: `--help`/`-h` after a known command prints just that command's usage block (derived
+  // from the one HELP string by `usageFor`) and exits 0 — never the old
+  // `Unknown option '--help'. To specify a positional argument...` parseArgs message.
+  it("`<cmd> --help` / `-h` prints that command's usage and exits 0, no store opened", async () => {
+    const root = await freshRepo();
+    const seatHelp = await repoboard(root, 'seat', '--help');
+    expect(seatHelp.code).toBe(0);
+    expect(seatHelp.out).toContain('repoboard seat');
+    expect(seatHelp.out).not.toMatch(/Unknown option/);
+
+    const cardAddHelp = await repoboard(root, 'card', 'add', '--help');
+    expect(cardAddHelp.code).toBe(0);
+    expect(cardAddHelp.out).toContain('repoboard card add');
+    expect(cardAddHelp.out).not.toMatch(/Unknown option/);
+
+    const leaseHelp = await repoboard(root, 'lease', '-h');
+    expect(leaseHelp.code).toBe(0);
+    expect(leaseHelp.out).toContain('repoboard lease');
+    expect(leaseHelp.out).not.toMatch(/Unknown option/);
+  });
+
+  // RCB-134: an unknown flag now names the command, shows its usage block, and points at
+  // `--help` — never a bare, unattributed node:util parseArgs message.
+  it('an unknown flag names the command and shows its usage block', async () => {
+    const root = await freshRepo();
+    const res = await repoboard(root, 'card', 'list', '--bogus');
+    expect(res.code).toBe(1);
+    expect(res.err.startsWith('repoboard card:')).toBe(true);
+    expect(res.err).toContain('repoboard card list');
+    expect(res.err).toContain('run `repoboard --help` for every command');
+  });
+
+  // RCB-134: an escaped, non-UserError exception used to print Node's raw stack (absolute
+  // paths) unconditionally. Now it is one line unless REPOBOARD_DEBUG=1. `formatCrash` is
+  // exported from cli.ts specifically so this is tested as a function, not by spawning a
+  // process — `run()` is already exercised in-process by every other test in this file via the
+  // `repoboard()` helper above.
+  it('formatCrash: one line by default, the stack only with debug=true', async () => {
+    const e = new Error('kaboom');
+    const plain = formatCrash(e, false);
+    expect(plain).toBe('repoboard: crash: kaboom\n');
+    expect(plain).not.toMatch(/ {4}at /);
+    const debugged = formatCrash(e, true);
+    expect(debugged).toContain('repoboard: crash:');
+    expect(debugged).toMatch(/ {4}at /);
+  });
+
+  // Integration: a genuine (non-UserError) exception thrown while handling a command reaches
+  // run()'s own catch and comes out through formatCrash, gated on REPOBOARD_ACTOR's sibling
+  // env var REPOBOARD_DEBUG — not just formatCrash in isolation.
+  it('a real crash through run(): no stack by default, the stack with REPOBOARD_DEBUG=1', async () => {
+    const root = await freshRepo({ 'RB-1.md': cardText('RB-1', 'todo') });
+    const throwingStdout = {
+      write() {
+        throw new Error('stdout exploded');
+      },
+    };
+    const stderr = new Sink();
+    const code = await run(['card', 'list'], {
+      cwd: root,
+      stdout: throwingStdout,
+      stderr,
+      env: { REPOBOARD_ACTOR: 'test-actor' },
+      now: () => NOW,
+    });
+    expect(code).toBe(2);
+    expect(stderr.text).toMatch(/^repoboard: crash: stdout exploded\n$/);
+    expect(stderr.text).not.toMatch(/ {4}at /);
+
+    const stderrDebug = new Sink();
+    const codeDebug = await run(['card', 'list'], {
+      cwd: root,
+      stdout: throwingStdout,
+      stderr: stderrDebug,
+      env: { REPOBOARD_ACTOR: 'test-actor', REPOBOARD_DEBUG: '1' },
+      now: () => NOW,
+    });
+    expect(codeDebug).toBe(2);
+    expect(stderrDebug.text).toMatch(/ {4}at /);
   });
 });
 

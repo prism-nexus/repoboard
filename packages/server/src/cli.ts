@@ -104,6 +104,13 @@ export interface CliIO {
 /** A mistake by the caller: printed as one line, exit 1. */
 export class UserError extends Error {}
 
+/**
+ * RCB-134: a `parse()` failure specifically (unknown flag, missing value) — a `UserError`
+ * subclass so `run()`'s catch can give it the command's usage block instead of the bare
+ * one-line message every other `UserError` gets.
+ */
+export class ParseError extends UserError {}
+
 const HELP = `repoboard — Remember · Connect · Build
 
 Usage:
@@ -316,6 +323,17 @@ Usage:
 
 Actor for --as defaults to $REPOBOARD_ACTOR, then $USER, then "cli"; for mcp: $REPOBOARD_ACTOR, then "mcp".
 Exception: log takes no $USER/"cli" fallback — it needs --as or $REPOBOARD_ACTOR.
+Set REPOBOARD_DEBUG=1 to print the full stack trace on an unexpected crash (exit 2).
+`;
+
+/** RCB-134: printed for a bare `repoboard` and above the full `Usage:` on `--help`. ≤ 8 lines. */
+const QUICKSTART = `repoboard quickstart:
+  repoboard init                               create .repoboard/, a board, a first card
+  repoboard card add "<title>"                 add a card
+  repoboard card move <id> <status>            move it
+  repoboard serve --open                       open the dashboard
+  claude mcp add repoboard -- npx repoboard mcp  wire repoboard into Claude Code
+  repoboard --help for every command
 `;
 
 const PRIORITIES: ReadonlySet<string> = new Set(['high', 'medium', 'low']);
@@ -323,12 +341,60 @@ const SIZES: ReadonlySet<string> = new Set(['S', 'M', 'L', 'XL']);
 
 type Options = NonNullable<ParseArgsConfig['options']>;
 
-function parse<T extends Options>(args: string[], options: T) {
+function parse<T extends Options>(cmd: string, args: string[], options: T) {
   try {
     return parseArgs({ args, options, allowPositionals: true, strict: true });
   } catch (e) {
-    throw new UserError((e as Error).message);
+    throw new ParseError(`repoboard ${cmd}: ${firstSentence((e as Error).message)}`);
   }
+}
+
+/** Up to and including the first `.`; the whole message when there is none. */
+function firstSentence(message: string): string {
+  return message.match(/^[^.]*\./)?.[0] ?? message;
+}
+
+/**
+ * RCB-134: derives one command's `Usage:` block straight from `HELP` — the ONE source of that
+ * text. A block is a `  repoboard <cmd> [<sub>]…` header line plus its indented continuation
+ * lines, up to the next `  repoboard ` line (or the end of the Usage section).
+ *
+ * With `sub` given, returns the block(s) whose header's second token is exactly `sub` (e.g.
+ * `usageFor('card', 'add')` → just the `card add` block). With no exact match — `sub` is a
+ * positional value, not a subcommand keyword (`seat <name>`), or `sub` is omitted — returns
+ * every block for `cmd`. `null` when `cmd` has no block at all (not a known command).
+ */
+function usageFor(cmd: string, sub?: string): string | null {
+  const lines = HELP.split('\n');
+  const start = lines.indexOf('Usage:');
+  if (start === -1) return null;
+  const blocks: string[][] = [];
+  let current: string[] | null = null;
+  for (let i = start + 1; i < lines.length; i++) {
+    const line = lines[i] as string;
+    if (line.startsWith('Actor for --as defaults')) break;
+    if (/^ {2}repoboard /.test(line)) {
+      current = [line];
+      blocks.push(current);
+    } else if (current) {
+      current.push(line);
+    }
+  }
+  const forCmd = blocks.filter((b) => (b[0] as string).trim().split(/\s+/)[1] === cmd);
+  if (forCmd.length === 0) return null;
+  const exact =
+    sub === undefined ? [] : forCmd.filter((b) => (b[0] as string).trim().split(/\s+/)[2] === sub);
+  const chosen = exact.length > 0 ? exact : forCmd;
+  return chosen
+    .map((b) => b.join('\n'))
+    .join('\n')
+    .replace(/\n+$/, '');
+}
+
+/** RCB-134: the crash line — the message alone, unless `debug` asks for the stack too. */
+export function formatCrash(e: unknown, debug: boolean): string {
+  const err = e instanceof Error ? e : new Error(String(e));
+  return `repoboard: crash: ${debug ? (err.stack ?? err.message) : err.message}\n`;
 }
 
 /** Walk up from `cwd` to the nearest directory containing `.repoboard/`. */
@@ -485,7 +551,7 @@ async function scaffoldPractices(root: string, io: CliIO): Promise<void> {
 }
 
 async function cmdInit(args: string[], io: CliIO): Promise<number> {
-  const { values } = parse(args, { practices: { type: 'boolean', default: false } });
+  const { values } = parse('init', args, { practices: { type: 'boolean', default: false } });
   const root = resolve(io.cwd);
   const repoboardDir = join(root, '.repoboard');
   const present = await stat(repoboardDir).then(
@@ -523,7 +589,7 @@ async function cmdInit(args: string[], io: CliIO): Promise<number> {
 }
 
 async function cmdCardAdd(args: string[], io: CliIO): Promise<number> {
-  const { values, positionals } = parse(args, {
+  const { values, positionals } = parse('card', args, {
     status: { type: 'string' },
     assignee: { type: 'string' },
     priority: { type: 'string' },
@@ -563,7 +629,7 @@ async function cmdCardAdd(args: string[], io: CliIO): Promise<number> {
 }
 
 async function cmdCardMove(args: string[], io: CliIO): Promise<number> {
-  const { values, positionals } = parse(args, { as: { type: 'string' } });
+  const { values, positionals } = parse('card', args, { as: { type: 'string' } });
   const [id, status] = positionals;
   if (!id || !status) throw new UserError('usage: repoboard card move <id> <status>');
   const root = await requireRoot(io);
@@ -634,7 +700,7 @@ function setOrClear<T>(
  * two replace would be a worse bug than the missing command. Status is not a field here.
  */
 async function cmdCardUpdate(args: string[], io: CliIO): Promise<number> {
-  const { values, positionals } = parse(args, {
+  const { values, positionals } = parse('card', args, {
     title: { type: 'string' },
     assignee: { type: 'string' },
     priority: { type: 'string' },
@@ -711,7 +777,7 @@ function parseOptionFlag(raw: string): DecisionOption {
 }
 
 async function cmdCardAsk(args: string[], io: CliIO): Promise<number> {
-  const { values, positionals } = parse(args, {
+  const { values, positionals } = parse('card', args, {
     option: { type: 'string', multiple: true },
     as: { type: 'string' },
     replace: { type: 'boolean', default: false },
@@ -744,7 +810,7 @@ async function cmdCardAsk(args: string[], io: CliIO): Promise<number> {
 }
 
 async function cmdCardDecide(args: string[], io: CliIO): Promise<number> {
-  const { values, positionals } = parse(args, {
+  const { values, positionals } = parse('card', args, {
     words: { type: 'string' },
     as: { type: 'string' },
   });
@@ -768,7 +834,7 @@ async function cmdCardDecide(args: string[], io: CliIO): Promise<number> {
 }
 
 async function cmdCardNote(args: string[], io: CliIO): Promise<number> {
-  const { values, positionals } = parse(args, {
+  const { values, positionals } = parse('card', args, {
     as: { type: 'string' },
   });
   const [id, text] = positionals;
@@ -855,7 +921,7 @@ export function formatStepsTable(steps: Card[], all: readonly Card[], config: Bo
 }
 
 async function cmdCardList(args: string[], io: CliIO): Promise<number> {
-  const { values } = parse(args, {
+  const { values } = parse('card', args, {
     status: { type: 'string' },
     size: { type: 'string' },
     json: { type: 'boolean', default: false },
@@ -911,7 +977,7 @@ async function cmdCardList(args: string[], io: CliIO): Promise<number> {
 }
 
 async function cmdCardShow(args: string[], io: CliIO): Promise<number> {
-  const { values, positionals } = parse(args, {
+  const { values, positionals } = parse('card', args, {
     resolve: { type: 'boolean', default: false },
     steps: { type: 'boolean', default: false },
   });
@@ -983,7 +1049,7 @@ export function formatColumnsTable(rows: ColumnRow[]): string {
 }
 
 async function cmdColumns(args: string[], io: CliIO): Promise<number> {
-  const { values } = parse(args, { json: { type: 'boolean', default: false } });
+  const { values } = parse('columns', args, { json: { type: 'boolean', default: false } });
   const root = await requireRoot(io);
   const store = await openStore(root, { watch: false, now: io.now });
   if (values.json) {
@@ -1010,7 +1076,7 @@ function extractColumns(data: unknown): unknown[] {
 }
 
 async function cmdColumnsSet(args: string[], io: CliIO): Promise<number> {
-  const { values, positionals } = parse(args, {
+  const { values, positionals } = parse('columns', args, {
     stdin: { type: 'boolean', default: false },
     as: { type: 'string' },
   });
@@ -1044,7 +1110,7 @@ function resolveTime(spec: string, now: Date): string {
 }
 
 async function cmdLeaseTake(args: string[], io: CliIO): Promise<number> {
-  const { values, positionals } = parse(args, {
+  const { values, positionals } = parse('lease', args, {
     as: { type: 'string' },
     until: { type: 'string' },
     note: { type: 'string' },
@@ -1068,7 +1134,7 @@ async function cmdLeaseTake(args: string[], io: CliIO): Promise<number> {
 }
 
 async function cmdLeaseRelease(args: string[], io: CliIO): Promise<number> {
-  const { values, positionals } = parse(args, {
+  const { values, positionals } = parse('lease', args, {
     as: { type: 'string' },
     force: { type: 'boolean', default: false },
   });
@@ -1104,7 +1170,7 @@ export function formatLeaseTable(rows: LeaseRow[]): string {
 }
 
 async function cmdLeaseList(args: string[], io: CliIO): Promise<number> {
-  const { values } = parse(args, { json: { type: 'boolean', default: false } });
+  const { values } = parse('lease', args, { json: { type: 'boolean', default: false } });
   const root = await requireRoot(io);
   const store = await openStore(root, { watch: false, now: io.now });
   const now = io.now?.() ?? new Date();
@@ -1121,7 +1187,7 @@ async function cmdLeaseList(args: string[], io: CliIO): Promise<number> {
 }
 
 async function cmdWindowAdd(args: string[], io: CliIO): Promise<number> {
-  const { values, positionals } = parse(args, { as: { type: 'string' } });
+  const { values, positionals } = parse('window', args, { as: { type: 'string' } });
   const [resource, startArg, endArg, ...nameParts] = positionals;
   const name = nameParts.join(' ');
   if (!resource || !startArg || !endArg || !name) {
@@ -1151,7 +1217,7 @@ export function formatWindowTable(rows: WindowRow[]): string {
 }
 
 async function cmdWindowList(args: string[], io: CliIO): Promise<number> {
-  const { values } = parse(args, { json: { type: 'boolean', default: false } });
+  const { values } = parse('window', args, { json: { type: 'boolean', default: false } });
   const root = await requireRoot(io);
   const store = await openStore(root, { watch: false, now: io.now });
   const rows = store
@@ -1172,7 +1238,7 @@ async function cmdWindowList(args: string[], io: CliIO): Promise<number> {
  * shell-callable contract a lock shim depends on (C1: it must never say "clear" while blocked).
  */
 async function cmdWindowCheck(args: string[], io: CliIO): Promise<number> {
-  const { values, positionals } = parse(args, { at: { type: 'string' } });
+  const { values, positionals } = parse('window', args, { at: { type: 'string' } });
   const [resource] = positionals;
   if (!resource) throw new UserError('usage: repoboard window check <resource> [--at ts]');
   const root = await requireRoot(io);
@@ -1191,7 +1257,7 @@ async function cmdWindowCheck(args: string[], io: CliIO): Promise<number> {
 // ---- state / log / check (P8.3) ------------------------------------------------------------
 
 async function cmdState(args: string[], io: CliIO): Promise<number> {
-  const { values, positionals } = parse(args, {
+  const { values, positionals } = parse('state', args, {
     'set-section': { type: 'string' },
     'trim-landings': { type: 'string' },
     stdin: { type: 'boolean', default: false },
@@ -1281,7 +1347,7 @@ async function cmdState(args: string[], io: CliIO): Promise<number> {
 }
 
 async function cmdLogAppend(args: string[], io: CliIO): Promise<number> {
-  const { values, positionals } = parse(args, {
+  const { values, positionals } = parse('log', args, {
     as: { type: 'string' },
     title: { type: 'string' },
     stdin: { type: 'boolean', default: false },
@@ -1319,7 +1385,7 @@ async function cmdLogAppend(args: string[], io: CliIO): Promise<number> {
 }
 
 async function cmdLogShow(args: string[], io: CliIO): Promise<number> {
-  const { values } = parse(args, { date: { type: 'string' }, seat: { type: 'string' } });
+  const { values } = parse('log', args, { date: { type: 'string' }, seat: { type: 'string' } });
   const root = await requireRoot(io);
   const store = await openStore(root, { watch: false, now: io.now });
   const log = await store.log(values.date);
@@ -1381,7 +1447,7 @@ function selfRepoRoot(io: CliIO): string {
 }
 
 async function cmdSeat(args: string[], io: CliIO): Promise<number> {
-  const { values, positionals } = parse(args, {
+  const { values, positionals } = parse('seat', args, {
     json: { type: 'boolean', default: false },
     up: { type: 'string' },
     down: { type: 'string' },
@@ -1522,7 +1588,7 @@ async function cmdSeat(args: string[], io: CliIO): Promise<number> {
 }
 
 async function cmdCheck(args: string[], io: CliIO): Promise<number> {
-  const { values } = parse(args, {
+  const { values } = parse('check', args, {
     json: { type: 'boolean', default: false },
     strict: { type: 'boolean', default: false },
   });
@@ -1578,7 +1644,7 @@ function parseTestsFlag(v: string | undefined): { passed: number | null; skipped
  * meant to write down.
  */
 async function cmdGateRecord(args: string[], io: CliIO): Promise<number> {
-  const { values } = parse(args, {
+  const { values } = parse('gate', args, {
     as: { type: 'string' },
     tests: { type: 'string' },
     failed: { type: 'string' },
@@ -1651,7 +1717,7 @@ function gateCheckLine(name: GateCheckName, result: GateCheckResult | null): str
 /** `repoboard gate show [--json]` — the ledger's newest result per check (RCB-112 A); never
  * re-runs anything, just reads `gateLedgerPath` the way `GET /api/dashboard` does. */
 async function cmdGateShow(args: string[], io: CliIO): Promise<number> {
-  const { values } = parse(args, { json: { type: 'boolean', default: false } });
+  const { values } = parse('gate', args, { json: { type: 'boolean', default: false } });
   const root = await requireRoot(io);
   const health = await loadGateHealth(root);
   if (values.json) {
@@ -1683,7 +1749,7 @@ async function cmdGate(sub: string | undefined, args: string[], io: CliIO): Prom
 async function cmdLocal(sub: string | undefined, args: string[], io: CliIO): Promise<number> {
   const root = await requireRoot(io);
   if (sub === 'init') {
-    const { values } = parse(args, {
+    const { values } = parse('local', args, {
       remote: { type: 'string' },
       'move-record': { type: 'boolean', default: false },
     });
@@ -1696,7 +1762,7 @@ async function cmdLocal(sub: string | undefined, args: string[], io: CliIO): Pro
     return 0;
   }
   if (sub === 'sync') {
-    const { values } = parse(args, { message: { type: 'string', short: 'm' } });
+    const { values } = parse('local', args, { message: { type: 'string', short: 'm' } });
     const message = values.message ?? 'repoboard local: sync';
     const res = await localSync(root, message);
     if (res.status === 'no-local') {
@@ -1770,7 +1836,7 @@ async function budgetFor(root: string, flag: string | undefined): Promise<number
 }
 
 async function cmdCost(args: string[], io: CliIO): Promise<number> {
-  const { values } = parse(args, {
+  const { values } = parse('cost', args, {
     root: { type: 'string' },
     budget: { type: 'string' },
     json: { type: 'boolean', default: false },
@@ -1793,7 +1859,7 @@ async function cmdCost(args: string[], io: CliIO): Promise<number> {
  * every state.
  */
 async function cmdSystems(args: string[], io: CliIO): Promise<number> {
-  const { values } = parse(args, { json: { type: 'boolean', default: false } });
+  const { values } = parse('systems', args, { json: { type: 'boolean', default: false } });
   const root = await requireRoot(io);
   const store = await openStore(root, { watch: false, now: io.now });
   const { doc, errors, exists } = store.systems();
@@ -1824,7 +1890,9 @@ async function cmdSystems(args: string[], io: CliIO): Promise<number> {
  * or `· <reason>` suffix from `tests.measured.pointers`.
  */
 async function cmdSystemsShow(args: string[], io: CliIO): Promise<number> {
-  const { values, positionals } = parse(args, { json: { type: 'boolean', default: false } });
+  const { values, positionals } = parse('systems', args, {
+    json: { type: 'boolean', default: false },
+  });
   const [id] = positionals;
   if (!id) throw new UserError('usage: repoboard systems show <id> [--json]');
   const root = await requireRoot(io);
@@ -1873,7 +1941,7 @@ async function cmdSystemsShow(args: string[], io: CliIO): Promise<number> {
  * nothing could be merged would be misleading, not useful.
  */
 async function cmdSystemsDetect(args: string[], io: CliIO): Promise<number> {
-  const { values } = parse(args, {
+  const { values } = parse('systems', args, {
     root: { type: 'string' },
     apply: { type: 'boolean', default: false },
     json: { type: 'boolean', default: false },
@@ -1902,7 +1970,7 @@ async function cmdSystemsDetect(args: string[], io: CliIO): Promise<number> {
 // ---- archive / sync-issues (P8.5) -----------------------------------------------------------
 
 async function cmdArchive(args: string[], io: CliIO): Promise<number> {
-  const { values } = parse(args, {
+  const { values } = parse('archive', args, {
     'older-than': { type: 'string', default: '14d' },
     'dry-run': { type: 'boolean', default: false },
     as: { type: 'string' },
@@ -1941,7 +2009,7 @@ function splitPathHeading(arg: string): { path: string; heading: string } {
 }
 
 async function cmdSyncIssues(args: string[], io: CliIO): Promise<number> {
-  const { values, positionals } = parse(args, {
+  const { values, positionals } = parse('sync-issues', args, {
     status: { type: 'string', default: 'todo' },
     label: { type: 'string', default: 'issue' },
     'dry-run': { type: 'boolean', default: false },
@@ -2022,7 +2090,7 @@ function openInBrowser(url: string): void {
 }
 
 async function cmdServe(args: string[], io: CliIO): Promise<number> {
-  const { values } = parse(args, {
+  const { values } = parse('serve', args, {
     root: { type: 'string', multiple: true },
     port: { type: 'string', default: '4242' },
     open: { type: 'boolean', default: false },
@@ -2111,7 +2179,7 @@ async function cmdServe(args: string[], io: CliIO): Promise<number> {
  * while it runs (the transport owns it); warnings go to stderr. Returns when stdin closes.
  */
 async function cmdMcp(args: string[], io: CliIO): Promise<number> {
-  const { values } = parse(args, { root: { type: 'string' } });
+  const { values } = parse('mcp', args, { root: { type: 'string' } });
   const root = await requireRoot(values.root === undefined ? io : { ...io, cwd: values.root });
   const env = io.env ?? process.env;
   const err = io.stderr ?? process.stderr;
@@ -2129,15 +2197,34 @@ async function cmdMcp(args: string[], io: CliIO): Promise<number> {
 
 export async function run(argv: string[], io: CliIO): Promise<number> {
   const err = io.stderr ?? io.stdout;
+  let cmd: string | undefined;
+  let sub: string | undefined;
   try {
-    const [cmd, sub, ...rest] = argv;
-    if (cmd === undefined || cmd === '--help' || cmd === '-h' || cmd === 'help') {
-      io.stdout.write(HELP);
-      return cmd === undefined ? 1 : 0;
+    cmd = argv[0];
+    sub = argv[1];
+    const rest = argv.slice(2);
+    if (cmd === undefined) {
+      io.stdout.write(QUICKSTART);
+      return 0;
+    }
+    if (cmd === '--help' || cmd === '-h' || cmd === 'help') {
+      io.stdout.write(`${QUICKSTART}\n${HELP}`);
+      return 0;
     }
     if (cmd === '--version' || cmd === '-v') {
       io.stdout.write(`${VERSION}\n`);
       return 0;
+    }
+    // RCB-134: `--help`/`-h` anywhere after a known command prints just that command's usage
+    // block (derived from HELP by usageFor) and exits 0 — no store is opened, nothing written.
+    if (argv.includes('--help') || argv.includes('-h')) {
+      const clean = argv.filter((a) => a !== '--help' && a !== '-h');
+      const usage = usageFor(clean[0] ?? cmd, clean[1]);
+      if (usage !== null) {
+        io.stdout.write(`${usage}\nrun \`repoboard --help\` for every command\n`);
+        return 0;
+      }
+      // Not a known command/subcommand: fall through so normal dispatch reports it.
     }
     if (cmd === 'init') return await cmdInit(argv.slice(1), io);
     if (cmd === 'serve') return await cmdServe(argv.slice(1), io);
@@ -2191,11 +2278,19 @@ export async function run(argv: string[], io: CliIO): Promise<number> {
     if (cmd === 'sync-issues') return await cmdSyncIssues(argv.slice(1), io);
     throw new UserError(`unknown command "${cmd}" (try repoboard --help)`);
   } catch (e) {
+    if (e instanceof ParseError) {
+      const usage = cmd !== undefined ? usageFor(cmd, sub) : null;
+      err.write(
+        `${e.message}\n${usage !== null ? `${usage}\n` : ''}run \`repoboard --help\` for every command\n`,
+      );
+      return 1;
+    }
     if (e instanceof UserError) {
       err.write(`repoboard: ${e.message}\n`);
       return 1;
     }
-    err.write(`repoboard: crash: ${e instanceof Error ? (e.stack ?? e.message) : String(e)}\n`);
+    const debug = (io.env ?? process.env).REPOBOARD_DEBUG === '1';
+    err.write(formatCrash(e, debug));
     return 2;
   }
 }
@@ -2216,7 +2311,14 @@ if (isMainModule()) {
     stdout: process.stdout,
     stderr: process.stderr,
     env: process.env,
-  }).then((code) => {
-    process.exitCode = code;
-  });
+  })
+    .then((code) => {
+      process.exitCode = code;
+    })
+    .catch((e: unknown) => {
+      // Defense in depth: `run()` catches everything itself, but nothing may ever print a raw
+      // Node stack with absolute paths — not even something that somehow escapes `run()`.
+      process.stderr.write(formatCrash(e, process.env.REPOBOARD_DEBUG === '1'));
+      process.exitCode = 2;
+    });
 }

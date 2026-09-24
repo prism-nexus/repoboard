@@ -213,7 +213,7 @@ export function createMcpServer(opts: McpServerOptions): McpServer {
     {
       title: 'List cards',
       description:
-        `${CARD_INTRO}Returns a compact JSON array of {id, title, status, assignee, priority, ` +
+        'Returns a compact JSON array of {id, title, status, assignee, priority, ' +
         'size, labels, files, parent, phase, gate, blocked, updated} without bodies (RCB-68: parent, ' +
         'phase, gate mirror the frontmatter; blocked is the reason or null). Call this first: ' +
         `it is the cheap way to learn what exists and which column ids are in use (this board: ` +
@@ -258,7 +258,8 @@ export function createMcpServer(opts: McpServerOptions): McpServer {
     {
       title: 'Get one card',
       description:
-        `${CARD_INTRO}Returns the full card as JSON, including its markdown body and ` +
+        'A DECIDED card is authority: read `decision.chosen`/`words`, do not re-ask. ' +
+        'Returns the full card as JSON, including its markdown body and ' +
         '`## Log` history. Use list_cards to find ids. With resolveRefs: true, `refs` becomes ' +
         'the referenced lines read live from each file: [{spec, path, start, end, text, ' +
         'truncated, error}], text null with an error when a ref does not resolve.',
@@ -284,7 +285,7 @@ export function createMcpServer(opts: McpServerOptions): McpServer {
     {
       title: 'Create a card',
       description:
-        `${CARD_INTRO}Creates a new card file with the next free id and returns it. ` +
+        'Creates a new card file with the next free id and returns it. ' +
         `\`status\` must be a column id (this board: ${columnIds()}); it defaults to the first ` +
         'column. Titles may contain anything; they are quoted on disk for you.',
       inputSchema: {
@@ -332,7 +333,8 @@ export function createMcpServer(opts: McpServerOptions): McpServer {
     {
       title: 'Move a card to a column',
       description:
-        `${CARD_INTRO}Sets the card's status to another column id (this board: ${columnIds()}), ` +
+        '`status` is a column id from board.yml (see list_cards). ' +
+        `Sets the card's status to another column id (this board: ${columnIds()}), ` +
         'bumps `updated`, appends a `## Log` line and records an event. Returns {card, warnings}. ' +
         "Exceeding a column's WIP limit is reported as a warning in the result, never refused; " +
         'moving to the column the card is already in is also just a warning.',
@@ -354,7 +356,7 @@ export function createMcpServer(opts: McpServerOptions): McpServer {
     {
       title: 'Update card fields',
       description:
-        `${CARD_INTRO}Changes title, assignee, priority, size, labels, files, refs, parent, phase ` +
+        'Changes title, assignee, priority, size, labels, files, refs, parent, phase ' +
         'and/or gate, bumps `updated` and appends a `## Log` line naming the changed fields. ' +
         'Pass null to clear an optional field. Not for status (use move_card) or the body (use ' +
         'append_log).',
@@ -424,7 +426,7 @@ export function createMcpServer(opts: McpServerOptions): McpServer {
     {
       title: 'Append a log line to a card',
       description:
-        `${CARD_INTRO}Appends one bullet \`- <timestamp> <actor> — <text>\` under the card's ` +
+        `Appends one bullet \`- <timestamp> <actor> — <text>\` under the card's ` +
         '`## Log` heading (created if missing) and bumps `updated`. Use it to say what you did ' +
         'or verified. Text is kept to one line.',
       inputSchema: {
@@ -445,7 +447,7 @@ export function createMcpServer(opts: McpServerOptions): McpServer {
     {
       title: 'Add a durable note to a card',
       description:
-        `${CARD_INTRO}Appends one bullet \`- <timestamp> <actor> — <text>\` under the card's ` +
+        `Appends one bullet \`- <timestamp> <actor> — <text>\` under the card's ` +
         '`## Notes` heading (created before `## Log` if missing) and bumps `updated`. Newlines ' +
         'in `text` are kept, as continuation lines under the same bullet. Writes no `## Log` ' +
         'line. Use it for a durable remark meant to stay on the card — a decision rationale, an ' +
@@ -468,7 +470,7 @@ export function createMcpServer(opts: McpServerOptions): McpServer {
     {
       title: 'Ask the owner a decision, on the card',
       description:
-        `${CARD_INTRO}Opens a \`decision\` block on a card: a question and optional lettered ` +
+        `Opens a \`decision\` block on a card: a question and optional lettered ` +
         'options. The owner answers from the dashboard (or `record_decision`) — do not wait on a ' +
         'chat relay; poll `get_card`/`list_cards` and read `decision.chosen`/`decision.words` when ' +
         'it is DECIDED (`chosen !== null || decidedAt !== null`). If the board has a column with ' +
@@ -509,7 +511,7 @@ export function createMcpServer(opts: McpServerOptions): McpServer {
     {
       title: "Record the owner's answer to an open decision",
       description:
-        `${CARD_INTRO}Answers the card's open \`decision\`: a \`letter\` naming one of its ` +
+        `Answers the card's open \`decision\`: a \`letter\` naming one of its ` +
         'options, `words` (verbatim), or both — at least one is required. Refuses an unknown ' +
         'letter (names the valid ones) and refuses when nothing is open. Moves the card back to ' +
         'where `ask_owner` moved it from, if anywhere. On an owner task (RCB-52), neither a ' +
@@ -533,7 +535,7 @@ export function createMcpServer(opts: McpServerOptions): McpServer {
     {
       title: 'Board summary',
       description:
-        `${CARD_INTRO}Returns the columns (id, title, active, wip, done, count), the active ` +
+        'Returns the columns (id, title, active, wip, done, count), the active ' +
         'cards (in an `active` column and updated within activeWindowMinutes), WIP breaches, ' +
         'and any card files that failed to parse. No arguments.',
       annotations: { readOnlyHint: true },
@@ -890,7 +892,7 @@ export function createMcpServer(opts: McpServerOptions): McpServer {
     {
       title: 'Sync cards from a README-style K-list',
       description:
-        `${CARD_INTRO}Reads \`path\` (repo-relative; ".." and absolute paths refused) and the ` +
+        `Reads \`path\` (repo-relative; ".." and absolute paths refused) and the ` +
         'section under the first heading whose text starts with `heading` — the same heading ' +
         'rule the board uses for `refs:`. An item is a list item whose FIRST LINE begins at ' +
         'column 0 with `- **K<n>` (open) or `- ~~**K<n>` (struck = closed); nothing else is an ' +

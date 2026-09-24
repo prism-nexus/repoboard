@@ -42,7 +42,7 @@ and list sizes re-measured 2026-09-07 on 31 cards, standing costs re-measured 20
 | Surface | Standing cost | Per move | Per list |
 |---|---|---|---|
 | **CLI** — `repoboard card move RB-12 doing --as claude/dev` | `docs/AGENTS.md` read once: 20.9 KB | ~40 B in, 33 B out | table 2,529 B; `--json` 7,639 B; `--json --full` 20,758 B |
-| **MCP** — `claude mcp add repoboard -- npx repoboard mcp` | tool schema 31.3 KB (25 tools) per turn where the harness loads it | ~80 B call, ~200 B result | 7,638 B — the same formatter, to the byte |
+| **MCP** — `claude mcp add repoboard -- npx repoboard mcp` | tool schema 22.2 KB (25 tools, 2026-09-24, RCB-137) per turn where the harness loads it | ~80 B call, ~200 B result | 7,638 B — the same formatter, to the byte |
 | **File edit** — `sed -i 's/^status: todo$/status: doing/' .repoboard/cards/RB-12.md` | same AGENTS.md | ~60 B, but a correct move also bumps `updated` and appends a `## Log` line | n/a |
 
 The systems model adds a 66 B `seat` line and `.repoboard/systems.yml` (2,693 B here) to the cold

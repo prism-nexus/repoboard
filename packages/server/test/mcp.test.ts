@@ -83,7 +83,7 @@ const ISSUE_TOOLS = ['archive_cards', 'sync_issues'];
 const CONFIG_TOOLS = ['set_columns'];
 
 describe('repoboard mcp: handshake and tool list', () => {
-  it('lists exactly the twenty-five tools of the brief, card tools described for a newcomer', async () => {
+  it('lists exactly the twenty-five tools of the brief', async () => {
     const r = await rig();
     const { tools } = await r.client.listTools();
     expect(tools.map((t) => t.name).sort()).toEqual([...MCP_TOOL_NAMES].sort());
@@ -96,13 +96,23 @@ describe('repoboard mcp: handshake and tool list', () => {
         ISSUE_TOOLS.length +
         CONFIG_TOOLS.length,
     );
-    for (const t of tools) {
-      if (!CARD_TOOLS.includes(t.name)) continue;
-      expect(t.description, t.name).toMatch(/A card is one task/);
-      expect(t.description, t.name).toMatch(/column id/);
-    }
     const list = tools.find((t) => t.name === 'list_cards');
     expect(list?.description).toMatch(/backlog, decide, todo, doing, done/);
+  });
+
+  /**
+   * RCB-137: CARD_INTRO (what a card is, that `status` is a column id, decision/parent/phase/gate
+   * semantics) now lives ONCE, in the server `instructions` — not spliced into every card tool's
+   * description. `client.getInstructions()` is the SDK's client-side accessor for that string.
+   */
+  it('RCB-137: CARD_INTRO lives once, in instructions, not in any tool description', async () => {
+    const r = await rig();
+    const { tools } = await r.client.listTools();
+    const sentence = "A card is one task on this repository's Kanban board";
+    for (const t of tools) {
+      expect(t.description, t.name).not.toContain(sentence);
+    }
+    expect(r.client.getInstructions()).toContain(sentence);
   });
 
   /**
@@ -404,13 +414,16 @@ describe('repoboard mcp: parent/phase/gate (RCB-68)', () => {
   });
 
   /**
-   * RCB-68: the ≤700 B pin above never covered the card tools — CARD_INTRO alone is ~460 B. The
+   * RCB-68: the ≤700 B pin above never covered the card tools — CARD_INTRO alone was ~460 B. The
    * three tools RCB-68 widened (parent/phase/gate/blocked) get their own ceiling so a future
-   * description cannot balloon unnoticed. Measured at the landing: list_cards 2110 B, create_card
-   * 2529 B, update_card 2537 B (was 1766 / 2029 / 1941). A test that only asserts `> 0` is not a
-   * pin; this one is.
+   * description cannot balloon unnoticed. RCB-137 moved CARD_INTRO out of every tool description
+   * and into `instructions` alone (at most a ≤140 B clause where a tool needs one); measured at
+   * that landing: list_cards 1290 B, create_card 1840 B, update_card 1919 B (was 2122 / 2672 /
+   * 2660 against the same fixture; RCB-68 landing was 2110 / 2529 / 2537). Ceiling tightened to
+   * 2110 B — about 10 % over update_card's 1919 B, the largest of the three. A test that only
+   * asserts `> 0` is not a pin; this one is.
    */
-  it('RCB-68: the three widened card tools stay ≤ 2700 B each (list_cards, create_card, update_card)', async () => {
+  it('RCB-68/RCB-137: the three widened card tools stay ≤ 2110 B each (list_cards, create_card, update_card)', async () => {
     const r = await rig();
     const { tools } = await r.client.listTools();
     for (const name of ['list_cards', 'create_card', 'update_card']) {
@@ -418,7 +431,7 @@ describe('repoboard mcp: parent/phase/gate (RCB-68)', () => {
       expect(t, name).toBeDefined();
       const bytes = Buffer.byteLength(JSON.stringify(t));
       expect(bytes, name).toBeGreaterThan(1000);
-      expect(bytes, name).toBeLessThanOrEqual(2700);
+      expect(bytes, name).toBeLessThanOrEqual(2110);
     }
   });
 });

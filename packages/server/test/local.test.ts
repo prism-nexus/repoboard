@@ -53,7 +53,14 @@ async function freshRepo(cards: Record<string, string> = {}): Promise<string> {
 }
 
 async function git(cwd: string, ...args: string[]): Promise<string> {
-  const { stdout } = await execFileAsync('git', args, { cwd });
+  const env = {
+    ...process.env,
+    GIT_AUTHOR_NAME: 't',
+    GIT_AUTHOR_EMAIL: 't@t',
+    GIT_COMMITTER_NAME: 't',
+    GIT_COMMITTER_EMAIL: 't@t',
+  };
+  const { stdout } = await execFileAsync('git', args, { cwd, env });
   return stdout;
 }
 

@@ -11,7 +11,10 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        node: [20, 22]
+        # packageManager pnpm@11.18.0 requires Node >=22.13; pnpm install cannot run on Node 20
+        # here (RCB-120). Node 20 support for the *published package* is covered by pack-smoke
+        # below, which installs the built tarball with plain npm/npx — no pnpm involved.
+        node: [22, 24]
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
@@ -24,3 +27,41 @@ jobs:
       - run: pnpm test
       - run: pnpm typecheck
       - run: pnpm lint
+
+  build-pack:
+    name: build + npm pack (server)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm build
+      - run: mkdir -p /tmp/pack-out && (cd packages/server && npm pack --pack-destination /tmp/pack-out)
+      - uses: actions/upload-artifact@v4
+        with:
+          name: repoboard-tarball
+          path: /tmp/pack-out/*.tgz
+          retention-days: 1
+
+  pack-smoke:
+    name: pack-smoke (Node ${{ matrix.node }})
+    needs: build-pack
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        node: [20, 22, 24]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+      - uses: actions/download-artifact@v4
+        with:
+          name: repoboard-tarball
+          path: /tmp/pack-in
+      - run: scripts/pack-smoke.sh /tmp/pack-in/*.tgz

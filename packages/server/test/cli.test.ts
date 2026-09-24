@@ -1367,6 +1367,68 @@ describe('repoboard card show --resolve and card add --ref (K7)', () => {
   });
 });
 
+describe('repoboard card show --json (RCB-144)', () => {
+  it('prints the same object `card list --json --full` emits for one row, plus steps/refs on request', async () => {
+    const root = await freshRepo({
+      'RB-1.md': cardText('RB-1', 'todo', { title: 'First', body: '\nHello body.\n' }).replace(
+        'status: todo\n',
+        'status: todo\nrefs:\n  - docs/plan.md#§5 Phases\n',
+      ),
+    });
+    await mkdir(join(root, 'docs'));
+    await writeFile(
+      join(root, 'docs', 'plan.md'),
+      '# Plan\n\n## §5 Phases\n- **P6.1** README.\n\n## §6\n',
+    );
+    await repoboard(root, 'card', 'add', 'Step candidate', '--parent', 'RB-1', '--phase', 'PH.1');
+
+    const full = await repoboard(root, 'card', 'list', '--json', '--full');
+    const [fullRow] = JSON.parse(full.out) as Array<Record<string, unknown>>;
+
+    const shown = await repoboard(root, 'card', 'show', 'RB-1', '--json', '--steps', '--resolve');
+    expect(shown.code).toBe(0);
+    const parsed = JSON.parse(shown.out) as Record<string, unknown>;
+    // Pins: `const out: Record<string, unknown> = { ...card };` — same shape as one row of
+    // `card list --json --full` (never a second shape).
+    expect(parsed.id).toBe(fullRow?.id);
+    expect(parsed.title).toBe(fullRow?.title);
+    expect(parsed.body).toBe(fullRow?.body);
+    // Pins: `if (values.steps) out.steps = stepsOf(...).map((s) => toRow(...))`.
+    const steps = parsed.steps as Array<{ id: string }>;
+    expect(Array.isArray(steps)).toBe(true);
+    expect(steps[0]?.id).toBe('RB-2');
+    // Pins: `if (values.resolve) out.refs = await resolveCardRefs(...)` — resolved shape
+    // ({spec, path, start, end, text, truncated, error}), not the raw refs: spec strings.
+    const refs = parsed.refs as Array<{ spec: string; text: string | null }>;
+    expect(refs[0]?.spec).toBe('docs/plan.md#§5 Phases');
+    expect(refs[0]?.text).toContain('P6.1');
+    // The text path is unaffected by --json.
+    const plain = await repoboard(root, 'card', 'show', 'RB-1');
+    expect(plain.out.startsWith('---\nid: RB-1\n')).toBe(true);
+  });
+
+  it('an archived id prints {"archived": "<path>"}; unknown id is the unchanged error', async () => {
+    const root = await freshRepo({
+      'RB-1.md': cardText('RB-1', 'done').replace(
+        'updated: 2026-09-02T22:00:00Z',
+        'updated: 2026-08-01T00:00:00Z',
+      ),
+    });
+    const archiveRes = await repoboard(root, 'archive');
+    expect(archiveRes.code).toBe(0);
+    expect(archiveRes.out).toContain('archived 1: RB-1');
+
+    const shown = await repoboard(root, 'card', 'show', 'RB-1', '--json');
+    expect(shown.code).toBe(0);
+    // Pins the archived branch's json output.
+    expect(JSON.parse(shown.out)).toEqual({ archived: '.repoboard/archive/RB-1.md' });
+
+    const unknown = await repoboard(root, 'card', 'show', 'NOPE-1', '--json');
+    expect(unknown.code).toBe(1);
+    expect(unknown.err).toMatch(/unknown card "NOPE-1"/);
+  });
+});
+
 describe('repoboard card ask / decide (P8.1)', () => {
   it('ask moves the card into the default board’s decide column and prints the count', async () => {
     const root = await freshRepo({ 'RB-1.md': cardText('RB-1', 'todo') });
@@ -2092,6 +2154,56 @@ describe('repoboard state', () => {
     expect(printed.out).toContain(`${id} · ship now? · [A B]`);
   });
 
+  it('--json prints {stamp, actor, sections, ownerQueue}; no STATE.md is null (RCB-144)', async () => {
+    const root = await freshRepo({});
+    const before = await repoboard(root, 'state', '--json');
+    expect(before.code).toBe(0);
+    // Pins: the no-doc json branch — `JSON.stringify(null, null, 2)`, never the text placeholder.
+    expect(before.out.trim()).toBe('null');
+
+    await repoboard(root, 'init', '--practices');
+    await repoboard(root, 'card', 'add', 'needs a call');
+    const list = await repoboard(root, 'card', 'list', '--json');
+    const id = (JSON.parse(list.out) as Array<{ id: string }>)[0]?.id;
+    if (!id) throw new Error('no card id');
+    await repoboard(root, 'card', 'ask', id, 'ship now?', '--option', 'A yes', '--option', 'B no');
+
+    const after = await repoboard(root, 'state', '--json');
+    expect(after.code).toBe(0);
+    const parsed = JSON.parse(after.out) as {
+      stamp: string;
+      actor: string;
+      sections: Record<string, string>;
+      ownerQueue: Array<{ id: string; question: string; options: unknown }>;
+    };
+    expect(typeof parsed.stamp).toBe('string');
+    expect(typeof parsed.actor).toBe('string');
+    expect(parsed.sections).toHaveProperty('live');
+    // Pins: the `ownerQueue` computation (`store.list().filter(needsDecision).map(...)`) —
+    // generated fresh from cards, not parsed back out of rendered text.
+    expect(parsed.ownerQueue).toEqual([
+      {
+        id,
+        question: 'ship now?',
+        options: [
+          { letter: 'A', text: 'yes' },
+          { letter: 'B', text: 'no' },
+        ],
+      },
+    ]);
+  });
+
+  it('--json is refused with --set-section/--trim-landings', async () => {
+    const root = await freshRepo({});
+    await repoboard(root, 'init', '--practices');
+    const withSetSection = await repoboard(root, 'state', '--json', '--set-section', 'LIVE', 'x');
+    expect(withSetSection.code).toBe(1);
+    expect(withSetSection.err).toMatch(/--json is read-only/);
+    const withTrim = await repoboard(root, 'state', '--json', '--trim-landings', '1', '--as', 't');
+    expect(withTrim.code).toBe(1);
+    expect(withTrim.err).toMatch(/--json is read-only/);
+  });
+
   it('an unknown --set-section name is a user error', async () => {
     const root = await freshRepo({});
     await repoboard(root, 'init', '--practices');
@@ -2259,6 +2371,37 @@ describe('repoboard log', () => {
     const opsOnly = await repoboard(root, 'log', 'show', '--seat', 'ops');
     expect(opsOnly.out).toContain('ops entry');
     expect(opsOnly.out).not.toContain('builder entry');
+  });
+
+  it('show --json prints {date, blocks: [{seat, ts, title, text}]}; no log for the date is {date, blocks: []} (RCB-144)', async () => {
+    const root = await freshRepo({});
+    await repoboard(root, 'log', '--as', 'ops', '--title', 'kickoff', 'ops entry');
+    await repoboard(root, 'log', '--as', 'builder', 'builder entry');
+
+    const shown = await repoboard(root, 'log', 'show', '--json');
+    expect(shown.code).toBe(0);
+    const parsed = JSON.parse(shown.out) as { date: string; blocks: Array<Record<string, string>> };
+    // Pins: `io.stdout.write(`${JSON.stringify({ date: log.date, blocks: log.blocks }, ...)`.
+    expect(parsed.date).toBe('2026-09-02');
+    expect(parsed.blocks).toHaveLength(2);
+    expect(parsed.blocks[0]).toEqual({
+      seat: 'OPS',
+      ts: '2026-09-02T22:41:10Z',
+      title: 'kickoff',
+      text: 'ops entry',
+    });
+
+    const seatFiltered = await repoboard(root, 'log', 'show', '--json', '--seat', 'ops');
+    // Pins: `const blocks = log.blocks.filter((b) => b.seat === wanted);` combined with the json
+    // branch under --seat, which must filter rather than fall through to the whole day's blocks.
+    const filteredParsed = JSON.parse(seatFiltered.out) as { blocks: Array<{ seat: string }> };
+    expect(filteredParsed.blocks).toHaveLength(1);
+    expect(filteredParsed.blocks[0]?.seat).toBe('OPS');
+
+    // Pins: the no-log json branch — `{ date, blocks: [] }` exit 0, never a text placeholder.
+    const noLog = await repoboard(root, 'log', 'show', '--json', '--date', '2020-01-01');
+    expect(noLog.code).toBe(0);
+    expect(JSON.parse(noLog.out)).toEqual({ date: '2020-01-01', blocks: [] });
   });
 
   it('show with no log for the date says so', async () => {

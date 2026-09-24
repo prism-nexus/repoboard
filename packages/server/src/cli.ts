@@ -144,11 +144,15 @@ Usage:
                                         --parent lists that card's steps in phase order (ID PHASE
                                         STATUS ASSIGNEE GATE BLOCKED TITLE); --unblocked keeps
                                         the not-done, not-blocked ones
-  repoboard card show <id> [--resolve] [--steps]  print the card file; --resolve appends the
-                                        lines each refs: entry points at, read live from the
+  repoboard card show <id> [--resolve] [--steps] [--json]  print the card file; --resolve appends
+                                        the lines each refs: entry points at, read live from the
                                         file; an archived id prints
                                         \`archived: .repoboard/archive/<id>.md\`; --steps appends
-                                        a ## Steps table of its children
+                                        a ## Steps table of its children. --json prints the same
+                                        card object \`card list --json --full\` emits for one row,
+                                        plus steps (compact rows, only with --steps) and refs
+                                        (resolved, only with --resolve); an archived id prints
+                                        {"archived": "<path>"}
   repoboard card ask <id> "<question>" [--option "A1 <text>"]... [--as a] [--replace] [--task]
                                         open a decision on a card (P8.1); --replace withdraws one
                                         already open. With no options, the owner answers with --words.
@@ -182,8 +186,11 @@ Usage:
                                         exit 0 "clear <resource>" when nothing blocks it; exit 1
                                         naming what does (a window, a live lease, or both) — this is
                                         what a lock shim calls
-  repoboard state                              print the rendered STATE.md (OWNER QUEUE generated
-                                        fresh from cards that need a decision)
+  repoboard state [--json]                      print the rendered STATE.md (OWNER QUEUE generated
+                                        fresh from cards that need a decision); --json prints
+                                        {stamp, actor, sections, ownerQueue} (read path only —
+                                        refused with --set-section/--trim-landings); no STATE.md:
+                                        null
   repoboard state --set-section LIVE|LAST-LANDINGS|SEATS (<text> | --stdin) [--as a]
                                         replace one section's body and restamp
   repoboard state --trim-landings <n> [--as a]
@@ -194,8 +201,10 @@ Usage:
   repoboard log --as <seat> [--title "…"] (<text> | --stdin)
                                         append one block to today's log — board.yml logDir when
                                         set, else .repoboard/local/log/, else .repoboard/log/
-  repoboard log show [--date YYYY-MM-DD] [--seat s]
-                                        print a day's log (default today), optionally one seat's blocks
+  repoboard log show [--date YYYY-MM-DD] [--seat s] [--json]
+                                        print a day's log (default today), optionally one seat's
+                                        blocks; --json prints {date, blocks: [{seat, ts, title,
+                                        text}]}; no log for that date: {date, blocks: []} exit 0
   repoboard log --last <seat>           print that seat's newest block, searching back across days
                                         (cold-start: your own seat's last block, then the coordinator's)
   repoboard seat <name> | list [--json]  the cold-start bundle for one seat: its SEATS line, its
@@ -996,9 +1005,10 @@ async function cmdCardShow(args: string[], io: CliIO): Promise<number> {
   const { values, positionals } = parse('card', args, {
     resolve: { type: 'boolean', default: false },
     steps: { type: 'boolean', default: false },
+    json: { type: 'boolean', default: false },
   });
   const [id] = positionals;
-  if (!id) throw new UserError('usage: repoboard card show <id> [--resolve] [--steps]');
+  if (!id) throw new UserError('usage: repoboard card show <id> [--resolve] [--steps] [--json]');
   const root = await requireRoot(io);
   const store = await openStore(root, { watch: false, now: io.now });
   const card = store.get(id);
@@ -1009,10 +1019,25 @@ async function cmdCardShow(args: string[], io: CliIO): Promise<number> {
       () => false,
     );
     if (isArchived) {
-      io.stdout.write(`archived: ${relative(root, archivedPath)}\n`);
+      const archivedRel = relative(root, archivedPath);
+      if (values.json) {
+        io.stdout.write(`${JSON.stringify({ archived: archivedRel }, null, 2)}\n`);
+        return 0;
+      }
+      io.stdout.write(`archived: ${archivedRel}\n`);
       return 0;
     }
     throw new UserError(`unknown card "${id}"`);
+  }
+  if (values.json) {
+    // RCB-144: the same object `card list --json --full` emits for one row — never a second
+    // shape. `steps`/`refs` are added only on request, same as the text path below.
+    const all = store.list();
+    const out: Record<string, unknown> = { ...card };
+    if (values.steps) out.steps = stepsOf(card.id, all).map((s) => toRow(s, all, store.config));
+    if (values.resolve) out.refs = await resolveCardRefs(store.root, card);
+    io.stdout.write(`${JSON.stringify(out, null, 2)}\n`);
+    return 0;
   }
   io.stdout.write(await readFile(store.filePath(id), 'utf8'));
   if (values.steps) {
@@ -1278,9 +1303,16 @@ async function cmdState(args: string[], io: CliIO): Promise<number> {
     'trim-landings': { type: 'string' },
     stdin: { type: 'boolean', default: false },
     as: { type: 'string' },
+    json: { type: 'boolean', default: false },
   });
   if (values['set-section'] !== undefined && values['trim-landings'] !== undefined) {
     throw new UserError('state: --set-section and --trim-landings are exclusive');
+  }
+  if (
+    values.json &&
+    (values['set-section'] !== undefined || values['trim-landings'] !== undefined)
+  ) {
+    throw new UserError('state --json is read-only: not valid with --set-section/--trim-landings');
   }
   const root = await requireRoot(io);
   const store = await openStore(root, { watch: false, now: io.now });
@@ -1351,7 +1383,25 @@ async function cmdState(args: string[], io: CliIO): Promise<number> {
   }
   const doc = store.state();
   if (!doc) {
+    if (values.json) {
+      io.stdout.write(`${JSON.stringify(null, null, 2)}\n`);
+      return 0;
+    }
     io.stdout.write('(no .repoboard/STATE.md — run `repoboard init --practices`)\n');
+    return 0;
+  }
+  if (values.json) {
+    // RCB-144: OWNER QUEUE is generated, not stored — same computation as MCP's get_state
+    // (mcp.ts), reused here as data rather than parsed back out of rendered text.
+    const openCards = store.list().filter((c) => needsDecision(c));
+    const ownerQueue = openCards.map((c) => ({
+      id: c.id,
+      question: c.decision?.question ?? '',
+      options: c.decision?.options ?? [],
+    }));
+    io.stdout.write(
+      `${JSON.stringify({ stamp: doc.stamp, actor: doc.actor, sections: doc.sections, ownerQueue }, null, 2)}\n`,
+    );
     return 0;
   }
   const text = renderState(doc.sections, store.list(), {
@@ -1401,22 +1451,39 @@ async function cmdLogAppend(args: string[], io: CliIO): Promise<number> {
 }
 
 async function cmdLogShow(args: string[], io: CliIO): Promise<number> {
-  const { values } = parse('log', args, { date: { type: 'string' }, seat: { type: 'string' } });
+  const { values } = parse('log', args, {
+    date: { type: 'string' },
+    seat: { type: 'string' },
+    json: { type: 'boolean', default: false },
+  });
   const root = await requireRoot(io);
   const store = await openStore(root, { watch: false, now: io.now });
   const log = await store.log(values.date);
   if (!log) {
+    if (values.json) {
+      const date = values.date ?? toIso(store.clock).slice(0, 10);
+      io.stdout.write(`${JSON.stringify({ date, blocks: [] }, null, 2)}\n`);
+      return 0;
+    }
     io.stdout.write('(no log for that date)\n');
     return 0;
   }
   if (values.seat !== undefined) {
     const wanted = values.seat.toUpperCase();
     const blocks = log.blocks.filter((b) => b.seat === wanted);
+    if (values.json) {
+      io.stdout.write(`${JSON.stringify({ date: log.date, blocks }, null, 2)}\n`);
+      return 0;
+    }
     if (blocks.length === 0) {
       io.stdout.write('(no entries for that seat on that date)\n');
       return 0;
     }
     io.stdout.write(`${blocks.map((b) => formatLogBlock(b)).join('\n\n')}\n`);
+    return 0;
+  }
+  if (values.json) {
+    io.stdout.write(`${JSON.stringify({ date: log.date, blocks: log.blocks }, null, 2)}\n`);
     return 0;
   }
   io.stdout.write(log.text);

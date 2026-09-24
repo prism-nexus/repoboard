@@ -47,12 +47,12 @@ published). It finds `.repoboard/` by walking up from the current directory.
 | `repoboard card move <id> <status> [--as actor]` | `repoboard card move RB-12 doing --as claude/web-agent` |
 | `repoboard card update <id> [--title t] [--assignee a] [--priority p] [--size S\|M\|L\|XL] [--label l]... [--file f]... [--ref r]... [--parent id] [--phase PH.n] [--gate id\|"sentence"] [--clear field]... [--as actor]` | `repoboard card update RB-12 --assignee claude/web-agent --priority high --as claude/web-agent` |
 | `repoboard card list [--status s] [--json [--full]]` | `repoboard card list --status doing` |
-| `repoboard card show <id> [--resolve]` | `repoboard card show RB-12` — `--resolve` adds `refs:` lines (section 4) |
+| `repoboard card show <id> [--resolve] [--steps] [--json]` | `repoboard card show RB-12` — `--resolve` adds `refs:` lines (section 4); `--json` prints the card object (RCB-144, docs/REFERENCE.md §6) |
 | `repoboard card note <id> "<text>" [--as actor]` | `repoboard card note RB-12 "owner: ship it after the restart" --as owner` (RCB-70, docs/REFERENCE.md §6) |
 | `repoboard columns [--json]` | `repoboard columns` — table `ID TITLE FLAGS COUNT`; `--json` prints the raw list |
 | `repoboard columns set (--stdin \| "<text>") [--as actor]` | `repoboard columns set --stdin < new-columns.yml` — replaces the whole column list (docs/REFERENCE.md §6) |
-| `repoboard state [--set-section s (<text>\|--stdin)]` | `repoboard state` — prints the rendered STATE.md (docs/REFERENCE.md §3) |
-| `repoboard log --as <seat> [--title t] (<text>\|--stdin)` / `log show [--date d] [--seat s]` / `log --last <seat>` | `repoboard log --as claude/ops "armed the fires"` (docs/REFERENCE.md §3) |
+| `repoboard state [--set-section s (<text>\|--stdin)] [--json]` | `repoboard state` — prints the rendered STATE.md; `--json` is read-only (docs/REFERENCE.md §3) |
+| `repoboard log --as <seat> [--title t] (<text>\|--stdin)` / `log show [--date d] [--seat s] [--json]` / `log --last <seat>` | `repoboard log --as claude/ops "armed the fires"` (docs/REFERENCE.md §3) |
 | `repoboard seat <name> [--json]` | `repoboard seat claude/builder` — the cold-start bundle (docs/REFERENCE.md §3, §6) |
 | `repoboard check [--json] [--strict]` | `repoboard check` — exit 0 `ok`, or 1 with findings (docs/REFERENCE.md §3) |
 | `repoboard cost [--root <dir>] [--budget <bytes>] [--json]` | `repoboard cost --root /path/to/other/repo` — "cold context" bytes vs budget (docs/REFERENCE.md §4, §6) |

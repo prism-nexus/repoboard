@@ -4,7 +4,7 @@ import { defineConfig } from 'tsup';
 // runnable CLI bundles core in. yaml/zod (core's deps) stay external and are listed as our own
 // dependencies. `clean` is off because the web build lands in dist/web (BUILD-PLAN §6).
 export default defineConfig({
-  entry: { cli: 'src/cli.ts', index: 'src/index.ts' },
+  entry: { cli: 'src/cli.ts', index: 'src/index.ts', 'dist-stale': 'src/dist-stale.ts' },
   format: ['esm'],
   platform: 'node',
   target: 'node20',

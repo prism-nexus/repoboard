@@ -38,6 +38,8 @@
   "files": [
     "dist",
     "!dist/**/*.map",
+    "!dist/dist-stale.js",
+    "!dist/**/.src-digest",
     "README.md",
     "LICENSE"
   ],

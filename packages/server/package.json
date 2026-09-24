@@ -4,6 +4,15 @@
   "type": "module",
   "description": "Local-first repo dashboard and agent-driven Kanban board. Cards are markdown files in .repoboard/, git is the history; one bin serves the CLI, the HTTP/WebSocket dashboard, and an MCP server.",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/prism-nexus/repoboard.git",
+    "directory": "packages/server"
+  },
+  "homepage": "https://github.com/prism-nexus/repoboard#readme",
+  "bugs": {
+    "url": "https://github.com/prism-nexus/repoboard/issues"
+  },
   "keywords": [
     "kanban",
     "board",
@@ -27,12 +36,16 @@
     ".": "./dist/index.js"
   },
   "files": [
-    "dist"
+    "dist",
+    "!dist/**/*.map",
+    "README.md",
+    "LICENSE"
   ],
   "scripts": {
     "typecheck": "tsc --noEmit",
     "build": "tsup",
-    "dev": "tsup && node dist/cli.js serve"
+    "dev": "tsup && node dist/cli.js serve",
+    "prepack": "node ../../scripts/prepack-server.mjs"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.30.0",

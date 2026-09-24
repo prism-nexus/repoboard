@@ -112,16 +112,16 @@ Usage:
                                         leases.yml and a root NEXT-AGENT-PROMPT.md if absent —
                                         works on a repo that already has a board too
   repoboard card add "<title>" [options]      --status s --assignee a --priority high|medium|low
-                                        --size S|M|L|XL (RCB-67)
+                                        --size S|M|L|XL
                                         --label l (repeatable) --file f (repeatable) --ref r (repeatable)
-                                        --parent <id> --phase PH.<n> --gate <id|"sentence"> (RCB-68)
+                                        --parent <id> --phase PH.<n> --gate <id|"sentence">
                                         --as actor
   repoboard card move <id> <status> [--as a]  move a card to a column
   repoboard card update <id> [options]        --title t --assignee a --priority high|medium|low
-                                        --size S|M|L|XL (RCB-67)
+                                        --size S|M|L|XL
                                         --label l --file f --ref r (repeatable; each one REPLACES
                                         the whole list, it does not append)
-                                        --parent <id> --phase PH.<n> --gate <id|"sentence"> (RCB-68)
+                                        --parent <id> --phase PH.<n> --gate <id|"sentence">
                                         --clear assignee|priority|size|labels|files|refs|parent|phase|gate
                                         (repeatable)
                                         --as actor; status changes go through \`card move\`
@@ -130,13 +130,13 @@ Usage:
                                         list cards; --json is compact (id, title, status,
                                         assignee, priority, size, labels, files, parent, phase,
                                         gate, blocked, updated); add --full for bodies;
-                                        --size filters to that size (RCB-67);
+                                        --size filters to that size;
                                         --needs-decision filters to cards with an open decision;
-                                        a BLOCKED column (RCB-68) appears only when a listed card
+                                        a BLOCKED column appears only when a listed card
                                         is blocked on a gate;
                                         --parent lists that card's steps in phase order (ID PHASE
                                         STATUS ASSIGNEE GATE BLOCKED TITLE); --unblocked keeps
-                                        the not-done, not-blocked ones (RCB-104)
+                                        the not-done, not-blocked ones
   repoboard card show <id> [--resolve] [--steps]  print the card file; --resolve appends the
                                         lines each refs: entry points at, read live from the
                                         file; an archived id prints
@@ -159,7 +159,7 @@ Usage:
   repoboard columns set (--stdin | "<text>") [--as a]
                                         replace the WHOLE column list — YAML or JSON, a bare
                                         list or {columns: [...]}, exactly PATCH /api/board's
-                                        contract (RCB-34); a schema error (empty list, duplicate
+                                        contract; a schema error (empty list, duplicate
                                         id) leaves board.yml untouched
   repoboard lease take <resource> [--as h] [--until ts] [--note n] [--force]
                                         take (or renew) a lease on a named resource; ts is ISO or
@@ -181,7 +181,7 @@ Usage:
                                         replace one section's body and restamp
   repoboard state --trim-landings <n> [--as a]
                                         keep the newest <n> LAST LANDINGS entries in STATE.md,
-                                        archive the rest verbatim to today's log (RCB-92) —
+                                        archive the rest verbatim to today's log —
                                         "nothing to trim" and no write when there is nothing
                                         beyond <n>
   repoboard log --as <seat> [--title "…"] (<text> | --stdin)
@@ -197,15 +197,15 @@ Usage:
                                         instead of the three-file ritual
   repoboard seat list [--json]         one row per SEATS bullet — NAME STATUS STAMP IN-FLIGHT —
                                         instead of "seat <name>" being parsed as a seat literally
-                                        named "list" (RCB-89)
+                                        named "list"
   repoboard seat <name> --up "<text>" [--force] | --down "<text>" | --update "<text>"
                                         replace ONLY this seat's own SEATS bullet and restamp
                                         STATE.md; appends the bullet if the seat has none; --up
                                         refuses a second UP inside activeWindowMinutes unless
-                                        --force (RCB-87, audited in the log); --down is refused
+                                        --force (audited in the log); --down is refused
                                         unless the text carries BOTH an "in-flight:" line and an
-                                        "owes:" line (RCB-89); --update rewrites only the body,
-                                        keeps the standing stamp, no guard (RCB-88)
+                                        "owes:" line; --update rewrites only the body,
+                                        keeps the standing stamp, no guard
   repoboard check [--json] [--strict]  exit 0 "ok" / 1 with one line per finding: stale-state
                                         (also reads board.yml's logDir, P8.6 — an extra daily-log
                                         directory alongside .repoboard/log/, read-only),
@@ -214,28 +214,28 @@ Usage:
                                         needs-ask (warning; blocks only with --strict — a card in a
                                         decision: true column with no OPEN ask, never asked or
                                         already decided and moved back), gated-steps
-                                        (informational, never fails — N cards blocked on a gate,
-                                        RCB-68), cost-over-budget (error; see \`repoboard cost\`),
+                                        (informational, never fails — N cards blocked on a gate),
+                                        cost-over-budget (error; see \`repoboard cost\`),
                                         local-unsynced (warning; blocks only with --strict —
                                         uncommitted changes or unpushed commits in
                                         .repoboard/local/), local-no-remote (informational, never
-                                        fails — .repoboard/local/ has no origin, RCB-83),
+                                        fails — .repoboard/local/ has no origin),
                                         future-stamp (warning; blocks only with --strict — a log
                                         block's header time is more than a minute ahead of the
                                         clock, so it was ignored for stale-state; hand-typed header
-                                        or clock skew, RCB-90), systems-invalid (error — a
+                                        or clock skew), systems-invalid (error — a
                                         .repoboard/systems.yml that fails to parse), systems-stale
                                         (warning; blocks only with --strict — a detected system no
                                         longer matches its source file)
   repoboard gate record --as <seat> [--tests <passed>|<skipped> --failed n] [--files n]
                         [--typecheck n] [--lint n] [--build n] [--sha s] [--note t]
-                                        append one line to the gate ledger (RCB-112 A) — a
+                                        append one line to the gate ledger — a
                                         SEAT'S OWN RECORD of a check it already ran, never a
                                         re-run; --sha defaults to \`git rev-parse --short HEAD\`
                                         (null outside a repo); needs at least one of --tests,
                                         --typecheck, --lint, --build — none given is exit 1,
                                         nothing written; --tests requires --failed (0 means a
-                                        clean run) — without it, exit 1, nothing written (RCB-116)
+                                        clean run) — without it, exit 1, nothing written
   repoboard gate show [--json]         the newest recorded result per check (tests, typecheck,
                                         lint, build); \`no gate recorded\` for any check with no
                                         line yet
@@ -244,9 +244,9 @@ Usage:
                                         for machine facts (scaffolds RIG.md, adds the exact line
                                         \`.repoboard/local/\` to the root .gitignore, git-inits and
                                         commits); --remote sets (or updates) origin for a private
-                                        backup that needs no extra step (RCB-83); a tracked
+                                        backup that needs no extra step; a tracked
                                         STATE.md/log is kept in place unless --move-record — the
-                                        store reads the record where it is (RCB-93)
+                                        store reads the record where it is
   repoboard local sync [-m "<msg>"]    stage, commit (default message "repoboard local: sync") and
                                         push .repoboard/local/ if it has an origin; "no
                                         .repoboard/local/" when there is none to sync
@@ -269,7 +269,7 @@ Usage:
   repoboard systems show <id> [--json]
                                         one system's full row, plus its \`pointers\` resolved the
                                         way \`card show --resolve\` does; unknown id: exit 1;
-                                        tests: which test files import or name each pointer (RCB-110)
+                                        tests: which test files import or name each pointer
   repoboard systems detect [--root <dir>] [--apply] [--json]
                                         propose .repoboard/systems.yml candidates from
                                         package.json/workspaces, wrangler.*, compose, CI, .env,
@@ -296,7 +296,7 @@ Usage:
                                         start the dashboard (binds 127.0.0.1); --root serves that
                                         directory as given — a directory with no .repoboard/ opens
                                         map-only, and nothing is ever written into it. --root is
-                                        repeatable (RCB-43): the first is the primary and is opened
+                                        repeatable: the first is the primary and is opened
                                         (and scanned, if enabled) immediately; every later --root is
                                         just registered — its board opens on first request (map on
                                         demand, K12) — and is listed by GET /api/repos. With no
@@ -305,7 +305,7 @@ Usage:
                                         it would watch still exceeds --watch-cap (default 20000
                                         paths), or it hits EMFILE/ENFILE, it turns itself off and
                                         logs one warning — the map keeps working from the last scan,
-                                        rescans only on request. --sibling (repeatable; RCB-42) adds
+                                        rescans only on request. --sibling (repeatable) adds
                                         a top-bar link to another running board — an http(s) URL
                                         only; it is merged with board.yml's own siblings: list for
                                         this process only (never written to the file), and on a name
@@ -314,7 +314,7 @@ Usage:
   repoboard --help | --version
 
 Actor for --as defaults to $REPOBOARD_ACTOR, then $USER, then "cli"; for mcp: $REPOBOARD_ACTOR, then "mcp".
-Exception: log takes no $USER/"cli" fallback — it needs --as or $REPOBOARD_ACTOR (RCB-71).
+Exception: log takes no $USER/"cli" fallback — it needs --as or $REPOBOARD_ACTOR.
 `;
 
 const PRIORITIES: ReadonlySet<string> = new Set(['high', 'medium', 'low']);

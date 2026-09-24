@@ -9,7 +9,7 @@ board next to a map of the code — so you can see what your agents are doing, a
 
 ## Try it
 
-Once `repoboard` is on npm (it is not yet — see Status):
+<!-- npm:omit -->Once `repoboard` is on npm (it is not yet — see Status):<!-- /npm:omit -->
 
 ```sh
 npx repoboard init && npx repoboard serve --open
@@ -20,7 +20,7 @@ npx repoboard init && npx repoboard serve --open
 `node packages/server/dist/cli.js serve --open`.
 
 The repo is at https://github.com/prism-nexus/repoboard; contributions go through
-`CONTRIBUTING.md`.
+[`CONTRIBUTING.md`](CONTRIBUTING.md).
 
 ## The idea
 
@@ -41,26 +41,26 @@ and list sizes re-measured 2026-09-07 on 31 cards, standing costs re-measured 20
 
 | Surface | Standing cost | Per move | Per list |
 |---|---|---|---|
-| **CLI** — `repoboard card move RB-12 doing --as claude/dev` | `docs/AGENTS.md` read once: 20.9 KB | ~40 B in, 33 B out | table 2,529 B; `--json` 7,639 B; `--json --full` 20,758 B |
+| **CLI** — `repoboard card move RB-12 doing --as claude/dev` | [`docs/AGENTS.md`](docs/AGENTS.md) read once: 20.9 KB | ~40 B in, 33 B out | table 2,529 B; `--json` 7,639 B; `--json --full` 20,758 B |
 | **MCP** — `claude mcp add repoboard -- npx repoboard mcp` | tool schema 22.2 KB (25 tools, 2026-09-24, RCB-137) per turn where the harness loads it | ~80 B call, ~200 B result | 7,638 B — the same formatter, to the byte |
 | **File edit** — `sed -i 's/^status: todo$/status: doing/' .repoboard/cards/RB-12.md` | same AGENTS.md | ~60 B, but a correct move also bumps `updated` and appends a `## Log` line | n/a |
 
 The systems model adds a 66 B `seat` line and `.repoboard/systems.yml` (2,693 B here) to the cold
 read; `repoboard systems` is 631 B; `systems show <id>` resolves pointers and can run to tens of
-KB — docs/REFERENCE.md §7.
+KB — [`docs/REFERENCE.md`](docs/REFERENCE.md) §7.
 
 A card can also carry a `decision:` block (P8.1) — `repoboard card ask RB-12 "Ship it?" --option
 "A ship now" --option "B wait"` and `repoboard card decide RB-12 A` (or `--words "<verbatim>"`),
 mirrored as MCP `ask_owner`/`record_decision` and HTTP `POST /api/cards/:id/ask|decide`. A DECIDED
 card is authority: `decision.chosen`/`decision.words` are the answer, not a chat relay. See
-`docs/REFERENCE.md` §1 for the bytes and the wire shapes.
+[`docs/REFERENCE.md`](docs/REFERENCE.md) §1 for the bytes and the wire shapes.
 
 A sibling file, `.repoboard/leases.yml` (P8.2), tracks who holds a named resource and the time
 windows during which one is claimed — `repoboard lease take vitest-lock --until +90m`,
 `repoboard window check vitest-lock` (exit 0 clear / 1 blocked, so a lock shim can call it before
 starting a test run), mirrored as MCP `take_lease`/`release_lease`/`list_leases`/`add_window`/
 `check_window` and HTTP `GET /api/leases`, `POST /api/leases/take|release|windows`. A lease past
-`until` reads STALE, never silently held. See `docs/REFERENCE.md` §2.
+`until` reads STALE, never silently held. See [`docs/REFERENCE.md`](docs/REFERENCE.md) §2.
 
 Two more plain files round out the practices program (P8.3): `.repoboard/STATE.md` — one page,
 rewritten in place, never appended, with an OWNER QUEUE generated fresh from cards that need a
@@ -71,7 +71,7 @@ day that every seat appends its own `##### <SEAT> <ts>: <title>` block to. `repo
 card working with no lease held) round-trip through MCP `get_state`/`set_state_section`/
 `append_repo_log`/`check` and HTTP `GET /api/state`, `PUT /api/state/section`, `GET/POST
 /api/log`, `GET /api/check` the same way. `repoboard init --practices` scaffolds all of it (plus a
-root `NEXT-AGENT-PROMPT.md`), never overwriting a file that already exists. See `docs/AGENTS.md`
+root `NEXT-AGENT-PROMPT.md`), never overwriting a file that already exists. See [`docs/AGENTS.md`](docs/AGENTS.md)
 §10.
 
 `repoboard cost [--root <dir>] [--budget <bytes>]` (P8.4) answers what a COLD agent loads before
@@ -81,7 +81,7 @@ NAMES of any `.mcp.json` MCP servers. Exit 1 when `CLAUDE.md` exceeds its budget
 or `board.yml`'s `claudeMdBudgetBytes:`) — the same check `repoboard check`'s `cost-over-budget`
 finding makes error-grade. `--root` measures ANY directory, board or no board — the motivating
 measurement was freshpickedjobs' own `CLAUDE.md`, which reached 32,620 B before anyone measured
-it. MCP `cost`, HTTP `GET /api/cost`, and a tile on the Map view. See `docs/REFERENCE.md` §4.
+it. MCP `cost`, HTTP `GET /api/cost`, and a tile on the Map view. See [`docs/REFERENCE.md`](docs/REFERENCE.md) §4.
 
 `.repoboard/systems.yml` (RCB-95–99) is the one architecture model: systems with kind/layer/env
 and pointers into the repo, connections between them, both dev and prod environments, provenance
@@ -90,7 +90,7 @@ resolves a row's pointers, `repoboard systems detect [--apply]` proposes rows fr
 already on disk (dry-run by default, a hand row always wins, provenance stamped on every merge).
 `repoboard seat <name>` prints one Systems line, `repoboard check` gains `systems-invalid` and
 `systems-stale`, and the Flow view draws it. This repo's own file is 5 systems, 3 connections,
-prod none. See `docs/REFERENCE.md` §7, §8.
+prod none. See [`docs/REFERENCE.md`](docs/REFERENCE.md) §7, §8.
 
 `repoboard archive [--older-than 14d] [--dry-run]` (P8.5) moves `done` cards older than the
 cutoff to `.repoboard/archive/` — `git mv` when tracked, else a rename, always byte-identical; the
@@ -101,7 +101,7 @@ move to done for every one that's struck or gone, idempotent by `refs: [<path>@K
 **never writes the source file** — measured read-only against freshpickedjobs's own 3,300+ line
 README three times as the file moved under this task (64 create / 0 close / 0 malformed each
 time; `git status --short` unchanged before and after every run). MCP `archive_cards`/
-`sync_issues`, HTTP `POST /api/archive`/`POST /api/sync-issues`. See `docs/REFERENCE.md` §5.
+`sync_issues`, HTTP `POST /api/archive`/`POST /api/sync-issues`. See [`docs/REFERENCE.md`](docs/REFERENCE.md) §5.
 
 `repoboard local init [--remote <url>]` (RCB-83) makes `.repoboard/local/` — a second, gitignored
 git repo nested inside this one, for the machine facts a public repo must not ship: `RIG.md`
@@ -115,7 +115,7 @@ are still read).
 
 The CLI is the cheapest per operation and has no standing cost. MCP pays off when the agent has
 no shell or its harness loads tool schemas on demand. Editing the file is the escape hatch: it
-always works, and the watcher synthesizes the event (`actor: file`). `docs/AGENTS.md` is the one
+always works, and the watcher synthesizes the event (`actor: file`). [`docs/AGENTS.md`](docs/AGENTS.md) is the one
 page an agent needs, including a paragraph to paste into a `CLAUDE.md`.
 
 ## What it shows
@@ -126,12 +126,12 @@ page an agent needs, including a paragraph to paste into a `CLAUDE.md`.
   (`docs/BUILD-PLAN.md@P6.2`, `README.md#Known issues`, `src/x.ts:L10-L20`) render in the
   drawer as the referenced lines, read from the file on every open — point, don't paste.
 - **Map** — a treemap of the repo (files by size, colored by language; this repo: 141 files,
-  layout under 1.2 ms on every run recorded in `docs/HANDOFF.md`), heat modes for churn over 30 and 90 days and for
+  layout under 1.2 ms on every recorded run), heat modes for churn over 30 and 90 days and for
   recent edits, an import graph for JS/TS (131 edges here), and *who is where*: files named on
   cards in an active column, updated within `activeWindowMinutes`, glow in the assignee's color.
 - **Flow** — the systems diagram from `.repoboard/systems.yml` (rows by layer, a dev/prod/both
   switch, one-env systems dashed), with a drawer for each box's fields, live pointers, and
-  backlinks (see `docs/REFERENCE.md` §8).
+  backlinks (see [`docs/REFERENCE.md`](docs/REFERENCE.md) §8).
 - **Ticker** — the events in `.repoboard/events.jsonl`, newest first, including moves made by
   hand-editing a file. One entry per mutation, whichever surface made it: a CLI or MCP move is
   reported under its own actor, a hand edit as `file`, and neither is reported twice (K8).
@@ -195,15 +195,15 @@ pnpm build       # packages/server/dist/cli.js, self-contained with the built we
 ```
 
 `packages/core` (domain, no I/O), `packages/server` (CLI, HTTP, WebSocket, watcher, MCP),
-`packages/web` (Vite, React, d3). The plan and every settled decision: `docs/BUILD-PLAN.md`;
-how this repo dispatches subagents: `docs/SUBAGENTS.md`; the running record:
+`packages/web` (Vite, React, d3). The plan and every settled decision: [`docs/BUILD-PLAN.md`](docs/BUILD-PLAN.md);
+how this repo dispatches subagents: [`docs/SUBAGENTS.md`](docs/SUBAGENTS.md); the running record:
 `.repoboard/local/docs/HANDOFF.md` (the local layer, RCB-83).
 
 ## Status
 
-Pre-1.0, at 0.2.0. Public at https://github.com/prism-nexus/repoboard since 2026-09-18. Not on
+Pre-1.0, at 0.2.0. Public at https://github.com/prism-nexus/repoboard since 2026-09-18. <!-- npm:omit -->Not on
 npm yet — publish waits on the owner's npm account (RCB-51); once it lands, install via `npx
-repoboard`. `repoboard@0.2.0` packs to a 366.0 kB tarball of 8 files (measured 2026-09-24 with
+repoboard`.<!-- /npm:omit --> `repoboard@0.2.0` packs to a 366.0 kB tarball of 8 files (measured 2026-09-24 with
 `npm pack --dry-run` in `packages/server` after `pnpm build`). `@repoboard/core` is internal: not
 published, bundled into the CLI (`packages/server/tsup.config.ts`'s `noExternal`) — depend on
 `repoboard`.

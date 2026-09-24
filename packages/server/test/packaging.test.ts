@@ -10,7 +10,7 @@
  * a `publishConfig` path the build does not emit is a failure, not a skip. That is the control.
  */
 import { execFileSync } from 'node:child_process';
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -19,6 +19,9 @@ import { describe, expect, it } from 'vitest';
 const HERE = dirname(fileURLToPath(import.meta.url));
 const CORE_ROOT = resolve(HERE, '..', '..', 'core');
 const CORE_DIST = join(CORE_ROOT, 'dist');
+const REPO_ROOT = resolve(HERE, '..', '..', '..');
+const PREPACK_SCRIPT = join(REPO_ROOT, 'scripts', 'prepack-server.mjs');
+const SERVER_README = join(REPO_ROOT, 'packages', 'server', 'README.md');
 
 interface CoreManifest {
   private?: boolean;
@@ -125,5 +128,62 @@ describe('@repoboard/core packaging (K5)', () => {
     const dts = readFileSync(join(CORE_DIST, 'index.d.ts'), 'utf8');
     expect(dts).toMatch(/declare function parseCard|export declare|export \{/);
     expect(dts).not.toContain('../src/');
+  });
+});
+
+describe('npm README (RCB-135)', () => {
+  it('strips npm:omit regions and rewrites prose doc-file pointers, without writing packages/server/README.md', () => {
+    const existedBefore = existsSync(SERVER_README);
+    const mtimeBefore = existedBefore ? statSync(SERVER_README).mtimeMs : null;
+
+    const outDir = mkdtempSync(join(tmpdir(), 'repoboard-prepack-'));
+    const log = execFileSync(process.execPath, [PREPACK_SCRIPT, '--out', outDir], {
+      cwd: REPO_ROOT,
+      encoding: 'utf8',
+    });
+    expect(log).toMatch(/npm:omit region\(s\) stripped/);
+
+    const copy = readFileSync(join(outDir, 'README.md'), 'utf8');
+    const lower = copy.toLowerCase();
+    expect(lower).not.toContain('npm:omit');
+    expect(lower).not.toContain('not on npm');
+    expect(lower).not.toContain('it is not yet');
+
+    expect(copy).toContain('blob/main/docs/AGENTS.md');
+
+    // Remove every rewritten doc/CONTRIBUTING link — target and label both — before checking
+    // that no bare pointer to a doc the npm package does not ship survives outside a link.
+    const withoutLinks = copy.replace(
+      /\[[^\]]*\]\(https:\/\/github\.com\/prism-nexus\/repoboard\/blob\/main\/[^)]*\)/g,
+      '',
+    );
+    const leftoverDocRefs =
+      withoutLinks.match(/docs\/(AGENTS|REFERENCE|SUBAGENTS|BUILD-PLAN)\.md(?!@P6\.2)/g) ?? [];
+    expect(leftoverDocRefs).toEqual([]);
+    expect(withoutLinks).not.toContain('CONTRIBUTING.md');
+    // The one example that must survive as plain text, not a link.
+    expect(withoutLinks).toContain('docs/BUILD-PLAN.md@P6.2');
+
+    expect(existsSync(SERVER_README)).toBe(existedBefore);
+    if (existedBefore) {
+      expect(statSync(SERVER_README).mtimeMs).toBe(mtimeBefore);
+    }
+  });
+
+  it('exits non-zero on unbalanced npm:omit markers, and never touches the real README', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'repoboard-prepack-fixture-'));
+    const fixture = join(dir, 'FIXTURE-README.md');
+    writeFileSync(fixture, '# t\n\n<!-- npm:omit -->unbalanced, never closed\n');
+    const rootReadmeBefore = readFileSync(join(REPO_ROOT, 'README.md'), 'utf8');
+
+    expect(() =>
+      execFileSync(
+        process.execPath,
+        [PREPACK_SCRIPT, '--src', fixture, '--out', join(dir, 'out')],
+        { cwd: REPO_ROOT, stdio: 'pipe' },
+      ),
+    ).toThrow();
+
+    expect(readFileSync(join(REPO_ROOT, 'README.md'), 'utf8')).toBe(rootReadmeBefore);
   });
 });

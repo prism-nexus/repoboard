@@ -465,6 +465,37 @@ describe('checkFindings', () => {
     expect(findings.some((f) => f.kind === 'stale-state')).toBe(true);
   });
 
+  it('NOT stale when the newest ##### header time EQUALS the stamp to the second', () => {
+    const state = stateAt('2026-09-17T18:00:00Z');
+    const blocks: LogBlock[] = [{ seat: 'OPS', ts: '2026-09-17T18:00:00Z', title: 'x', text: 'y' }];
+    const findings = checkFindings({
+      state,
+      // mtime does not exceed the header's second either, so only the header-equals-stamp case
+      // is under test.
+      logs: [{ date: '2026-09-17', mtimeMs: Date.parse('2026-09-17T18:00:00Z'), blocks }],
+      cards: [],
+      config,
+      leases: emptyLeases(),
+      now: NOW,
+    });
+    expect(findings.some((f) => f.kind === 'stale-state')).toBe(false);
+  });
+
+  it('stale when the newest ##### header time is one second AFTER the stamp', () => {
+    const state = stateAt('2026-09-17T18:00:00Z');
+    const blocks: LogBlock[] = [{ seat: 'OPS', ts: '2026-09-17T18:00:01Z', title: 'x', text: 'y' }];
+    const findings = checkFindings({
+      state,
+      // mtime is OLDER than the state stamp, so only the header time can trigger this.
+      logs: [{ date: '2026-09-17', mtimeMs: Date.parse('2026-09-17T17:00:00Z'), blocks }],
+      cards: [],
+      config,
+      leases: emptyLeases(),
+      now: NOW,
+    });
+    expect(findings.some((f) => f.kind === 'stale-state')).toBe(true);
+  });
+
   it('no logs at all means STATE cannot be stale', () => {
     const state = stateAt('2020-01-01T00:00:00Z');
     const findings = checkFindings({

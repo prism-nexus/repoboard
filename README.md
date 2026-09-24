@@ -245,15 +245,9 @@ owner's.
   2026-09-18 (`Closes K11`); test now pre-creates its file, starting from a `change` not an `add`.
 - ~~**K12** `serve --root <large repo>` in map-only mode ran at 141% CPU with RSS 2.9 GB~~ Closed
   2026-09-17; watcher now honours `.gitignore` plus a watch cap; RSS 2.9 GB → 169 MB.
-- **K13** `repoboard check` reports `stale-state` when STATE.md's stamp EQUALS the newest log block's
-  header second. Reproduced 2026-09-17 22:37:39Z on this repo's own first `init --practices`: `log`
-  then `state --set-section LIVE` within one second → stamp `22:37:39Z`, newest `##### ` header
-  `22:37:39Z`, `check` exit 1; restamping two seconds later → `ok`. The comparison is `<=` where the
-  contract ("stamp OLDER than the newest log entry") is `<` — the same boundary P8.2's C3 control guards
-  for leases (`until < now` is stale, equal is live). Also unmeasured: whether the log FILE's mtime
-  (sub-second) is compared against the second-resolution stamp, which would produce the same false
-  positive for any same-second write. Fix in `checkFindings` with a same-second test; filed by the
-  orchestrator from the first dogfood run.
+- ~~**K13** `check` reported `stale-state` when STATE.md's stamp equals the newest log header second~~
+  Closed 2026-09-24 (RCB-122): the comparison is already strict `<`; 0 of 10 same-second pairs went
+  stale; two tests now pin the equal-second and one-second-after cases.
 - **K14** Flow view: an edge between two boxes in the same column two rows apart runs straight
   through the box between them (two-env fixture, `both`: api → sendgrid passes through postgres).
   `layoutSystems` (core) routes every edge as a three-segment path at the mid-row y and never

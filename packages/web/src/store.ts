@@ -76,6 +76,10 @@ export interface State {
   connected: boolean;
   /** False until the first snapshot; the disconnected banner only shows after that. */
   everConnected: boolean;
+  /** RCB-138: true once `UNREACHABLE_AFTER_MS` has elapsed since `connect()` with no snapshot yet
+   * (the server never answered at all, as opposed to `everConnected && !connected`, which is a
+   * drop after it did). A snapshot always clears it; `connect()` (re)arms the timer. */
+  unreachable: boolean;
   fun: boolean;
   theme: Theme;
   view: View;
@@ -109,6 +113,9 @@ export const EVENTS_KEPT = 50;
 export const STORAGE_FUN = 'repoboard.fun';
 export const STORAGE_THEME = 'repoboard.theme';
 export const STORAGE_SORT = 'repoboard.sort';
+/** RCB-138: how long `connect()` waits for a first snapshot before showing the "can't reach the
+ * server" alert. Exported for the test. */
+export const UNREACHABLE_AFTER_MS = 5000;
 
 type Listener = () => void;
 
@@ -208,6 +215,7 @@ export function createStore(factory: TransportFactory, opts: StoreOptions = {}):
     events: [],
     connected: false,
     everConnected: false,
+    unreachable: false,
     fun: storedFun === null || storedFun === undefined ? true : storedFun === '1',
     theme:
       storedTheme === 'light' || storedTheme === 'dark'
@@ -228,6 +236,7 @@ export function createStore(factory: TransportFactory, opts: StoreOptions = {}):
   const sent: ClientMessage[] = [];
   let transport: Transport | null = null;
   let toastSeq = 0;
+  let unreachableTimer: ReturnType<typeof setTimeout> | null = null;
 
   const set = (patch: Partial<State>) => {
     state = { ...state, ...patch };
@@ -320,6 +329,7 @@ export function createStore(factory: TransportFactory, opts: StoreOptions = {}):
             state: msg.state ?? null,
             log: msg.log ?? null,
             everConnected: true,
+            unreachable: false,
             fun: chosen === null || chosen === undefined ? funFromConfig : chosen === '1',
             // Map is the default tab in map-only mode, but only on the FIRST snapshot: a
             // reconnect must not yank the user off a tab they chose themselves.
@@ -557,6 +567,11 @@ export function createStore(factory: TransportFactory, opts: StoreOptions = {}):
     },
     connect() {
       transport?.close();
+      if (unreachableTimer !== null) clearTimeout(unreachableTimer);
+      unreachableTimer = setTimeout(() => {
+        unreachableTimer = null;
+        if (!state.everConnected) set({ unreachable: true });
+      }, UNREACHABLE_AFTER_MS);
       transport = factory(
         {
           onMessage: (msg) => store.dispatch(msg),
@@ -566,6 +581,8 @@ export function createStore(factory: TransportFactory, opts: StoreOptions = {}):
       );
       void loadRepos();
       return () => {
+        if (unreachableTimer !== null) clearTimeout(unreachableTimer);
+        unreachableTimer = null;
         transport?.close();
         transport = null;
       };

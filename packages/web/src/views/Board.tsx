@@ -134,8 +134,19 @@ function scrollColumnIntoView(columnId: string): void {
 
 export function Board() {
   const store = useStore();
-  const { config, cards, fun, selectedId, pinned, hasBoard, state, log, sizeFilter, sortBy } =
-    useBoardState();
+  const {
+    config,
+    cards,
+    fun,
+    selectedId,
+    pinned,
+    hasBoard,
+    state,
+    log,
+    sizeFilter,
+    sortBy,
+    unreachable,
+  } = useBoardState();
   const now = useNow();
   const decideColumnId = useMemo(
     () => config?.columns.find((c) => c.decision === true)?.id ?? null,
@@ -202,6 +213,18 @@ export function Board() {
 
   if (!hasBoard) return <NoBoard onShowMap={showMap} />;
   if (!config) {
+    if (unreachable) {
+      const host =
+        typeof window !== 'undefined' && window.location.host
+          ? window.location.host
+          : 'this address';
+      return (
+        <div className="board board--empty" role="alert">
+          Can't reach the repoboard server at {host}. Is <code>repoboard serve</code> running? Still
+          retrying…
+        </div>
+      );
+    }
     return <div className="board board--empty">Waiting for the board…</div>;
   }
   const nowDate = new Date(now);

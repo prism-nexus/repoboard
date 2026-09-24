@@ -95,6 +95,10 @@ export interface State {
   sizeFilter: Size[];
   /** RCB-67: sort order for the un-parented lane. Persists like `theme`. */
   sortBy: SortBy;
+  /** RCB-147: the board search box's text; initial `''`. Does NOT persist across reloads — same
+   * reasoning as `sizeFilter` (see BoardTools' header comment): a query left over from a stale
+   * session must not silently hide cards after a reload. */
+  query: string;
 }
 
 export type SortBy = 'updated' | 'size';
@@ -180,6 +184,8 @@ export interface Store {
   clearSizeFilter(): void;
   /** RCB-67: persists to `STORAGE_SORT`. */
   setSortBy(sortBy: SortBy): void;
+  /** RCB-147: the board search box's text. Never persisted — see `State.query`. */
+  setQuery(query: string): void;
   /** Open the transport. Returns a disposer. */
   connect(): () => void;
   /** Messages handed to the transport, for tests and debugging. */
@@ -230,6 +236,7 @@ export function createStore(factory: TransportFactory, opts: StoreOptions = {}):
     toasts: [],
     sizeFilter: [],
     sortBy: storedSort === 'size' ? 'size' : 'updated',
+    query: '',
   };
   const listeners = new Set<Listener>();
   const pending = new Map<string, Pending>();
@@ -565,6 +572,7 @@ export function createStore(factory: TransportFactory, opts: StoreOptions = {}):
       storage?.setItem(STORAGE_SORT, sortBy);
       set({ sortBy });
     },
+    setQuery: (query) => set({ query }),
     connect() {
       transport?.close();
       if (unreachableTimer !== null) clearTimeout(unreachableTimer);
@@ -632,10 +640,27 @@ export interface ColumnCards {
  * RCB-67: `[]` returns `cards` unchanged (same order, every card) — an unconfigured filter is
  * inert, never "nothing". Otherwise only cards whose `size` is in the filter; unsized cards are
  * hidden by any non-empty filter.
+ *
+ * RCB-147: applied after the size rule. An empty (or all-whitespace) `query` is inert — every
+ * card that survived the size rule stays. Otherwise a card survives iff EVERY whitespace-
+ * separated term in `query` (case-insensitive) is a substring of its `id`, its `title`, or one of
+ * its `labels`.
  */
-export function visibleCards(cards: readonly Card[], sizeFilter: readonly Size[]): Card[] {
-  if (sizeFilter.length === 0) return [...cards];
-  return cards.filter((c) => c.size !== undefined && sizeFilter.includes(c.size));
+export function visibleCards(
+  cards: readonly Card[],
+  sizeFilter: readonly Size[],
+  query = '',
+): Card[] {
+  const sized =
+    sizeFilter.length === 0
+      ? [...cards]
+      : cards.filter((c) => c.size !== undefined && sizeFilter.includes(c.size));
+  const terms = query.trim().toLowerCase().split(/\s+/).filter(Boolean);
+  if (terms.length === 0) return sized;
+  return sized.filter((c) => {
+    const haystacks = [c.id, c.title, ...(c.labels ?? [])].map((s) => s.toLowerCase());
+    return terms.every((term) => haystacks.some((h) => h.includes(term)));
+  });
 }
 
 const SIZE_RANK: Record<Size, number> = { S: 0, M: 1, L: 2, XL: 3 };

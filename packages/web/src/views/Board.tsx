@@ -145,6 +145,7 @@ export function Board() {
     log,
     sizeFilter,
     sortBy,
+    query,
     unreachable,
   } = useBoardState();
   const now = useNow();
@@ -156,7 +157,7 @@ export function Board() {
   // keep receiving the FULL `cards` — a gate or a parent can point at a card hidden by the size
   // filter, and the facts do not change because a card is filtered out of view. Only the columns
   // (what actually renders) are built from the filtered/sorted set.
-  const shown = useMemo(() => visibleCards(cards, sizeFilter), [cards, sizeFilter]);
+  const shown = useMemo(() => visibleCards(cards, sizeFilter, query), [cards, sizeFilter, query]);
   const columns = useMemo(() => columnsWithCards(config, shown, sortBy), [config, shown, sortBy]);
   // RCB-68: swimlanes within each column. `cards` is reordered to the lanes' own DOM order —
   // the SortableContext inside `<Column>` builds its `items` from `column.cards`, so this is
@@ -202,6 +203,7 @@ export function Board() {
   const toggleSize = useCallback((size: Size) => store.toggleSize(size), [store]);
   const clearSizeFilter = useCallback(() => store.clearSizeFilter(), [store]);
   const setSortBy = useCallback((s: SortBy) => store.setSortBy(s), [store]);
+  const setQuery = useCallback((q: string) => store.setQuery(q), [store]);
 
   const doneOrigin = useMemo(() => {
     if (arrivals.doneBurst === 0 || typeof document === 'undefined') return null;
@@ -242,11 +244,13 @@ export function Board() {
       <BoardTools
         sizeFilter={sizeFilter}
         sortBy={sortBy}
+        query={query}
         visible={shown.length}
         total={cards.length}
         onToggleSize={toggleSize}
         onClearSizeFilter={clearSizeFilter}
         onSetSortBy={setSortBy}
+        onSetQuery={setQuery}
       />
       <DndContext
         sensors={sensors}

@@ -2224,3 +2224,13 @@ button {
   font-family: var(--font-mono);
   color: var(--muted);
 }
+.board-tools__search {
+  flex: 0 0 auto;
+  width: 220px;
+  padding: 4px 8px;
+  font-size: 12px;
+  color: inherit;
+  background: var(--surface);
+  border: 1px solid var(--muted);
+  border-radius: var(--radius);
+}

@@ -14,6 +14,18 @@ function openLog() {
   fireEvent.click(screen.getByRole('button', { name: /^LOG/ }));
 }
 
+/**
+ * RCB-143: a real click on `<summary>` toggles `.open` synchronously in jsdom but fires the
+ * `toggle` event itself on a later task (measured directly against jsdom 30, outside vitest: the
+ * event lands after several microtask ticks, not on one) — which `onToggle` depends on. Setting
+ * `.open` and dispatching `toggle` directly exercises the same handler synchronously, so a plain
+ * (non-`async`) test can assert on the result immediately after.
+ */
+function openBlock(details: Element) {
+  (details as HTMLDetailsElement).open = true;
+  fireEvent(details, new Event('toggle'));
+}
+
 const LOG_TEXT = [
   '# Log — 2026-09-02',
   '',
@@ -105,7 +117,79 @@ describe('LogTimeline', () => {
     const items = timeline.querySelectorAll('details.log-timeline__item');
     expect(items).toHaveLength(2);
     for (const item of items) expect((item as HTMLDetailsElement).open).toBe(false);
-    expect(timeline).toHaveTextContent('Five waiters set.'); // present in the DOM, just collapsed
+  });
+
+  // RCB-143: pins `LogTimeline.tsx`'s `open ? <div className="log-timeline__text" ... /> : null` —
+  // reverting that to always render the body (the pre-fix `<pre>`) puts 'Five waiters set.' in the
+  // DOM before any toggle, and this assertion catches it.
+  it("a closed block's body markup is not in the DOM before the toggle", () => {
+    const store = testStore();
+    snapshot(store, [card('RB-1', 'todo')], undefined, undefined, undefined, undefined, {
+      date: '2026-09-02',
+      text: LOG_TEXT,
+    });
+    renderApp(store);
+    openLog();
+    const timeline = screen.getByTestId('log-timeline');
+    expect(timeline.querySelector('.log-timeline__text')).toBeNull();
+    expect(timeline).not.toHaveTextContent('Five waiters set.');
+  });
+
+  // RCB-143: pins `LogTimeline.tsx`'s `dangerouslySetInnerHTML={{ __html: renderNote(b.text) }}` —
+  // reverting to the plain-text `<pre>` leaves the literal `**bold**` / backtick text with no
+  // `<strong>`/`<code>` element at all, so this assertion catches it.
+  it('a block body with **bold** and `code` renders <strong> and <code> once opened', () => {
+    const store = testStore();
+    const text = [
+      '# Log — 2026-09-02',
+      '',
+      '##### OPS 2026-09-02T18:00:00Z: markdown block',
+      '',
+      'a **bold** word and `a code span`.',
+      '',
+    ].join('\n');
+    snapshot(store, [card('RB-1', 'todo')], undefined, undefined, undefined, undefined, {
+      date: '2026-09-02',
+      text,
+    });
+    renderApp(store);
+    openLog();
+    const timeline = screen.getByTestId('log-timeline');
+    const item = timeline.querySelector('details.log-timeline__item');
+    expect(item).not.toBeNull();
+    openBlock(item as Element);
+    const body = timeline.querySelector('.log-timeline__text');
+    expect(body?.querySelector('strong')?.textContent).toBe('bold');
+    expect(body?.querySelector('code')?.textContent).toBe('a code span');
+  });
+
+  // RCB-143: pins the sanitizer step of that same `renderNote` call — DOMPurify strips the
+  // `<script>` element and the `onerror` attribute before the HTML ever reaches
+  // `dangerouslySetInnerHTML`. Reverting to raw, unsanitized markdown-to-HTML (no DOMPurify pass)
+  // leaves the `<script>` element and/or the `onerror` attribute in the DOM, so this catches it.
+  it('a <script>/onerror payload in a block body does not reach the DOM', () => {
+    const store = testStore();
+    const text = [
+      '# Log — 2026-09-02',
+      '',
+      '##### OPS 2026-09-02T18:00:00Z: hostile block',
+      '',
+      '<script>window.__pwned = true;</script><img src="x" onerror="window.__pwned = true">',
+      '',
+    ].join('\n');
+    snapshot(store, [card('RB-1', 'todo')], undefined, undefined, undefined, undefined, {
+      date: '2026-09-02',
+      text,
+    });
+    renderApp(store);
+    openLog();
+    const timeline = screen.getByTestId('log-timeline');
+    const item = timeline.querySelector('details.log-timeline__item');
+    expect(item).not.toBeNull();
+    openBlock(item as Element);
+    const body = timeline.querySelector('.log-timeline__text');
+    expect(body?.querySelector('script')).toBeNull();
+    expect(body?.innerHTML).not.toContain('onerror');
   });
 
   // RCB-66: the LOG row head shows the count (and, when non-zero, the newest block's "when") so a

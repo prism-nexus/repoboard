@@ -5,6 +5,8 @@
  * collapsible rows, not a strip beside the Ticker.
  */
 import { avatarFor, parseLogBlocks } from '@repoboard/core';
+import { useState } from 'react';
+import { renderNote } from '../markdown.js';
 import { relTime } from '../time.js';
 import type { LogPayload } from '../wire.js';
 
@@ -28,6 +30,10 @@ export function logBlockWhen(ts: string, now: number): string {
 export function LogTimeline({ log, now }: Props) {
   const blocks = log ? parseLogBlocks(log.text) : [];
   const newestFirst = [...blocks].reverse();
+  // RCB-143: the fpj board has 112 blocks — the body's markdown is parsed only for a block whose
+  // own <details> is open, so a closed block costs no `renderNote` call. Keyed by the same
+  // `${ts}-${seat}-${title}` as the `<details>` `key`, so open state survives newest-first re-sorts.
+  const [openKeys, setOpenKeys] = useState<ReadonlySet<string>>(() => new Set());
 
   if (newestFirst.length === 0) {
     return (
@@ -42,8 +48,22 @@ export function LogTimeline({ log, now }: Props) {
       {newestFirst.map((b) => {
         const { emoji, color } = avatarFor(b.seat);
         const when = logBlockWhen(b.ts, now);
+        const key = `${b.ts}-${b.seat}-${b.title}`;
+        const open = openKeys.has(key);
         return (
-          <details className="log-timeline__item" key={`${b.ts}-${b.seat}-${b.title}`}>
+          <details
+            className="log-timeline__item"
+            key={key}
+            onToggle={(e) => {
+              const isOpen = e.currentTarget.open;
+              setOpenKeys((prev) => {
+                const next = new Set(prev);
+                if (isOpen) next.add(key);
+                else next.delete(key);
+                return next;
+              });
+            }}
+          >
             <summary className="log-timeline__summary">
               <span className="log-timeline__emoji" style={{ color }} aria-hidden="true">
                 {emoji}
@@ -52,7 +72,13 @@ export function LogTimeline({ log, now }: Props) {
               <span className="log-timeline__title">{b.title}</span>
               <span className="log-timeline__when">{when}</span>
             </summary>
-            <pre className="log-timeline__text">{b.text}</pre>
+            {open ? (
+              <div
+                className="log-timeline__text"
+                // biome-ignore lint/security/noDangerouslySetInnerHtml: sanitized by renderNote (DOMPurify)
+                dangerouslySetInnerHTML={{ __html: renderNote(b.text) }}
+              />
+            ) : null}
           </details>
         );
       })}

@@ -358,9 +358,12 @@ button {
   padding: 6px 8px;
   background: var(--surface);
   border-radius: var(--radius);
-  white-space: pre-wrap;
+  overflow-wrap: anywhere;
   font-family: var(--font-ui);
   font-size: 11px;
+}
+.log-timeline__text :is(p, ul, ol) {
+  margin: 0 0 6px;
 }
 
 /* ---- state panel: five collapsible rows (P8.3; RCB-66) ---- */

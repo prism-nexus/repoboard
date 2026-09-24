@@ -186,7 +186,12 @@ export function CardItem({
             </button>
           ) : null}
         </div>
-        <button type="button" className="card__title" onClick={() => onOpen(card.id)}>
+        <button
+          type="button"
+          className="card__title"
+          onClick={() => onOpen(card.id)}
+          title={card.title}
+        >
           {card.title}
         </button>
         {(card.size || card.labels?.length || card.files?.length || card.refs?.length || phase) && (

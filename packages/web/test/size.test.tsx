@@ -12,6 +12,19 @@ import { card, renderApp, snapshot, testStore } from './helpers.jsx';
 
 const config = defaultBoardConfig(); // backlog, decide, todo, doing, done{done:true}
 
+describe('CardItem: title', () => {
+  it('RCB-139: the title button carries `title` equal to the full (300-char) card title', () => {
+    const longTitle = 'x'.repeat(300);
+    const store = testStore();
+    snapshot(store, [card('RB-1', 'todo', { title: longTitle })]);
+    renderApp(store);
+    const titleButton = within(screen.getByTestId('card-RB-1')).getByText(longTitle, {
+      selector: '.card__title',
+    });
+    expect(titleButton).toHaveAttribute('title', longTitle);
+  });
+});
+
 describe('CardItem: size chip', () => {
   it('shows the size and the scale sentence as its title', () => {
     const store = testStore();

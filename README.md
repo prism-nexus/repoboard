@@ -248,16 +248,12 @@ owner's.
 - ~~**K13** `check` reported `stale-state` when STATE.md's stamp equals the newest log header second~~
   Closed 2026-09-24 (RCB-122): the comparison is already strict `<`; 0 of 10 same-second pairs went
   stale; two tests now pin the equal-second and one-second-after cases.
-- **K14** Flow view: an edge between two boxes in the same column two rows apart runs straight
-  through the box between them (two-env fixture, `both`: api → sendgrid passes through postgres).
-  `layoutSystems` (core) routes every edge as a three-segment path at the mid-row y and never
-  checks for a box on the vertical run; plan §3.5 defers real edge routing. Seen 2026-09-22 in
-  the browser on the RCB-98 landing; fix = a column-aware detour in core with a test on that pair.
-- **K15** `systems detect` proposes `env: [dev, prod]` for every candidate even when the file's
-  `environments.prod` is `{ none: … }`, so on a prod-none repo every detected row needs a hand
-  correction (RCB-99 dogfood: 3 of 3 candidates on this repo). `applyDetected` (core) could drop
-  an env whose environment is `none` before merging, with a test on the none-prod fixture. Filed
-  2026-09-22 from the first dogfood run.
+- ~~**K14** Flow view: an edge between two boxes two rows apart in one column ran through the box
+  between~~ Closed 2026-09-24 (RCB-124): a blocked vertical run detours down a lane right of the
+  column (+0.25); unblocked edges keep their exact old path.
+- ~~**K15** `systems detect` proposed `env: [dev, prod]` even when `environments.prod` is `none`~~
+  Closed 2026-09-24 (RCB-123): `applyDetected` drops a `none` env from systems and connections;
+  a list that would become empty is kept as detected.
 - **K16** `serve`'s repo watcher can drop a file change that lands right after chokidar's `ready`
   (macOS fs.watch; RCB-117 measured it in the K12 T4 test: 2 of 8 full-suite runs, watcher alive,
   scanCount unchanged for 8000 ms, a later write rescanned normally). The initial scan also runs

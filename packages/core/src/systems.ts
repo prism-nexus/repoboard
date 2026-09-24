@@ -334,8 +334,56 @@ function stableTopoSort(
   return result;
 }
 
-/** Three-segment orthogonal path between two boxes' centres (§3.4), elbow at the midpoint y. */
-function edgePoints(from: LayoutBox, to: LayoutBox): LayoutPoint[] {
+/** K14: gap between adjacent columns is always `1.5 - 1 = 0.5` (`col * 1.5`, width 1 fixed in
+ * this layout), so a detour lane at a column's right edge plus this margin never enters the next
+ * column's boxes. */
+const DETOUR_LANE_MARGIN = 0.25;
+
+/** True when the vertical segment `x=col` between `ya` and `yb` (either order) crosses `box`'s
+ * rectangle — used only to detect a same-column straight run blocked by a box between the two
+ * ends (K14). Boundary-inclusive on x (a box exactly under the line counts), boundary-exclusive
+ * on y (touching a neighbour's edge is not a crossing). */
+function verticalRunHitsBox(col: number, ya: number, yb: number, box: LayoutBox): boolean {
+  const yLo = Math.min(ya, yb);
+  const yHi = Math.max(ya, yb);
+  return col >= box.x && col <= box.x + box.w && yHi > box.y && yLo < box.y + box.h;
+}
+
+/**
+ * K14 detour: `from` and `to` share a column (straight vertical run at `col`) but some other
+ * box in that column sits between them. Route out of the source's side, down a lane beside the
+ * column (clear of every box sharing that column's x band, by `DETOUR_LANE_MARGIN`), and back
+ * into the target's side. Always detours to the right of the column, never left: columns start
+ * at `col * 1.5` with `col >= 0`, so a left-side lane could go negative, and every layout point
+ * is asserted non-negative.
+ */
+function detourAroundColumn(
+  from: LayoutBox,
+  to: LayoutBox,
+  col: number,
+  allBoxes: readonly LayoutBox[],
+): LayoutPoint[] {
+  const columnRightEdge = allBoxes.reduce(
+    (max, box) => (col >= box.x && col <= box.x + box.w ? Math.max(max, box.x + box.w) : max),
+    from.x + from.w,
+  );
+  const laneX = columnRightEdge + DETOUR_LANE_MARGIN;
+  const fromSideY = from.y + from.h / 2;
+  const toSideY = to.y + to.h / 2;
+  return [
+    { x: from.x + from.w, y: fromSideY },
+    { x: laneX, y: fromSideY },
+    { x: laneX, y: toSideY },
+    { x: to.x + to.w, y: toSideY },
+  ];
+}
+
+/** Three-segment orthogonal path between two boxes' centres (§3.4), elbow at the midpoint y —
+ * unless the two boxes share a column and some other box in that column sits on the straight
+ * vertical run between them (K14), in which case `detourAroundColumn` routes around it instead.
+ * `allBoxes` is every visible box (for the column-obstruction check); a clear run is
+ * byte-identical to the pre-K14 path. */
+function edgePoints(from: LayoutBox, to: LayoutBox, allBoxes: readonly LayoutBox[]): LayoutPoint[] {
   const x1 = from.x + from.w / 2;
   const x2 = to.x + to.w / 2;
   if (from.y === to.y) {
@@ -350,6 +398,12 @@ function edgePoints(from: LayoutBox, to: LayoutBox): LayoutPoint[] {
   const targetAbove = to.y < from.y;
   const y1 = targetAbove ? from.y : from.y + from.h;
   const y2 = targetAbove ? to.y + to.h : to.y;
+  if (x1 === x2) {
+    const blocked = allBoxes.some(
+      (box) => box.id !== from.id && box.id !== to.id && verticalRunHitsBox(x1, y1, y2, box),
+    );
+    if (blocked) return detourAroundColumn(from, to, x1, allBoxes);
+  }
   const midY = (y1 + y2) / 2;
   return [
     { x: x1, y: y1 },
@@ -432,6 +486,7 @@ export function layoutSystems(doc: SystemsDoc, env: 'dev' | 'prod' | 'both'): Sy
     rows.push({ layer, boxes });
   }
 
+  const allBoxes = [...boxOf.values()];
   const edges: LayoutEdge[] = visibleConnections.flatMap((c) => {
     const from = boxOf.get(c.from);
     const to = boxOf.get(c.to);
@@ -442,7 +497,7 @@ export function layoutSystems(doc: SystemsDoc, env: 'dev' | 'prod' | 'both'): Sy
         to: c.to,
         dashed: env === 'both' && bothEnvsShown && c.env.length === 1,
         via: c.via,
-        points: edgePoints(from, to),
+        points: edgePoints(from, to, allBoxes),
       },
     ];
   });

@@ -1,7 +1,13 @@
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
-import { emptySystemsDoc, layoutSystems, parseSystems, type SystemsDoc } from '../src/systems.js';
+import {
+  emptySystemsDoc,
+  type LayoutPoint,
+  layoutSystems,
+  parseSystems,
+  type SystemsDoc,
+} from '../src/systems.js';
 
 function fixture(name: string): string {
   return readFileSync(
@@ -267,6 +273,64 @@ systems:
         const layout = layoutSystems(noneProd(), 'dev');
         expect(layout.rows.length).toBeGreaterThan(0);
         expect(layout.none.dev).toBeUndefined();
+      });
+    });
+
+    describe('K14: edge detours around a box in its column', () => {
+      /** Independent of the production helper on purpose: this re-derives "does this segment
+       * cross that rectangle" from scratch so the test does not just re-check the implementation
+       * against itself. Segments here are always axis-aligned (horizontal or vertical), so a
+       * plain interval-overlap test on x and y is exact; boundary-touching (grazing an edge, not
+       * passing through) does not count as a hit. */
+      function segmentHitsRect(
+        a: LayoutPoint,
+        b: LayoutPoint,
+        rect: { x: number; y: number; w: number; h: number },
+      ): boolean {
+        const xLo = Math.min(a.x, b.x);
+        const xHi = Math.max(a.x, b.x);
+        const yLo = Math.min(a.y, b.y);
+        const yHi = Math.max(a.y, b.y);
+        return xHi > rect.x && xLo < rect.x + rect.w && yHi > rect.y && yLo < rect.y + rect.h;
+      }
+
+      it("api -> sendgrid clears postgres: no segment of the path intersects postgres's rectangle", () => {
+        // Two-env fixture, env `both`: api (app row) and sendgrid (external row) share a column
+        // two rows apart, with postgres (data row) sitting directly between them.
+        const layout = layoutSystems(twoEnv(), 'both');
+        const boxes = layout.rows.flatMap((r) => r.boxes);
+        const postgres = boxes.find((b) => b.id === 'postgres');
+        expect(postgres).toBeDefined();
+        if (!postgres) return;
+        const edge = layout.edges.find((e) => e.from === 'api' && e.to === 'sendgrid');
+        expect(edge).toBeDefined();
+        if (!edge) return;
+        expect(edge.points.length).toBeGreaterThanOrEqual(2);
+        for (let i = 0; i + 1 < edge.points.length; i++) {
+          const a = edge.points[i];
+          const b = edge.points[i + 1];
+          expect(a).toBeDefined();
+          expect(b).toBeDefined();
+          if (!a || !b) continue;
+          expect(segmentHitsRect(a, b, postgres)).toBe(false);
+        }
+      });
+
+      it("gateway -> api (adjacent rows, one column, nothing between) keeps today's exact elbow path", () => {
+        // Regression pin: gateway (edge row) -> api (app row) share a column one row apart, with
+        // no row (hence no box) between them, so the K14 detour must never fire here.
+        const layout = layoutSystems(twoEnv(), 'both');
+        const edge = layout.edges.find((e) => e.from === 'gateway' && e.to === 'api');
+        expect(edge).toBeDefined();
+        if (!edge) return;
+        // gateway: x 0, y 2, h 1 -> bottom edge y 3. api: x 0, y 4, h 1 -> top edge y 4.
+        // Pre-K14 formula: elbow at midY = (3 + 4) / 2 = 3.5, x1 === x2 === 0.5 (both col 0).
+        expect(edge.points).toEqual([
+          { x: 0.5, y: 3 },
+          { x: 0.5, y: 3.5 },
+          { x: 0.5, y: 3.5 },
+          { x: 0.5, y: 4 },
+        ]);
       });
     });
   });

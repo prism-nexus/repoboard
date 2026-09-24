@@ -4,6 +4,7 @@
  * and the chokidar watcher re-reads whatever changes on disk — including our own writes,
  * which it recognises by content hash and does not double-report.
  */
+import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { EventEmitter } from 'node:events';
 import { appendFile, mkdir, readdir, readFile, rename, stat, writeFile } from 'node:fs/promises';
@@ -949,8 +950,57 @@ export class CardStore extends EventEmitter<StoreEvents> {
       cost,
       local,
       systems: await this.gatherSystemsCheck(),
+      untrackedCards: await this.gatherUntrackedCards().catch(() => null),
     });
     return { findings, exitCode: exitCodeForFindings(findings, strict) };
+  }
+
+  /**
+   * RCB-119: card files git does not track — `repoboard check`'s `untracked-cards` finding. One
+   * git spawn, cwd = `this.root`: `ls-files --others --exclude-standard` scoped to the cards dir,
+   * so an untracked write elsewhere in the tree never shows up here. `null` when `this.root` is
+   * not a git repo (or the spawn otherwise fails) — same "gather never fails, unconfigured is
+   * inert" rule as `local`/`systems` above. Each id's `actor` is the NEWEST `create` event's
+   * actor for that id in this store's already-loaded event log, or `null` when there is none.
+   */
+  private async gatherUntrackedCards(): Promise<
+    readonly { id: string; actor: string | null }[] | null
+  > {
+    const result = await new Promise<{ code: number; stdout: string } | null>((res) => {
+      const child = spawn('git', [
+        '-C',
+        this.root,
+        'ls-files',
+        '--others',
+        '--exclude-standard',
+        '--',
+        this.cardsDir,
+      ]);
+      let stdout = '';
+      child.stdout?.on('data', (chunk: Buffer) => {
+        stdout += chunk.toString('utf8');
+      });
+      child.on('error', () => res(null));
+      child.on('close', (code) => res({ code: code ?? 1, stdout }));
+    });
+    if (result === null || result.code !== 0) return null;
+    const lines = result.stdout
+      .split('\n')
+      .map((l) => l.trim())
+      .filter((l) => l.length > 0);
+    const found: { id: string; actor: string | null }[] = [];
+    for (const line of lines) {
+      const name = basename(line);
+      if (!CARD_FILE.test(name)) continue;
+      const id = basename(name, '.md');
+      let actor: string | null = null;
+      // Append order = chronological, so the last matching `create` event is the newest one.
+      for (const e of this.eventLog) {
+        if (e.type === 'create' && e.cardId === id) actor = e.actor;
+      }
+      found.push({ id, actor });
+    }
+    return found;
   }
 
   /**

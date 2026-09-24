@@ -1,7 +1,9 @@
+import { execFile } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
 import { appendFile, mkdir, readFile, rm, stat, utimes, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { promisify } from 'node:util';
 import type { BoardConfig, Card } from '@repoboard/core';
 import { defaultBoardConfig, parseBoard, parseCard, serializeBoard } from '@repoboard/core';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -24,6 +26,20 @@ import {
   type TempRepo,
   waitForEvent,
 } from './helpers.js';
+
+const execFileAsync = promisify(execFile);
+
+/** One `git` invocation for a fixture repo. Fixtures live under `os.tmpdir()` (never this repo). */
+async function git(cwd: string, ...args: string[]): Promise<void> {
+  const env = {
+    ...process.env,
+    GIT_AUTHOR_NAME: 't',
+    GIT_AUTHOR_EMAIL: 't@t',
+    GIT_COMMITTER_NAME: 't',
+    GIT_COMMITTER_EMAIL: 't@t',
+  };
+  await execFileAsync('git', args, { cwd, env });
+}
 
 const opened: CardStore[] = [];
 const repos: TempRepo[] = [];
@@ -801,6 +817,34 @@ describe('state and log (P8.3)', () => {
       readOnly: true,
       error: MAP_ONLY_ERROR,
     });
+  });
+
+  it('check: untracked-cards names only a fresh uncommitted card, with its creating actor (RCB-119)', async () => {
+    const repo = await repoWith({ 'RB-1.md': cardText('RB-1', 'todo') });
+    await git(repo.root, 'init', '-q');
+    await git(repo.root, 'add', '-A');
+    await git(repo.root, 'commit', '-q', '-m', 'initial');
+
+    const store = await open(repo, false);
+    const created = await store.create({ title: 'new work' }, 'web');
+    expect(created.ok).toBe(true);
+    if (!created.ok) return;
+
+    const { findings } = await store.check(false);
+    const finding = findings.find((f) => f.kind === 'untracked-cards');
+    expect(finding).toEqual({
+      kind: 'untracked-cards',
+      level: 'warning',
+      message: `untracked-cards: 1 card file(s) not in git — ${created.card.id} (web)`,
+    });
+  });
+
+  it('check: a non-git dir gathers no untracked-cards finding — check() still works', async () => {
+    const repo = await repoWith({ 'RB-1.md': cardText('RB-1', 'todo') });
+    const store = await open(repo, false);
+    const { findings, exitCode } = await store.check(false);
+    expect(findings.some((f) => f.kind === 'untracked-cards')).toBe(false);
+    expect(exitCode).toBe(0);
   });
 });
 

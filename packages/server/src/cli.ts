@@ -226,7 +226,8 @@ Usage:
                                         or clock skew), systems-invalid (error — a
                                         .repoboard/systems.yml that fails to parse), systems-stale
                                         (warning; blocks only with --strict — a detected system no
-                                        longer matches its source file)
+                                        longer matches its source file), untracked-cards (warning;
+                                        blocks only with --strict — card files git does not track)
   repoboard gate record --as <seat> [--tests <passed>|<skipped> --failed n] [--files n]
                         [--typecheck n] [--lint n] [--build n] [--sha s] [--note t]
                                         append one line to the gate ledger — a

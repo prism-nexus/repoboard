@@ -1081,6 +1081,83 @@ describe('systems findings (RCB-97)', () => {
   });
 });
 
+describe('checkFindings: untracked-cards (RCB-119)', () => {
+  const config = defaultBoardConfig();
+  const base = {
+    state: stateAt('2026-09-17T21:00:00Z'),
+    logs: [],
+    cards: [],
+    config,
+    leases: emptyLeases(),
+    now: NOW,
+  };
+
+  it('empty list — no finding', () => {
+    const findings = checkFindings({ ...base, untrackedCards: [] });
+    expect(findings.some((f) => f.kind === 'untracked-cards')).toBe(false);
+  });
+
+  it('null — no finding, same as absent (not a git repo, or ungathered)', () => {
+    const withNull = checkFindings({ ...base, untrackedCards: null });
+    const withoutField = checkFindings(base);
+    expect(withNull.some((f) => f.kind === 'untracked-cards')).toBe(false);
+    expect(withoutField.some((f) => f.kind === 'untracked-cards')).toBe(false);
+  });
+
+  it('2 ids — one warning naming both ids and actors', () => {
+    const findings = checkFindings({
+      ...base,
+      untrackedCards: [
+        { id: 'RB-5', actor: 'web' },
+        { id: 'RB-6', actor: 'web' },
+      ],
+    });
+    expect(findings).toContainEqual({
+      kind: 'untracked-cards',
+      level: 'warning',
+      message: 'untracked-cards: 2 card file(s) not in git — RB-5 (web), RB-6 (web)',
+    });
+  });
+
+  it('12 ids — lists the first 10, then "…+2 more"', () => {
+    const untrackedCards = Array.from({ length: 12 }, (_, i) => ({
+      id: `RB-${i + 1}`,
+      actor: 'web',
+    }));
+    const findings = checkFindings({ ...base, untrackedCards });
+    const shownIds = untrackedCards
+      .slice(0, 10)
+      .map((c) => `${c.id} (${c.actor})`)
+      .join(', ');
+    expect(findings).toContainEqual({
+      kind: 'untracked-cards',
+      level: 'warning',
+      message: `untracked-cards: 12 card file(s) not in git — ${shownIds}, …+2 more`,
+    });
+  });
+
+  it('actor null — rendered as "?"', () => {
+    const findings = checkFindings({
+      ...base,
+      untrackedCards: [{ id: 'RB-9', actor: null }],
+    });
+    expect(findings).toContainEqual({
+      kind: 'untracked-cards',
+      level: 'warning',
+      message: 'untracked-cards: 1 card file(s) not in git — RB-9 (?)',
+    });
+  });
+
+  it('with the finding present: exitCodeForFindings is 0 without --strict, 1 with --strict', () => {
+    const findings = checkFindings({
+      ...base,
+      untrackedCards: [{ id: 'RB-5', actor: 'web' }],
+    });
+    expect(exitCodeForFindings(findings, false)).toBe(0);
+    expect(exitCodeForFindings(findings, true)).toBe(1);
+  });
+});
+
 describe('splitLandings / trimLandings (RCB-92)', () => {
   // 4 entries: a 2-line preamble (stays attached to entry 1), entry 1 is multi-line with a
   // nested `- ` bullet (fpj's `-38. **K101…` shape), entry 2 is the `0. ` style, entries 3–4 are

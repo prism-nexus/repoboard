@@ -224,7 +224,8 @@ export interface Finding {
     | 'local-no-remote'
     | 'future-stamp'
     | 'systems-invalid'
-    | 'systems-stale';
+    | 'systems-stale'
+    | 'untracked-cards';
   level: FindingLevel;
   message: string;
 }
@@ -257,6 +258,12 @@ export interface CheckInput {
    * nothing (no systems.yml at all, or it gathered no stale check) — an unconfigured systems.yml
    * is inert, not dangerous, so no finding fires for it. */
   systems?: { errors: readonly string[]; stale: readonly string[] } | null;
+  /** RCB-119: card files git does not track, gathered (with I/O, one `git ls-files`) by the
+   * caller — core stays I/O-free (§0.5). `null`/absent when the caller could not gather it (not a
+   * git repo, or the gather itself failed) — an ungathered signal is inert, not dangerous, so no
+   * finding fires for it. `actor` is the creating actor's newest `create` event, or `null` when
+   * none is known (e.g. the id was never created through this store). */
+  untrackedCards?: readonly { id: string; actor: string | null }[] | null;
 }
 
 /**
@@ -472,6 +479,20 @@ export function checkFindings(input: CheckInput): Finding[] {
   if (cf) findings.push(cf);
 
   findings.push(...systemsFindings(input.systems));
+
+  // RCB-119: an absent/null `untrackedCards` is inert (no git repo, or the caller could not
+  // gather it) — like `local` and `systems`, an unconfigured/ungathered signal yields nothing,
+  // never a warning. Warning-grade, like `future-stamp`: exit stays 0 without `--strict`.
+  if (input.untrackedCards && input.untrackedCards.length > 0) {
+    const n = input.untrackedCards.length;
+    const shown = input.untrackedCards.slice(0, 10).map((c) => `${c.id} (${c.actor ?? '?'})`);
+    const more = n > 10 ? `, …+${n - 10} more` : '';
+    findings.push({
+      kind: 'untracked-cards',
+      level: 'warning',
+      message: `untracked-cards: ${n} card file(s) not in git — ${shown.join(', ')}${more}`,
+    });
+  }
 
   return findings;
 }

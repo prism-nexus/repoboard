@@ -391,11 +391,13 @@ describe('repoboard seat: local/STATE.md and the Rig section', () => {
     expect(res.out).toContain('# RIG — <this machine>');
   });
 
-  it('with no local layer: the placeholder line, not a crash', async () => {
+  it('with no local layer: not a crash; a solo board omits the Rig placeholder (RCB-140)', async () => {
     const root = await freshRepo({});
     const res = await repoboard(root, 'seat', 'builder');
     expect(res.code).toBe(0);
-    expect(res.out).toContain('(no .repoboard/local/RIG.md — run repoboard local init)');
+    expect(res.out).toContain('## Next card');
+    // The non-solo placeholder line is pinned in core's seat.test.ts.
+    expect(res.out).not.toContain('(no .repoboard/local/RIG.md — run repoboard local init)');
   });
 });
 

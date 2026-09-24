@@ -512,7 +512,7 @@ describe('seatBundle: coordinator section', () => {
       const bundle = seatBundle({
         name: 'coordinator',
         now: NOW,
-        seatsSection: null,
+        seatsSection: SEATS, // RCB-140: non-solo, so every section renders
         ownBlock: null,
         coordinatorBlock: null,
         cards: [],
@@ -678,8 +678,10 @@ describe('renderSeatBundle: placeholders for every missing part', () => {
       inFlight: null,
       owes: null,
       systems: null,
+      solo: false,
     };
     const rendered = renderSeatBundle(bundle, NOW);
+    expect(rendered).not.toContain('solo board');
     expect(rendered).toContain('## In flight / owes');
     expect(rendered).toContain('in-flight: (none recorded)');
     expect(rendered).toContain('owes: (none recorded)');
@@ -712,10 +714,125 @@ describe('renderSeatBundle: placeholders for every missing part', () => {
       inFlight: null,
       owes: null,
       systems: null,
+      solo: false,
     };
     const rendered = renderSeatBundle(bundle, NOW);
     expect(rendered).toContain('RCB-1  todo  do this');
     expect(rendered).toContain('(first todo; nothing assigned, nothing prioritised)');
+  });
+});
+
+describe('seatBundle: solo (RCB-140)', () => {
+  it('no SEATS section at all: solo is true', () => {
+    const bundle = seatBundle({
+      name: 'ops',
+      now: NOW,
+      seatsSection: null,
+      ownBlock: null,
+      coordinatorBlock: null,
+      cards: [],
+    });
+    expect(bundle.solo).toBe(true);
+  });
+
+  it('a SEATS section with no bullets in it: solo is true (reverting this line to a section with a bullet must fail)', () => {
+    const bundle = seatBundle({
+      name: 'ops',
+      now: NOW,
+      seatsSection: 'Owner tasks elsewhere: nothing to see here',
+      ownBlock: null,
+      coordinatorBlock: null,
+      cards: [],
+    });
+    expect(bundle.solo).toBe(true);
+  });
+
+  it('a SEATS section with at least one bullet: solo is false', () => {
+    const bundle = seatBundle({
+      name: 'ops',
+      now: NOW,
+      seatsSection: SEATS,
+      ownBlock: null,
+      coordinatorBlock: null,
+      cards: [],
+    });
+    expect(bundle.solo).toBe(false);
+  });
+});
+
+describe('renderSeatBundle: a solo board drops the placeholder sections (RCB-140)', () => {
+  it('solo, every part missing: the solo line prints; the five placeholder sections are gone; Next card and Open decisions still print', () => {
+    const bundle: SeatBundle = {
+      name: 'ops',
+      seatsLine: null,
+      ownBlock: null,
+      coordinatorBlock: null,
+      nextCard: null,
+      nextCardReason: null,
+      nextCardStep: null,
+      openDecisions: [],
+      nextCardEmpty: null,
+      rig: null,
+      inFlight: null,
+      owes: null,
+      systems: null,
+      solo: true,
+    };
+    const rendered = renderSeatBundle(bundle, NOW);
+    expect(rendered).toContain(
+      'solo board — seats, the log and leases apply once more than one agent runs (repoboard init --practices)',
+    );
+    expect(rendered).not.toContain('## In flight / owes');
+    expect(rendered).not.toContain('## SEATS line');
+    expect(rendered).not.toContain('## Rig (.repoboard/local/RIG.md)');
+    expect(rendered).not.toContain('## Last block — OPS');
+    expect(rendered).not.toContain('## Last block — COORDINATOR');
+    expect(rendered).not.toContain('(none recorded)');
+    expect(rendered).not.toContain('(no SEATS line mentions ops)');
+    expect(rendered).not.toContain('(no .repoboard/local/RIG.md — run repoboard local init)');
+    expect(rendered).not.toContain('(no log block for ops)');
+    expect(rendered).not.toContain('(no log block for coordinator)');
+    expect(rendered).toContain('## Next card');
+    expect(rendered).toContain('(no todo card)');
+    expect(rendered).toContain('## Open decisions');
+    expect(rendered).toContain('(none)');
+  });
+
+  it('solo but with an ownBlock: the Last block section still prints (reverting `!b.solo || b.ownBlock !== null` to `!b.solo` alone must fail)', () => {
+    const bundle: SeatBundle = {
+      name: 'ops',
+      seatsLine: null,
+      ownBlock: {
+        date: '2026-09-18',
+        block: {
+          seat: 'OPS',
+          ts: '2026-09-18T20:00:00Z',
+          title: 'watching things',
+          text: 'watching things',
+        },
+      },
+      coordinatorBlock: null,
+      nextCard: null,
+      nextCardReason: null,
+      nextCardStep: null,
+      openDecisions: [],
+      nextCardEmpty: null,
+      rig: null,
+      inFlight: null,
+      owes: null,
+      systems: null,
+      solo: true,
+    };
+    const rendered = renderSeatBundle(bundle, NOW);
+    expect(rendered).toContain(
+      'solo board — seats, the log and leases apply once more than one agent runs (repoboard init --practices)',
+    );
+    expect(rendered).toContain('## Last block — OPS');
+    expect(rendered).toContain('watching things');
+    expect(rendered).not.toContain('## In flight / owes');
+    expect(rendered).not.toContain('## SEATS line');
+    expect(rendered).not.toContain('## Rig (.repoboard/local/RIG.md)');
+    expect(rendered).not.toContain('## Last block — COORDINATOR');
   });
 });
 
@@ -749,7 +866,7 @@ describe('seatBundle: rig (RCB-83)', () => {
     const bundle = seatBundle({
       name: 'builder',
       now: NOW,
-      seatsSection: null,
+      seatsSection: SEATS, // RCB-140: non-solo, so every section renders
       ownBlock: null,
       coordinatorBlock: null,
       cards: [],
@@ -1074,7 +1191,7 @@ describe('systems line (RCB-97)', () => {
     const bundle = seatBundle({
       name: 'builder',
       now: NOW,
-      seatsSection: null,
+      seatsSection: SEATS, // RCB-140: non-solo, so every section renders
       ownBlock: null,
       coordinatorBlock: null,
       cards: [],

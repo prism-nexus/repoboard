@@ -78,6 +78,11 @@ export interface SeatBundle {
   /** RCB-97: `input.systems ?? null` — `repoboard seat`'s one Systems line, a pointer not the
    *  table (§3.3: O3, standing cost). */
   systems: SystemsSummary | null;
+  /** RCB-140: true when the SEATS section is absent or has no bullets at all, stamped or not
+   *  (`bulletSpans`, not `listSeats`, which drops unstamped ones). A board with no seats recorded yet has never
+   *  had a second agent on it, so the cold-start bundle drops the sections that are pure noise on
+   *  a solo board instead of printing five placeholders in a row. */
+  solo: boolean;
 }
 
 const escapeRegExp = (s: string): string => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -535,6 +540,8 @@ export function seatBundle(input: SeatBundleInput): SeatBundle {
     inFlight: fields.inFlight,
     owes: fields.owes,
     systems: input.systems ?? null,
+    // Any bullet counts, stamped or not — `listSeats` keeps only stamped ones.
+    solo: bulletSpans((input.seatsSection ?? '').split('\n')).length === 0,
   };
 }
 
@@ -549,22 +556,41 @@ export function renderSeatBundle(b: SeatBundle, now: Date): string {
   const lines: string[] = [];
 
   lines.push(`# seat ${b.name} — ${toIso(now)}`, '');
-  lines.push('## In flight / owes');
-  lines.push(`in-flight: ${b.inFlight ?? '(none recorded)'}`);
-  lines.push(`owes: ${b.owes ?? '(none recorded)'}`);
-  if (b.systems !== null) lines.push(b.systems.line);
-  lines.push('');
 
-  lines.push('## SEATS line');
-  lines.push(b.seatsLine ?? `(no SEATS line mentions ${b.name})`, '');
+  if (b.solo) {
+    lines.push(
+      'solo board — seats, the log and leases apply once more than one agent runs (repoboard init --practices)',
+      '',
+    );
+  }
 
-  lines.push('## Rig (.repoboard/local/RIG.md)');
-  lines.push(b.rig ?? '(no .repoboard/local/RIG.md — run repoboard local init)', '');
+  const inFlightOwesIsPlaceholder = b.inFlight === null && b.owes === null;
+  if (!b.solo || !inFlightOwesIsPlaceholder) {
+    lines.push('## In flight / owes');
+    lines.push(`in-flight: ${b.inFlight ?? '(none recorded)'}`);
+    lines.push(`owes: ${b.owes ?? '(none recorded)'}`);
+    if (b.systems !== null) lines.push(b.systems.line);
+    lines.push('');
+  } else if (b.systems !== null) {
+    lines.push(b.systems.line, '');
+  }
 
-  lines.push(`## Last block — ${b.name.toUpperCase()}`);
-  lines.push(b.ownBlock ? formatLogBlock(b.ownBlock.block) : `(no log block for ${b.name})`, '');
+  if (!b.solo || b.seatsLine !== null) {
+    lines.push('## SEATS line');
+    lines.push(b.seatsLine ?? `(no SEATS line mentions ${b.name})`, '');
+  }
 
-  if (!isCoordinator) {
+  if (!b.solo || b.rig !== null) {
+    lines.push('## Rig (.repoboard/local/RIG.md)');
+    lines.push(b.rig ?? '(no .repoboard/local/RIG.md — run repoboard local init)', '');
+  }
+
+  if (!b.solo || b.ownBlock !== null) {
+    lines.push(`## Last block — ${b.name.toUpperCase()}`);
+    lines.push(b.ownBlock ? formatLogBlock(b.ownBlock.block) : `(no log block for ${b.name})`, '');
+  }
+
+  if (!isCoordinator && (!b.solo || b.coordinatorBlock !== null)) {
     lines.push('## Last block — COORDINATOR');
     lines.push(
       b.coordinatorBlock

@@ -2423,6 +2423,7 @@ describe('repoboard seat', () => {
         'ownBlock',
         'rig',
         'seatsLine',
+        'solo',
         'systems',
       ].sort(),
     );
@@ -2481,13 +2482,15 @@ describe('repoboard seat', () => {
     expect(parsed.nextCardStep).toEqual({ parentId, gateBy: `${ph0Id} (done)` });
   });
 
-  it('no STATE.md, no log, no cards: exit 0 with a placeholder for every section', async () => {
+  it('no STATE.md, no log, no cards: exit 0, one solo line instead of the empty seat sections', async () => {
     const root = await freshRepo({});
     const res = await repoboard(root, 'seat', 'builder');
     expect(res.code).toBe(0);
-    expect(res.out).toContain('(no SEATS line mentions builder)');
-    expect(res.out).toContain('(no log block for builder)');
-    expect(res.out).toContain('(no log block for coordinator)');
+    // RCB-140: a board with no SEATS bullets is solo — its placeholders collapse to one line.
+    expect(res.out).toContain('solo board — seats, the log and leases apply');
+    expect(res.out).not.toContain('(no SEATS line mentions builder)');
+    expect(res.out).not.toContain('(no log block for builder)');
+    expect(res.out).not.toContain('(no log block for coordinator)');
     // RCB-118: WHY there's no todo card — a cold, empty board is 0/0/0, printed not omitted.
     expect(res.out).toContain(
       '(no todo card for builder — 0 todo assigned to other seats · 0 gated · 0 waiting on the owner)',
@@ -3308,7 +3311,7 @@ describe('seat: dist staleness (RCB-60)', () => {
     const res = await repoboardWithSelfRoot(root, selfRoot, 'seat', 'builder');
     expect(res.code).toBe(0);
     expect(res.err).toBe('warning: dist is older than src — run pnpm build (core)\n');
-    expect(res.out).toContain('(no SEATS line mentions builder)');
+    expect(res.out).toContain('## Next card');
   });
 
   it('a fresh self-root: stderr is empty', async () => {

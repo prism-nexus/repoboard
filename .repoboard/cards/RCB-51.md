@@ -15,13 +15,14 @@ decision:
   decidedBy: coordinator
   decidedAt: 2026-09-24T20:55:45Z
 created: 2026-09-18T19:52:32Z
-updated: 2026-09-24T20:55:45Z
+updated: 2026-09-24T20:56:56Z
 ---
 ## Decision
 - 2026-09-24T20:55:45Z coordinator — done — "account and org created on npm so once this batch finishes we are set to release"
 
 ## Notes
 - 2026-09-24T20:55:45Z repoboard builder — repoboard builder 20:5xZ 09-24: recorded from the coordinator's relay (owner words heard at the coordinator pane 20:0xZ, 1:0x pm Pacific). NOT confirmed by those words: 2FA on the account (coordinator asking the owner), and the placeholder 0.0.1 publish (moot if 0.2.0 ships at batch-done). Release gate: RCB-133..150 finished; the builder confirms the tag+publish with the owner in its own terminal before running it. Title's 'core/server under @repoboard' superseded by RCB-126 (core internal; only repoboard publishes).
+- 2026-09-24T20:56:56Z repoboard builder — repoboard builder 20:5xZ 09-24: owner words via the coordinator's relay (heard 20:5xZ, 1:5x pm Pacific): "I have not setup the 2fa yet". Account + org exist; 2FA is NOT set up — the owner's step before the publish; the builder raises it in its terminal confirm at publish time (check npm whoami and the org's publishing setting then).
 
 ## Log
 - 2026-09-18T19:52:32Z coordinator — moved todo → decide

@@ -40,6 +40,7 @@ import {
   formatLogLine,
   formatSeatBullet,
   initialStateText,
+  type LeaseMutationResult,
   type LeasesDoc,
   type LogBlock,
   type LogFileInfo,
@@ -77,6 +78,7 @@ import {
 import { watch as chokidarWatch, type FSWatcher } from 'chokidar';
 import { type ArchiveMoveMethod, archiveMoveFile } from './archive.js';
 import { gatherCost } from './cost.js';
+import { withFileLock } from './file-lock.js';
 import { localDir, localStatus } from './local.js';
 import { detectSystems } from './systems-detect.js';
 
@@ -241,6 +243,17 @@ const CARD_FILE = /^[^/\\]+\.md$/;
 
 function sha1(text: string): string {
   return createHash('sha1').update(text).digest('hex');
+}
+
+/**
+ * RCB-133: `<file>.<pid>.<random>.tmp`, not a fixed `<file>.tmp` — `writeLeases`/`writeState` now
+ * run under a cross-process file lock, but the tmp file itself is written BEFORE the atomic
+ * rename, so a name shared by every writer (same pid across restarts, or any writer that reaches
+ * this path outside the lock) is still one collision waiting to happen. Cheap insurance, not a
+ * second lock.
+ */
+function tmpName(target: string): string {
+  return `${target}.${process.pid}.${Math.random().toString(36).slice(2, 10)}.tmp`;
 }
 
 /** Sort `<PREFIX>-<n>` numerically within a prefix, then by id text. */
@@ -592,36 +605,15 @@ export class CardStore extends EventEmitter<StoreEvents> {
    * expired windows before writing (locked decision 2: prune on write, never on read).
    */
   takeLease(input: TakeLeaseInput, actor: string): Promise<LeaseOutcome> {
-    return this.mutate(async () => {
-      const res = takeLease(this.leasesDoc, input, { actor, now: this.now() });
-      if (!res.ok) return { ok: false, error: res.error };
-      const doc = pruneWindows(res.doc, this.now());
-      await this.writeLeases(doc);
-      await this.appendEvent(res.event);
-      return { ok: true, doc, event: res.event, warnings: res.warnings };
-    });
+    return this.mutateLeases((doc, now) => takeLease(doc, input, { actor, now }));
   }
 
   releaseLease(input: ReleaseLeaseInput, actor: string): Promise<LeaseOutcome> {
-    return this.mutate(async () => {
-      const res = releaseLease(this.leasesDoc, input, { actor, now: this.now() });
-      if (!res.ok) return { ok: false, error: res.error };
-      const doc = pruneWindows(res.doc, this.now());
-      await this.writeLeases(doc);
-      await this.appendEvent(res.event);
-      return { ok: true, doc, event: res.event, warnings: res.warnings };
-    });
+    return this.mutateLeases((doc, now) => releaseLease(doc, input, { actor, now }));
   }
 
   addWindow(input: AddWindowInput, actor: string): Promise<LeaseOutcome> {
-    return this.mutate(async () => {
-      const res = addWindow(this.leasesDoc, input, { actor, now: this.now() });
-      if (!res.ok) return { ok: false, error: res.error };
-      const doc = pruneWindows(res.doc, this.now());
-      await this.writeLeases(doc);
-      await this.appendEvent(res.event);
-      return { ok: true, doc, event: res.event, warnings: res.warnings };
-    });
+    return this.mutateLeases((doc, now) => addWindow(doc, input, { actor, now }));
   }
 
   /** P8.2: pure read of the in-memory doc — no write, so it works in map-only mode too. */
@@ -653,19 +645,22 @@ export class CardStore extends EventEmitter<StoreEvents> {
   ): Promise<SetStateOutcome> {
     return this.mutate(async () => {
       this.refuseWriteWithoutBoard();
-      let text: string;
-      try {
-        text = await readFile(this.statePath, 'utf8');
-      } catch (e) {
-        if ((e as NodeJS.ErrnoException).code !== 'ENOENT') throw e;
-        text = initialStateText({ now: this.now(), actor });
-      }
-      const res = setStateSectionCore(text, section, body, { now: this.now(), actor });
-      if (!res.ok) return { ok: false as const, error: res.error };
-      await this.writeState(res.text);
-      const parsed = parseState(res.text);
-      if (!parsed.ok) throw new Error(`setStateSection produced unparseable text: ${parsed.error}`);
-      return { ok: true as const, doc: parsed.doc, text: res.text };
+      return withFileLock(this.statePath, async () => {
+        let text: string;
+        try {
+          text = await readFile(this.statePath, 'utf8');
+        } catch (e) {
+          if ((e as NodeJS.ErrnoException).code !== 'ENOENT') throw e;
+          text = initialStateText({ now: this.now(), actor });
+        }
+        const res = setStateSectionCore(text, section, body, { now: this.now(), actor });
+        if (!res.ok) return { ok: false as const, error: res.error };
+        await this.writeState(res.text);
+        const parsed = parseState(res.text);
+        if (!parsed.ok)
+          throw new Error(`setStateSection produced unparseable text: ${parsed.error}`);
+        return { ok: true as const, doc: parsed.doc, text: res.text };
+      });
     });
   }
 
@@ -681,28 +676,30 @@ export class CardStore extends EventEmitter<StoreEvents> {
   setSeatBullet(name: string, status: 'UP' | 'DOWN', text: string): Promise<SetStateOutcome> {
     return this.mutate(async () => {
       this.refuseWriteWithoutBoard();
-      let raw: string;
-      try {
-        raw = await readFile(this.statePath, 'utf8');
-      } catch (e) {
-        if ((e as NodeJS.ErrnoException).code !== 'ENOENT') throw e;
-        raw = initialStateText({ now: this.now(), actor: name });
-      }
-      const parsed = parseState(raw);
-      if (!parsed.ok) return { ok: false as const, error: parsed.error };
-      const now = this.now();
-      const newSeats = replaceSeatBullet(
-        parsed.doc.sections.seats,
-        name,
-        formatSeatBullet(name, status, text, now),
-      );
-      const res = setStateSectionCore(raw, 'seats', newSeats, { now, actor: name });
-      if (!res.ok) return { ok: false as const, error: res.error };
-      await this.writeState(res.text);
-      const reparsed = parseState(res.text);
-      if (!reparsed.ok)
-        throw new Error(`setSeatBullet produced unparseable text: ${reparsed.error}`);
-      return { ok: true as const, doc: reparsed.doc, text: res.text };
+      return withFileLock(this.statePath, async () => {
+        let raw: string;
+        try {
+          raw = await readFile(this.statePath, 'utf8');
+        } catch (e) {
+          if ((e as NodeJS.ErrnoException).code !== 'ENOENT') throw e;
+          raw = initialStateText({ now: this.now(), actor: name });
+        }
+        const parsed = parseState(raw);
+        if (!parsed.ok) return { ok: false as const, error: parsed.error };
+        const now = this.now();
+        const newSeats = replaceSeatBullet(
+          parsed.doc.sections.seats,
+          name,
+          formatSeatBullet(name, status, text, now),
+        );
+        const res = setStateSectionCore(raw, 'seats', newSeats, { now, actor: name });
+        if (!res.ok) return { ok: false as const, error: res.error };
+        await this.writeState(res.text);
+        const reparsed = parseState(res.text);
+        if (!reparsed.ok)
+          throw new Error(`setSeatBullet produced unparseable text: ${reparsed.error}`);
+        return { ok: true as const, doc: reparsed.doc, text: res.text };
+      });
     });
   }
 
@@ -717,47 +714,49 @@ export class CardStore extends EventEmitter<StoreEvents> {
   updateSeatBullet(name: string, text: string): Promise<UpdateSeatOutcome> {
     return this.mutate(async () => {
       this.refuseWriteWithoutBoard();
-      let raw: string;
-      try {
-        raw = await readFile(this.statePath, 'utf8');
-      } catch (e) {
-        if ((e as NodeJS.ErrnoException).code !== 'ENOENT') throw e;
+      return withFileLock(this.statePath, async () => {
+        let raw: string;
+        try {
+          raw = await readFile(this.statePath, 'utf8');
+        } catch (e) {
+          if ((e as NodeJS.ErrnoException).code !== 'ENOENT') throw e;
+          return {
+            ok: false as const,
+            error: `seat ${name} has no standing bullet to update; use --up or --down`,
+          };
+        }
+        const parsed = parseState(raw);
+        if (!parsed.ok) return { ok: false as const, error: parsed.error };
+        const line = findSeatLine(parsed.doc.sections.seats, name);
+        if (line === null) {
+          return {
+            ok: false as const,
+            error: `seat ${name} has no standing bullet to update; use --up or --down`,
+          };
+        }
+        const rewrite = rewriteSeatBulletBody(line, text);
+        if (rewrite === null) {
+          return {
+            ok: false as const,
+            error: `seat ${name}'s bullet has no UP|DOWN stamp to keep; use --up or --down`,
+          };
+        }
+        const now = this.now();
+        const newSeats = replaceSeatBullet(parsed.doc.sections.seats, name, rewrite.bullet);
+        const res = setStateSectionCore(raw, 'seats', newSeats, { now, actor: name });
+        if (!res.ok) return { ok: false as const, error: res.error };
+        await this.writeState(res.text);
+        const reparsed = parseState(res.text);
+        if (!reparsed.ok)
+          throw new Error(`updateSeatBullet produced unparseable text: ${reparsed.error}`);
         return {
-          ok: false as const,
-          error: `seat ${name} has no standing bullet to update; use --up or --down`,
+          ok: true as const,
+          doc: reparsed.doc,
+          text: res.text,
+          status: rewrite.status,
+          stamp: rewrite.stamp,
         };
-      }
-      const parsed = parseState(raw);
-      if (!parsed.ok) return { ok: false as const, error: parsed.error };
-      const line = findSeatLine(parsed.doc.sections.seats, name);
-      if (line === null) {
-        return {
-          ok: false as const,
-          error: `seat ${name} has no standing bullet to update; use --up or --down`,
-        };
-      }
-      const rewrite = rewriteSeatBulletBody(line, text);
-      if (rewrite === null) {
-        return {
-          ok: false as const,
-          error: `seat ${name}'s bullet has no UP|DOWN stamp to keep; use --up or --down`,
-        };
-      }
-      const now = this.now();
-      const newSeats = replaceSeatBullet(parsed.doc.sections.seats, name, rewrite.bullet);
-      const res = setStateSectionCore(raw, 'seats', newSeats, { now, actor: name });
-      if (!res.ok) return { ok: false as const, error: res.error };
-      await this.writeState(res.text);
-      const reparsed = parseState(res.text);
-      if (!reparsed.ok)
-        throw new Error(`updateSeatBullet produced unparseable text: ${reparsed.error}`);
-      return {
-        ok: true as const,
-        doc: reparsed.doc,
-        text: res.text,
-        status: rewrite.status,
-        stamp: rewrite.stamp,
-      };
+      });
     });
   }
 
@@ -1226,6 +1225,45 @@ export class CardStore extends EventEmitter<StoreEvents> {
   }
 
   /**
+   * RCB-133: the ONE path by which `takeLease`/`releaseLease`/`addWindow` touch leases.yml.
+   * `this.leasesDoc` is a load-time cache — two processes (two CLI one-shots, or a CLI next to
+   * `serve`) each start from their own copy, so computing from it and writing back can silently
+   * drop the other process's write. `withFileLock` makes the read-modify-write span exclusive
+   * ACROSS processes, not just within this one (`mutate`/`enqueue` only ever did the latter); `fn`
+   * is handed the doc as re-read from disk the instant the lock is held, never the stale cache.
+   * `refuseWriteWithoutBoard()` runs before the lock is even taken (mirrors K10 / plan §11 O7:
+   * a refused mutation must leave the target — and here, the directory the lock file would sit
+   * in — byte-identical, so map-only mode never creates `.repoboard/`). A leases.yml that fails
+   * to parse returns `{ok:false, error}` with NO write, so a bad hand edit is never overwritten;
+   * `writeLeases` still prunes-on-write and appends the event, exactly as before RCB-133.
+   */
+  private mutateLeases(
+    fn: (doc: LeasesDoc, now: Date) => LeaseMutationResult,
+  ): Promise<LeaseOutcome> {
+    return this.mutate(async () => {
+      this.refuseWriteWithoutBoard();
+      return withFileLock(this.leasesPath, async () => {
+        let doc: LeasesDoc;
+        try {
+          const text = await readFile(this.leasesPath, 'utf8');
+          const parsed = parseLeases(text);
+          if (!parsed.ok) return { ok: false as const, error: parsed.error };
+          doc = parsed.doc;
+        } catch (e) {
+          if ((e as NodeJS.ErrnoException).code !== 'ENOENT') throw e;
+          doc = { leases: [], windows: [] };
+        }
+        const res = fn(doc, this.now());
+        if (!res.ok) return { ok: false as const, error: res.error };
+        const pruned = pruneWindows(res.doc, this.now());
+        await this.writeLeases(pruned);
+        await this.appendEvent(res.event);
+        return { ok: true as const, doc: pruned, event: res.event, warnings: res.warnings };
+      });
+    });
+  }
+
+  /**
    * K10 / plan §11 O7: pointing at a directory is a read-only act. Called first in both writers,
    * before any directory is created, so a refused mutation leaves the target byte-identical.
    */
@@ -1303,7 +1341,7 @@ export class CardStore extends EventEmitter<StoreEvents> {
     this.refuseWriteWithoutBoard();
     const text = serializeLeases(doc);
     await mkdir(this.repoboardDir, { recursive: true });
-    const tmp = `${this.leasesPath}.tmp`;
+    const tmp = tmpName(this.leasesPath);
     await writeFile(tmp, text, 'utf8');
     await rename(tmp, this.leasesPath);
     this.leasesDoc = doc;
@@ -1314,7 +1352,7 @@ export class CardStore extends EventEmitter<StoreEvents> {
   private async writeState(text: string): Promise<void> {
     this.refuseWriteWithoutBoard();
     await mkdir(this.repoboardDir, { recursive: true });
-    const tmp = `${this.statePath}.tmp`;
+    const tmp = tmpName(this.statePath);
     await writeFile(tmp, text, 'utf8');
     await rename(tmp, this.statePath);
     const parsed = parseState(text);
@@ -1616,8 +1654,11 @@ export class CardStore extends EventEmitter<StoreEvents> {
       ignoreInitial: true,
       awaitWriteFinish: { stabilityThreshold: 100, pollInterval: 20 },
       // RCB-83: `.repoboard/local/` is its own git repo — its `.git/` churns on every sync and
-      // holds nothing the board reads.
-      ignored: (p) => p.endsWith('.tmp') || p.split(sep).includes('.git'),
+      // holds nothing the board reads. RCB-133: `.lock` files (leases.yml.lock, STATE.md.lock)
+      // are created and unlinked around every mutation now — without this they would queue a
+      // no-op task on this store's OWN `enqueue` (the same queue every mutation serializes
+      // through) for every lock/unlock, on top of never being anything the board reads.
+      ignored: (p) => p.endsWith('.tmp') || p.endsWith('.lock') || p.split(sep).includes('.git'),
     });
     this.watcher = watcher;
     watcher.on('all', (event, rawPath) => {

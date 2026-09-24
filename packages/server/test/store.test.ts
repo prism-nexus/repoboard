@@ -5,7 +5,14 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import type { BoardConfig, Card } from '@repoboard/core';
-import { defaultBoardConfig, parseBoard, parseCard, serializeBoard } from '@repoboard/core';
+import {
+  defaultBoardConfig,
+  parseBoard,
+  parseCard,
+  parseLeases,
+  parseState,
+  serializeBoard,
+} from '@repoboard/core';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
   type CardStore,
@@ -503,6 +510,63 @@ describe('leases and windows (P8.2)', () => {
     });
   });
 
+  it('RCB-133: two stores on one root — B, loaded before A writes, still lands both leases', async () => {
+    const repo = await repoWith({});
+    // Two `CardStore`s on the SAME root, neither watching the other — the in-process stand-in
+    // for "two CLI one-shots, or a CLI next to `serve`" the brief names: each loads its own
+    // `leasesDoc` cache independently, and `mutate`/`enqueue` only ever serialize ONE store's
+    // own writers against each other, never two different `CardStore` instances.
+    const a = await open(repo, false);
+    const b = await open(repo, false); // B's cache is loaded now — empty, before A writes "a"
+    const resA = await a.takeLease({ resource: 'a' }, 'proc/a');
+    expect(resA.ok).toBe(true);
+    // B still computes from the cache it loaded before A's write — exactly the stale-copy race
+    // RCB-133 describes. Only a lock around a FRESH re-read (not B's cache) can save "a" here.
+    const resB = await b.takeLease({ resource: 'b' }, 'proc/b');
+    expect(resB.ok).toBe(true);
+    const onDisk = await readFile(join(repo.root, '.repoboard', 'leases.yml'), 'utf8');
+    const parsed = parseLeases(onDisk);
+    expect(parsed.ok).toBe(true);
+    if (!parsed.ok) return;
+    expect(parsed.doc.leases.map((l) => l.resource).sort()).toEqual(['a', 'b']);
+  });
+
+  it('RCB-133: 20 rounds of concurrent STATE.md writes from two stores keep both, every round', async () => {
+    const repo = await repoWith({});
+    const a = await open(repo, false);
+    const b = await open(repo, false);
+    for (let round = 0; round < 20; round++) {
+      const liveText = `round ${round} from A`;
+      const seatText = `round ${round} from B`;
+      const [resA, resB] = await Promise.all([
+        a.setStateSection('live', liveText, 'proc/a'),
+        b.setSeatBullet('proc-b', 'UP', seatText),
+      ]);
+      expect(resA.ok).toBe(true);
+      expect(resB.ok).toBe(true);
+      const onDisk = await readFile(join(repo.root, '.repoboard', 'STATE.md'), 'utf8');
+      const parsed = parseState(onDisk);
+      expect(parsed.ok).toBe(true);
+      if (!parsed.ok) continue;
+      expect(parsed.doc.sections.live).toBe(liveText);
+      expect(parsed.doc.sections.seats).toContain(seatText);
+    }
+  });
+
+  it('RCB-133: a malformed leases.yml refuses the write and leaves the bytes unchanged', async () => {
+    const repo = await repoWith({});
+    const path = join(repo.root, '.repoboard', 'leases.yml');
+    const bad = 'leases: [\n';
+    await writeFile(path, bad);
+    const store = await open(repo, false);
+    const res = await store.takeLease({ resource: 'r' }, 'proc/a');
+    expect(res.ok).toBe(false);
+    if (res.ok) return;
+    expect(res.error).toMatch(/not valid YAML/);
+    const after = await readFile(path, 'utf8');
+    expect(after).toBe(bad);
+  });
+
   it('an external sed edit of leases.yml is re-read by the watcher', async () => {
     const repo = await repoWith({});
     const path = join(repo.root, '.repoboard', 'leases.yml');
@@ -543,11 +607,16 @@ describe('leases and windows (P8.2)', () => {
       readOnly: true,
       error: MAP_ONLY_ERROR,
     });
-    // releaseLease has nothing to release here (no lease was ever taken — taking one is itself
-    // refused above), so this hits core's "no lease is held" refusal before the write guard ever
-    // runs; the write guard's coverage for release/addWindow comes from the K10 structural tests
-    // (both route only through the same guarded `writeLeases`, proven to open with the guard).
-    expect(await store.releaseLease({ resource: 'r' }, 't')).toMatchObject({ ok: false });
+    // RCB-133: all three lease methods now share `mutateLeases`, which calls
+    // `refuseWriteWithoutBoard()` itself, BEFORE ever taking the file lock or reading leases.yml
+    // (map-only mode must never create `.repoboard/`, and a lock file is a write). So release
+    // hits the SAME readOnly refusal take/addWindow do, not core's "no lease is held" — that
+    // refusal never runs here because releaseLease's own core call is never reached.
+    expect(await store.releaseLease({ resource: 'r' }, 't')).toMatchObject({
+      ok: false,
+      readOnly: true,
+      error: MAP_ONLY_ERROR,
+    });
     expect(
       await store.addWindow(
         { resource: 'r', start: '2026-09-02T22:00:00Z', end: '2026-09-02T23:00:00Z', name: 'g' },
@@ -1813,7 +1882,7 @@ describe('K10 structure of store.ts', () => {
     return [start, end];
   }
 
-  it('every method returning a *Outcome goes through this.mutate', () => {
+  it('every method returning a *Outcome goes through this.mutate (directly, or via mutateLeases)', () => {
     const decls = [
       ...SRC.matchAll(/^ {2}(\w+)\([^)]*\): Promise<(\w+Outcome)> \{\n {4}return this\.(\w+)\(/gm),
     ];
@@ -1836,25 +1905,47 @@ describe('K10 structure of store.ts', () => {
       'update',
       'updateSeatBullet',
     ]);
+    // File order (not the sorted list above): `takeLease`/`releaseLease`/`addWindow` are the
+    // three that go through `mutateLeases` (RCB-133) — one level of indirection, not a bypass,
+    // since `mutateLeases` itself is required (next test) to open with `this.mutate(`. Every
+    // other Outcome method's first line is still `return this.mutate(` directly, unchanged.
     expect(decls.map((d) => d[3])).toEqual([
-      'mutate',
-      'mutate',
-      'mutate',
-      'mutate',
-      'mutate',
-      'mutate',
-      'mutate',
-      'mutate',
-      'mutate',
-      'mutate',
-      'mutate',
-      'mutate',
-      'mutate',
-      'mutate',
-      'mutate',
-      'mutate',
-      'mutate',
+      'mutate', // create
+      'mutate', // move
+      'mutate', // update
+      'mutate', // ask
+      'mutate', // decide
+      'mutateLeases', // takeLease
+      'mutateLeases', // releaseLease
+      'mutateLeases', // addWindow
+      'mutate', // setStateSection
+      'mutate', // setSeatBullet
+      'mutate', // updateSeatBullet
+      'mutate', // appendRepoLog
+      'mutate', // appendLog
+      'mutate', // addNote
+      'mutate', // closeSynced
+      'mutate', // archiveCards
+      'mutate', // setColumns
     ]);
+  });
+
+  /**
+   * RCB-133: the property the indirection above must not lose — `mutateLeases` is not a second,
+   * unguarded funnel; it is `this.mutate(` plus a cross-process file lock wrapped around a fresh
+   * re-read of leases.yml. If this ever changed to call `this.enqueue(` directly (skipping
+   * `mutate`'s `MapOnlyError` → `{ok:false, readOnly:true}` conversion), `takeLease` et al would
+   * throw instead of refusing cleanly in map-only mode — the "map-only: reads ... work, writes
+   * refuse" behavioural test above (`leases and windows (P8.2)`) is the control for that.
+   */
+  it('mutateLeases itself opens with this.mutate', () => {
+    const [start, end] = methodRange('private mutateLeases(');
+    const body = SRC.slice(start, end);
+    const firstStatement = body
+      .slice(body.indexOf('): Promise<LeaseOutcome> {') + '): Promise<LeaseOutcome> {'.length)
+      .split('\n')[1]
+      ?.trim();
+    expect(firstStatement).toBe('return this.mutate(async () => {');
   });
 
   it('all five disk writers open with the guard, on their first line', () => {

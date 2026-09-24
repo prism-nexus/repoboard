@@ -54,6 +54,10 @@ describe('repoboard init', () => {
     const first = await repoboard(root, 'init');
     expect(first.code).toBe(0);
     expect(first.out).toMatch(/initialised .* with RB-1 "Welcome"/);
+    expect(first.out).toContain(
+      "next: repoboard init --practices (STATE.md, today's log, leases.yml, " +
+        'NEXT-AGENT-PROMPT.md) · repoboard local init (a private nested git repo for machine facts)',
+    );
     expect(await readFile(join(root, '.repoboard', 'board.yml'), 'utf8')).toContain('prefix: RB');
     const card = await readFile(join(root, '.repoboard', 'cards', 'RB-1.md'), 'utf8');
     expect(card).toContain('id: RB-1');
@@ -1949,6 +1953,9 @@ describe('repoboard init --practices', () => {
     expect(res.out).toContain('created .repoboard/log/2026-09-02.md');
     expect(res.out).toContain('created .repoboard/leases.yml');
     expect(res.out).toContain('created NEXT-AGENT-PROMPT.md');
+    expect(res.out).toContain(
+      'see also: repoboard local init (a private nested git repo for machine facts)',
+    );
     const state = await readFile(join(root, '.repoboard', 'STATE.md'), 'utf8');
     expect(state).toContain('## OWNER QUEUE');
     const log = await readFile(join(root, '.repoboard', 'log', '2026-09-02.md'), 'utf8');
@@ -1959,6 +1966,7 @@ describe('repoboard init --practices', () => {
     expect(prompt).toContain('# Next agent — three lines');
     expect(prompt).toContain('repoboard check');
     expect(prompt.match(/^\d+\. /gm)).toHaveLength(3);
+    expect(prompt).not.toContain('Build once');
   });
 
   it('works on a repo that already has a board, and never overwrites existing files (locked decision 3)', async () => {
@@ -1970,6 +1978,12 @@ describe('repoboard init --practices', () => {
     expect(res.out).toContain('kept .repoboard/STATE.md');
     expect(res.out).toContain('kept NEXT-AGENT-PROMPT.md');
     expect(res.out).toContain('created .repoboard/leases.yml');
+    // one "see also" line even though the board already existed; the plain-init "next:" line
+    // never prints here (RCB-136).
+    expect(res.out).toContain(
+      'see also: repoboard local init (a private nested git repo for machine facts)',
+    );
+    expect(res.out).not.toContain('next: repoboard init --practices');
     expect(await readFile(join(root, '.repoboard', 'STATE.md'), 'utf8')).toBe(
       'hand-written, keep me\n',
     );
@@ -1994,8 +2008,12 @@ describe('repoboard init --practices', () => {
       res.out
         .split('\n')
         .filter(Boolean)
+        .filter((l) => !l.startsWith('see also: '))
         .every((l) => l.startsWith('kept ')),
     ).toBe(true);
+    expect(res.out).toContain(
+      'see also: repoboard local init (a private nested git repo for machine facts)',
+    );
     expect(await readFile(join(root, '.repoboard', 'STATE.md'), 'utf8')).toBe(before.state);
     expect(await readFile(join(root, '.repoboard', 'log', '2026-09-02.md'), 'utf8')).toBe(
       before.log,

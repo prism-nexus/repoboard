@@ -501,6 +501,14 @@ function sizeFrom(v: string | undefined): Size | undefined {
 // ---- commands ---------------------------------------------------------------------------
 
 /**
+ * RCB-136: the two parenthesised descriptions shared by the three init verbs' cross-pointer
+ * lines (`init`'s "next:", `init --practices`'s "see also:", `local init`'s "see also:") — one
+ * spelling of each, so the three lines cannot drift apart.
+ */
+const PRACTICES_OUTPUTS_DESC = "STATE.md, today's log, leases.yml, NEXT-AGENT-PROMPT.md";
+const LOCAL_INIT_DESC = 'a private nested git repo for machine facts';
+
+/**
  * P8.3 `init --practices`'s eight-line `NEXT-AGENT-PROMPT.md`, adapted from the reference
  * implementation (freshpickedjobs' own, read-only) to this repo's `.repoboard/` paths and
  * command names. Never overwrites (locked decision 3).
@@ -509,8 +517,8 @@ function nextAgentPromptText(): string {
   return [
     '# Next agent — three lines',
     '',
-    '1. Build once, then `repoboard seat <your seat>` — it prints your SEATS line, your last log',
-    "   block, the coordinator's, your next card and the open decisions. That is the cold start.",
+    '1. `repoboard seat <your seat>` — it prints your SEATS line, your last log block,',
+    "   the coordinator's, your next card and the open decisions. That is the cold start.",
     '2. Take the card: `repoboard card move <id> doing --as <seat>`; log as you go',
     '   (`repoboard log --as <seat>`); `repoboard check` before you start and before you stop.',
     '3. Stand down: log block first, then `repoboard seat <seat> --down "<≤3 lines>"` LAST.',
@@ -584,7 +592,15 @@ async function cmdInit(args: string[], io: CliIO): Promise<number> {
     await writeFile(join(repoboardDir, 'cards', `${card.id}.md`), serializeCard(card));
     io.stdout.write(`initialised ${repoboardDir} with ${card.id} "Welcome"\n`);
   }
-  if (values.practices) await scaffoldPractices(root, io);
+  if (values.practices) {
+    await scaffoldPractices(root, io);
+    io.stdout.write(`see also: repoboard local init (${LOCAL_INIT_DESC})\n`);
+  } else {
+    io.stdout.write(
+      `next: repoboard init --practices (${PRACTICES_OUTPUTS_DESC}) · ` +
+        `repoboard local init (${LOCAL_INIT_DESC})\n`,
+    );
+  }
   return 0;
 }
 
@@ -1759,6 +1775,7 @@ async function cmdLocal(sub: string | undefined, args: string[], io: CliIO): Pro
       now: io.now,
       moveRecord: values['move-record'],
     });
+    io.stdout.write(`see also: repoboard init --practices (${PRACTICES_OUTPUTS_DESC})\n`);
     return 0;
   }
   if (sub === 'sync') {

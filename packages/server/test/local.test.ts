@@ -79,6 +79,9 @@ describe('repoboard local init', () => {
     expect(res.code).toBe(0);
     expect(res.out).toContain('created .repoboard/local/RIG.md');
     expect(res.out).toContain('ignored .repoboard/local/ in .gitignore');
+    expect(res.out).toContain(
+      "see also: repoboard init --practices (STATE.md, today's log, leases.yml, NEXT-AGENT-PROMPT.md)",
+    );
 
     const rig = await readFile(join(root, '.repoboard', 'local', 'RIG.md'), 'utf8');
     expect(rig).toContain('# RIG — <this machine>');

@@ -62,6 +62,11 @@ published). It finds `.repoboard/` by walking up from the current directory.
 | `repoboard serve [--root <dir>]... [--port 4242] [--open] [--no-fun] [--watch-cap 20000] [--sibling <name>=<url>]...` | `repoboard serve --open` — the dashboard on 127.0.0.1 (docs/REFERENCE.md §6) |
 | `repoboard mcp [--root <dir>]` | `repoboard mcp` — the MCP server on stdio (section 3) |
 
+`log` has three forms: append (`log --as <seat> [--title t] (<text>|--stdin)`), read one
+day (`log show [--date d] [--seat s]`), and cold-start read (`log --last <seat>`, the seat a
+positional after the flag). The grammar is kept as is through 0.x; unifying it is a post-1.0
+change.
+
 `systems show <id>` resolves every pointer's text — 33,770 B for a 4-pointer row; run `systems`
 (631 B) first.
 

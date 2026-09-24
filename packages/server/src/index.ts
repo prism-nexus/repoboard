@@ -1,5 +1,5 @@
-// repoboard — CLI, HTTP, WebSocket, watcher, scanner. MCP arrives in P5.
-export { run as runCli } from './cli.js';
+// repoboard — the library entry: server, store, scanner, refs, detect. The CLI is the
+// `repoboard` bin (see cli.ts), not exported from here.
 export type { RunningServer, ServerOptions } from './http.js';
 export { startServer } from './http.js';
 export type { RepoPathResult, RepoTextResult } from './refs.js';

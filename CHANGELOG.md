@@ -5,6 +5,8 @@ All notable changes to this project are documented in this file. The format is b
 
 ## [Unreleased]
 
+- `runCli` is no longer exported from the package entry.
+
 ## [0.2.0] — 2026-09-24
 
 ### Highlights

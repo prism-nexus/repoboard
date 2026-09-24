@@ -1,6 +1,6 @@
 {
   "name": "repoboard",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "type": "module",
   "description": "Local-first repo dashboard and agent-driven Kanban board. Cards are markdown files in .repoboard/, git is the history; one bin serves the CLI, the HTTP/WebSocket dashboard, and an MCP server.",
   "license": "MIT",

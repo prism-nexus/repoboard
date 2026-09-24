@@ -201,14 +201,12 @@ how this repo dispatches subagents: `docs/SUBAGENTS.md`; the running record:
 
 ## Status
 
-Pre-1.0. Public at https://github.com/prism-nexus/repoboard since 2026-09-18, tagged `v0.1.0`.
-Not on npm yet — K5 waits on the owner's npm account. `repoboard@0.1.0` packs to a 499.2 kB
-tarball of 8 files (measured 2026-09-18 with `npm pack --dry-run` in `packages/server`; it was
-267 KB on 2026-09-03) and runs from `npx` in a foreign repo (2026-09-03, not re-verified here).
-`@repoboard/core` stays `private` for v0.1 (plan §11 O4) — depend on `repoboard`. It packs as
-built JS with `.d.ts` (23,896 bytes, 38 entries, no `src/`, 2026-09-06, not re-measured here), so
-removing one `"private": true` line is all that stands between it and a publish; that call is the
-owner's.
+Pre-1.0, at 0.2.0. Public at https://github.com/prism-nexus/repoboard since 2026-09-18. Not on
+npm yet — publish waits on the owner's npm account (RCB-51); once it lands, install via `npx
+repoboard`. `repoboard@0.2.0` packs to a 366.0 kB tarball of 8 files (measured 2026-09-24 with
+`npm pack --dry-run` in `packages/server` after `pnpm build`). `@repoboard/core` is internal: not
+published, bundled into the CLI (`packages/server/tsup.config.ts`'s `noExternal`) — depend on
+`repoboard`.
 
 ## Known issues
 (numbered `K1` upward; a commit that closes one says `Closes K<n>` and edits this list)
@@ -220,17 +218,13 @@ owner's.
   scanner emits null, map shows "—".
 - ~~**K4** `createCard` throws on an unknown status~~ Closed; returns `{ok:false, error}` like
   `moveCard`; CLI and HTTP use the result.
-- **K5** `@repoboard/core` is not published. The packaging half is done (2026-09-06): a
-  `publishConfig` block carries the published shape — `main`, `types` and an `exports` map into
-  `./dist` — while the top-level keys stay on `./src/index.ts`, so the workspace still resolves
-  core from source and `pnpm test` on a clean clone needs no build. A `prepack` script builds
-  `dist/` so a pack cannot ship a manifest naming files it does not contain. Verified by content,
-  not by exit code: `pnpm pack` produces 23,896 bytes / 38 entries with 0 `src/` entries, the
-  packed manifest has `main`/`types`/`exports` rewritten to `./dist` and lifecycle scripts
-  stripped, and the tarball, extracted into a throwaway consumer outside the repo, imports by
-  bare specifier on plain Node with `parseCard`/`serializeCard`/`moveCard`/`createCard` all
-  present. **What remains is the owner's**: delete `"private": true` and publish. That is the one
-  step, and it is gated on P6.3 with O2 (plan §11 O4).
+- ~~**K5** `@repoboard/core` is not published.~~ Closed 2026-09-24 (RCB-126, plan §11 O4):
+  internal by owner decision — only `repoboard` publishes; `@repoboard/core` stays `private`,
+  bundled into the CLI by `packages/server/tsup.config.ts`'s `noExternal`. The packaging half
+  from 2026-09-06 stays in place should it ever publish: a `publishConfig` block maps
+  `main`/`types`/`exports` to `./dist`, a `prepack` script builds it first, and `pnpm pack`
+  produced 23,896 bytes / 38 entries with 0 `src/` entries, importable by bare specifier on plain
+  Node (not re-measured here).
 - ~~**K6** `repoboard card list --json` is 14.1 KB against 1.9 KB for the table~~ Closed;
   `--json` is compact by default, `--full` adds bodies; JSON shrank ~65% on this repo's cards.
 - ~~**K7** A card that points at a doc section shows only the pointer~~ Closed (plan §11 O5,

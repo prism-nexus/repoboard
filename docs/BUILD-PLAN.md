@@ -376,7 +376,8 @@ Answered 2026-09-03:
   every doc; the old names must not survive in user-facing text. (Directory and prefix names were the orchestrator's proposal;
   the owner accepted them 2026-09-03.)
 - **O2 — GitHub: after v1.** The owner sets up the account/org. P6.3 stays closed until then;
-  P6.1 and P6.2 do not depend on it.
+  P6.1 and P6.2 do not depend on it. 2026-09-18: the repo went public at
+  github.com/prism-nexus/repoboard ahead of v1 (README §Status).
 - **O3 — docs steer to CLI first, MCP second, file edits as the escape hatch.** The owner's
   question was token efficiency; measured 2026-09-03 on the built binary, bytes on the wire
   (≈4 bytes per token):
@@ -400,7 +401,8 @@ Answered 2026-09-03:
 - **O4 — K5 (core ships TS source only): leave for v0.1, resolve before GitHub goes public.**
   Decided 2026-09-03. Core stays `private`; only `repoboard` publishes. Before the repo is made
   public, either build core to JS and publish `@repoboard/core`, or document it as internal.
-  Gate on P6.3.
+  Gate on P6.3. Resolved 2026-09-24 (owner): document as internal; only `repoboard` publishes
+  (RCB-126).
 - **O5 — K7 pulled into v0.1 (2026-09-03).** The owner: "the repo should be looking at where all
   notes are being written so it is more directly pulling from the repo, more than agents having
   to fully write to cards." Measured state before O5: the board reads only `.repoboard/cards/`;

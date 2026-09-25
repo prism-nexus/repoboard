@@ -28,6 +28,7 @@ import { Column } from '../components/Column.jsx';
 import { ColumnEditor } from '../components/ColumnEditor.jsx';
 import { Confetti } from '../components/Confetti.jsx';
 import { StatePanel } from '../components/StatePanel.jsx';
+import { TipStrip } from '../components/TipStrip.jsx';
 import { useArrivals, useBoardState, useNow, useStore } from '../hooks.js';
 import {
   type ColumnCards,
@@ -146,6 +147,7 @@ export function Board() {
     sizeFilter,
     sortBy,
     query,
+    tipDismissed,
     unreachable,
   } = useBoardState();
   const now = useNow();
@@ -204,6 +206,7 @@ export function Board() {
   const clearSizeFilter = useCallback(() => store.clearSizeFilter(), [store]);
   const setSortBy = useCallback((s: SortBy) => store.setSortBy(s), [store]);
   const setQuery = useCallback((q: string) => store.setQuery(q), [store]);
+  const dismissTip = useCallback(() => store.dismissTip(), [store]);
 
   const doneOrigin = useMemo(() => {
     if (arrivals.doneBurst === 0 || typeof document === 'undefined') return null;
@@ -241,6 +244,7 @@ export function Board() {
         now={now}
       />
       <ColumnEditor config={config} cards={cards} onSave={saveColumns} />
+      {cards.length <= 1 && !tipDismissed ? <TipStrip onDismiss={dismissTip} /> : null}
       <BoardTools
         sizeFilter={sizeFilter}
         sortBy={sortBy}

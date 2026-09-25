@@ -99,6 +99,9 @@ export interface State {
    * reasoning as `sizeFilter` (see BoardTools' header comment): a query left over from a stale
    * session must not silently hide cards after a reload. */
   query: string;
+  /** RCB-149: the tip strip's dismissal, persisted to `STORAGE_TIP` like `theme`/`sortBy` — once
+   * dismissed it stays dismissed across reloads, unlike `sizeFilter`/`query` above. */
+  tipDismissed: boolean;
 }
 
 export type SortBy = 'updated' | 'size';
@@ -117,6 +120,7 @@ export const EVENTS_KEPT = 50;
 export const STORAGE_FUN = 'repoboard.fun';
 export const STORAGE_THEME = 'repoboard.theme';
 export const STORAGE_SORT = 'repoboard.sort';
+export const STORAGE_TIP = 'repoboard.tip';
 /** RCB-138: how long `connect()` waits for a first snapshot before showing the "can't reach the
  * server" alert. Exported for the test. */
 export const UNREACHABLE_AFTER_MS = 5000;
@@ -186,6 +190,8 @@ export interface Store {
   setSortBy(sortBy: SortBy): void;
   /** RCB-147: the board search box's text. Never persisted — see `State.query`. */
   setQuery(query: string): void;
+  /** RCB-149: dismiss the tip strip; persists to `STORAGE_TIP`. */
+  dismissTip(): void;
   /** Open the transport. Returns a disposer. */
   connect(): () => void;
   /** Messages handed to the transport, for tests and debugging. */
@@ -203,6 +209,7 @@ export function createStore(factory: TransportFactory, opts: StoreOptions = {}):
   const storedFun = storage?.getItem(STORAGE_FUN);
   const storedTheme = storage?.getItem(STORAGE_THEME);
   const storedSort = storage?.getItem(STORAGE_SORT);
+  const storedTip = storage?.getItem(STORAGE_TIP);
   const repoKey = opts.repoKey ?? null;
 
   let state: State = {
@@ -237,6 +244,7 @@ export function createStore(factory: TransportFactory, opts: StoreOptions = {}):
     sizeFilter: [],
     sortBy: storedSort === 'size' ? 'size' : 'updated',
     query: '',
+    tipDismissed: storedTip === 'dismissed',
   };
   const listeners = new Set<Listener>();
   const pending = new Map<string, Pending>();
@@ -573,6 +581,10 @@ export function createStore(factory: TransportFactory, opts: StoreOptions = {}):
       set({ sortBy });
     },
     setQuery: (query) => set({ query }),
+    dismissTip() {
+      storage?.setItem(STORAGE_TIP, 'dismissed');
+      set({ tipDismissed: true });
+    },
     connect() {
       transport?.close();
       if (unreachableTimer !== null) clearTimeout(unreachableTimer);

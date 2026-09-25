@@ -138,6 +138,20 @@ export interface Column {
   [key: string]: unknown;
 }
 
+/**
+ * RCB-153 W1: one entry in `board.yml`'s optional `repos:` list — a member board this one
+ * coordinates. `key` is what the CLI, MCP and `/api/repos` use (`^[a-z0-9][a-z0-9-]*$`, the same
+ * shape `assignRepoKeys` already produces); `root` is relative to THIS board's root, or absolute,
+ * `~` expanded (`resolveMemberRoot`, server-side — core never touches a filesystem). `writes`
+ * absent means a READ-ONLY member (O7); the only value in v1 is `'cards'` (W5).
+ */
+export interface WorkspaceRepo {
+  key: string;
+  root: string;
+  writes?: 'cards';
+  [key: string]: unknown;
+}
+
 export interface BoardConfig {
   /** RCB-41: optional display name for the top bar / tab title. Absent means "the folder name"
    * — resolved by `boardDisplayName`, never defaulted here. */
@@ -158,6 +172,9 @@ export interface BoardConfig {
   /** P8.4: `repoboard cost`'s budget for the root `CLAUDE.md`, in bytes. A CLI `--budget` flag
    * wins over this; absent here AND on the flag means `DEFAULT_CLAUDE_MD_BUDGET_BYTES` (cost.ts). */
   claudeMdBudgetBytes?: number;
+  /** RCB-153 W1: member boards this one coordinates. Absent means "not a workspace" — exactly
+   * today's board, byte-identical (the slice's own regression control). */
+  repos?: WorkspaceRepo[];
   columns: Column[];
   [key: string]: unknown;
 }

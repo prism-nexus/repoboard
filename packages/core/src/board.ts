@@ -1,6 +1,6 @@
 import * as YAML from 'yaml';
 import { z } from 'zod';
-import type { BoardConfig, Column, Sibling } from './types.js';
+import type { BoardConfig, Column, Sibling, WorkspaceRepo } from './types.js';
 
 export const ColumnSchema = z.looseObject({
   id: z.string().min(1),
@@ -50,6 +50,14 @@ export const SiblingSchema = z.looseObject({
   url: z.string().refine(isSiblingUrl, 'must be an http(s) URL'),
 });
 
+/** RCB-153 W1: one `repos:` entry — a workspace member board. `key` is the same shape
+ * `assignRepoKeys` (RCB-43) already produces, so it doubles as an `/api/repos/<key>` key. */
+export const WorkspaceRepoSchema = z.looseObject({
+  key: z.string().regex(/^[a-z0-9][a-z0-9-]*$/, 'must match /^[a-z0-9][a-z0-9-]*$/'),
+  root: z.string().trim().min(1, 'must not be empty'),
+  writes: z.literal('cards').optional(),
+});
+
 export const BoardConfigSchema = z
   .looseObject({
     /**
@@ -74,6 +82,8 @@ export const BoardConfigSchema = z
     /** P8.6: an extra daily-log directory `check` reads alongside `.repoboard/log/`, relative to
      * the repo root (e.g. `docs/log`). Absent = today's behaviour, unchanged. */
     logDir: z.string().trim().min(1, 'must not be empty').optional(),
+    /** RCB-153 W1: member boards this one coordinates. Absent = not a workspace. */
+    repos: z.array(WorkspaceRepoSchema).optional(),
     // An absent `columns` key means "the defaults"; an explicit empty list is an error.
     columns: z
       .array(ColumnSchema)
@@ -92,6 +102,18 @@ export const BoardConfigSchema = z
         });
       }
       seen.add(col.id);
+    });
+    const seenKeys = new Set<string>();
+    (ctx.value.repos ?? []).forEach((repo, i) => {
+      if (seenKeys.has(repo.key)) {
+        ctx.issues.push({
+          code: 'custom',
+          message: `duplicate repos[] key "${repo.key}"`,
+          path: ['repos', i, 'key'],
+          input: repo.key,
+        });
+      }
+      seenKeys.add(repo.key);
     });
   });
 
@@ -125,12 +147,14 @@ const CONFIG_ORDER = [
   'name',
   'siblings',
   'prefix',
+  'repos',
   'activeWindowMinutes',
   'claudeMdBudgetBytes',
   'logDir',
   'columns',
 ] as const;
 const COLUMN_ORDER = ['id', 'title', 'active', 'wip', 'done', 'decision'] as const;
+const REPO_ORDER = ['key', 'root', 'writes'] as const;
 
 function orderKeys(
   obj: Record<string, unknown>,
@@ -147,7 +171,11 @@ function orderKeys(
 /** Serialize a config to `board.yml` text. The default config serializes to exactly §2. */
 export function serializeBoard(config: BoardConfig): string {
   const ordered = orderKeys(
-    { ...config, columns: config.columns.map((c: Column) => orderKeys(c, COLUMN_ORDER)) },
+    {
+      ...config,
+      columns: config.columns.map((c: Column) => orderKeys(c, COLUMN_ORDER)),
+      repos: config.repos?.map((r: WorkspaceRepo) => orderKeys(r, REPO_ORDER)),
+    },
     CONFIG_ORDER,
   );
   return YAML.stringify(ordered, { schema: 'core', lineWidth: 0 });

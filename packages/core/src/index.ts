@@ -12,6 +12,7 @@ export {
   parseBoard,
   SiblingSchema,
   serializeBoard,
+  WorkspaceRepoSchema,
 } from './board.js';
 export type { CardParseResult } from './card.js';
 export {
@@ -205,6 +206,7 @@ export type {
   StateParseResult,
   StateSectionName,
   StateSections,
+  WorkspaceStateExtra,
 } from './state.js';
 export {
   checkFindings,
@@ -323,4 +325,12 @@ export type {
   Sibling,
   Size,
   Window,
+  WorkspaceRepo,
 } from './types.js';
+export type {
+  ResolveCardRefResult,
+  WorkspaceBoardRef,
+  WorkspaceLeasesMember,
+  WorkspaceOwnerQueueMember,
+} from './workspace.js';
+export { resolveCardRef, workspaceLeaseLines, workspaceOwnerQueueLines } from './workspace.js';

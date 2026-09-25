@@ -332,6 +332,7 @@ values, subagent policy, the per-landing gate — live in one place, written onc
 | `cost-over-budget` | error | the root `CLAUDE.md` exceeds its budget (default 8192 B, or `board.yml`'s `claudeMdBudgetBytes`) — P8.4, §4 | yes |
 | `future-stamp` | warning | a log block's `#####` header time is more than 60 s ahead of `now` — hand-typed or clock-skewed, and ignored for `stale-state` rather than letting it wedge every other seat's `check` — RCB-90 | only with `--strict` |
 | `seat-owner-queue-drift` | warning | a SEATS bullet's text hand-types `OWNER QUEUE =`/`OWNER QUEUE:` followed by a list of card ids, and that set differs from the GENERATED queue (`needsDecision` cards) — RCB-130; one per bullet | only with `--strict` |
+| `workspace-member-missing` | error | RCB-153: at a workspace root, a `repos:` entry whose root has no `.repoboard/` — names the key and the resolved path; one per missing member | yes |
 
 Findings are pure data (`{kind, level, message}`); `exitCodeForFindings(findings, strict)` is the
 one function every surface (CLI, HTTP, MCP) calls to turn them into the 0/1 contract, so the
@@ -404,6 +405,58 @@ Per-tool bytes of the four new tools: `get_state` 432 B, `set_state_section` 645
 `append_repo_log` 628 B, `check` 566 B — every one under the 700 B budget, for the same reason
 P8.2's five lease tools are: no `CARD_INTRO`/`ACTOR_DESC` reuse, because state/log/check are not
 cards.
+
+### Workspace (RCB-153 slice 1)
+
+A workspace is a normal board whose `board.yml` carries one more optional key — `repos:`, a list
+of member boards this one coordinates:
+
+```yaml
+name: fpj-workspace
+prefix: WS
+repos:
+  - key: freshpickedjobs      # ^[a-z0-9][a-z0-9-]*$ — the CLI/MCP/`/api/repos` key
+    root: ../freshpickedjobs  # relative to THIS board's root, or absolute; `~` expanded
+    writes: cards             # optional; absent = read-only member (O7). Only value in v1
+  - key: repoboard
+    root: ../Remember-Connect-Build
+```
+
+A board with no `repos:` key is exactly today's board — `state`, `state --json` and `check` render
+byte-identical to before this card. A member is opened lazily, read-only, and memoised for the
+life of the process (`Workspace`, `packages/server/src/workspace.ts`) — the same "open on demand"
+shape `RepoRegistry` (RCB-43) already uses for `serve --root`. Opening a member creates NOTHING in
+its tree: no `.repoboard/local`, no log dir, no gate file (W3). A `root` that does not exist, or
+exists with no `.repoboard/`, is not an error to open — the returned store just has `hasBoard:
+false`, `openStore`'s existing map-only contract for any such root.
+
+**`state` aggregates.** OWNER QUEUE renders the workspace's own open-decision lines first, exactly
+as before, then each member's, `repos:` order, every member line prefixed `[<key>] ` — a member
+with nothing open contributes no line, a member whose root has no board contributes exactly one,
+`[<key>] (missing)`. LEASES does the same with each member's live leases, right after the
+workspace's own. `--json` adds `repos: { <key>: { ownerQueue, leases, missing? } }`, one entry per
+configured member — `ownerQueue`/`leases` the same row shapes `ownerQueue()`/`liveLeaseRows()`
+already produce for the workspace's own top-level fields, `missing: true` (with empty arrays)
+instead of either when the root has no board.
+
+**`check` aggregates.** The workspace's own `checkFindings` run first, then, for each member: a
+root with no `.repoboard/` is one error finding, `workspace-member-missing` (names the key and the
+resolved path); otherwise the member's own `check` runs (the SAME `checkFindings`/`store.check`
+every board runs) and every one of its findings is prefixed `[<key>] `. Exit code is one
+`exitCodeForFindings` call over the combined list — the worst of the workspace's own and every
+member's.
+
+**Card-id resolution (W4) is ready but not wired to any verb yet** — `resolveCardRef(ref, boards)`
+(`packages/core/src/workspace.ts`) is pure: a bare `<PREFIX>-<n>` checks the workspace's own prefix
+first, then exactly one member's; a prefix two members share is an error naming both keys and
+`<key>:<id>` is always accepted for a known key. Slice 2 wires this into `card show`/`note`/`move`/
+`ask`/`decide`/`update` and `gate <id>`; slice 3 wires `serve`/`mcp`/`init --workspace`.
+
+| Command | Example |
+|---|---|
+| `repoboard state` (workspace root) | OWNER QUEUE/LEASES aggregate every configured member, `[<key>] `-prefixed, after the workspace's own lines |
+| `repoboard state --json` (workspace root) | adds `repos: { <key>: { ownerQueue, leases, missing? } }` |
+| `repoboard check` (workspace root) | runs `check` on the workspace, then every member, `[<key>] `-prefixed; a missing member is `workspace-member-missing` (error); exit = the worst of all of them |
 
 ## 4. Cost — what a cold agent loads, against a budget (P8.4)
 

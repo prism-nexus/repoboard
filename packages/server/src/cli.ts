@@ -24,6 +24,8 @@ import {
   type DecisionOption,
   dailyLogHeader,
   defaultBoardConfig,
+  exitCodeForFindings,
+  type Finding,
   filterLogBlocks,
   findSeatLine,
   formatAnsweredChoice,
@@ -61,9 +63,11 @@ import {
   systemsSummary,
   toIso,
   trimLandings,
+  workspaceLeaseLines,
+  workspaceOwnerQueueLines,
 } from '@repoboard/core';
 import * as YAML from 'yaml';
-import { filterCards, ownerQueue } from './card-query.js';
+import { filterCards, type OwnerQueueRow, ownerQueue } from './card-query.js';
 import { gatherCost } from './cost.js';
 import { distStaleness } from './dist-stale.js';
 import { type RunningServer, startServer } from './http.js';
@@ -86,6 +90,7 @@ import { openStore } from './store.js';
 import { runDetect } from './systems-detect.js';
 import { systemTests } from './systems-tests.js';
 import { VERSION } from './version.js';
+import { Workspace } from './workspace.js';
 
 export { VERSION };
 
@@ -1446,32 +1451,71 @@ async function cmdState(args: string[], io: CliIO): Promise<number> {
     return 0;
   }
   const now = io.now?.() ?? new Date();
+  // RCB-153 W5: `repos:` absent/empty is not a workspace — `opened` stays `[]` and every branch
+  // below falls through to exactly the pre-RCB-153 computation (the slice's own byte-identity
+  // control).
+  const repos = store.config.repos ?? [];
+  const opened = repos.length > 0 ? await new Workspace(root, repos, io.now).openAll() : [];
   if (values.json) {
     // RCB-144/RCB-146: OWNER QUEUE is generated, not stored — same `ownerQueue` (card-query.ts)
     // MCP's get_state calls, reused here as data rather than parsed back out of rendered text.
     // RCB-131: `leases` is generated the same way, via the SAME `liveLeaseRows` MCP's get_state
     // calls (mcp.ts), so the two can never disagree about which leases are "live".
-    io.stdout.write(
-      `${JSON.stringify(
-        {
-          stamp: doc.stamp,
-          actor: doc.actor,
-          sections: doc.sections,
-          ownerQueue: ownerQueue(store.list()),
-          leases: liveLeaseRows(store.leases(), now),
-        },
-        null,
-        2,
-      )}\n`,
-    );
+    const payload: {
+      stamp: string;
+      actor: string;
+      sections: typeof doc.sections;
+      ownerQueue: OwnerQueueRow[];
+      leases: LeaseRow[];
+      repos?: Record<string, { ownerQueue: OwnerQueueRow[]; leases: LeaseRow[]; missing?: true }>;
+    } = {
+      stamp: doc.stamp,
+      actor: doc.actor,
+      sections: doc.sections,
+      ownerQueue: ownerQueue(store.list()),
+      leases: liveLeaseRows(store.leases(), now),
+    };
+    if (opened.length > 0) {
+      // RCB-153 W5: `--json` adds `repos: { <key>: { ownerQueue, leases, missing? } }` — one entry
+      // per configured member, in `repos:` order, `missing: true` (and empty rows) for one whose
+      // root has no `.repoboard/`.
+      const reposJson: NonNullable<typeof payload.repos> = {};
+      for (const { key, store: memberStore } of opened) {
+        reposJson[key] = memberStore.hasBoard
+          ? {
+              ownerQueue: ownerQueue(memberStore.list()),
+              leases: liveLeaseRows(memberStore.leases(), now),
+            }
+          : { ownerQueue: [], leases: [], missing: true };
+      }
+      payload.repos = reposJson;
+    }
+    io.stdout.write(`${JSON.stringify(payload, null, 2)}\n`);
     return 0;
   }
+  // RCB-153 W5: the workspace's own OWNER QUEUE/LEASES come from `store.list()`/`store.leases()`
+  // exactly as before; `workspace` only ever ADDS member lines on top (empty arrays when `opened`
+  // is `[]`, so `renderState` renders byte-identical to before this card).
   const text = renderState(
     doc.sections,
     store.list(),
     { now: new Date(Date.parse(doc.stamp)), actor: doc.actor },
     store.leases(),
     now,
+    {
+      ownerQueueLines: workspaceOwnerQueueLines(
+        opened.map(({ key, store: memberStore }) => ({
+          key,
+          cards: memberStore.hasBoard ? memberStore.list() : null,
+        })),
+      ),
+      leaseLines: workspaceLeaseLines(
+        opened
+          .filter(({ store: memberStore }) => memberStore.hasBoard)
+          .map(({ key, store: memberStore }) => ({ key, leases: memberStore.leases() })),
+        now,
+      ),
+    },
   );
   io.stdout.write(text);
   return 0;
@@ -1823,16 +1867,47 @@ async function cmdCheck(args: string[], io: CliIO): Promise<number> {
   });
   const root = await requireRoot(io);
   const store = await openStore(root, { watch: false, now: io.now });
-  const { findings, exitCode } = await store.check(values.strict);
+  const { findings } = await store.check(values.strict);
+  // RCB-153 W5/W3: `repos:` absent/empty is not a workspace — `allFindings`/`exitCode` fall
+  // straight through to `findings`/`store.check`'s own exit code, byte-identical to before this
+  // card (the slice's own regression control).
+  const repos = store.config.repos ?? [];
+  let allFindings: readonly Finding[] = findings;
+  if (repos.length > 0) {
+    const opened = await new Workspace(root, repos, io.now).openAll();
+    const memberFindings: Finding[] = [];
+    for (const { key, root: memberRoot, store: memberStore } of opened) {
+      if (!memberStore.hasBoard) {
+        // W3: a configured member whose root has no `.repoboard/` — error-grade, named by key and
+        // path, so `check` never silently skips a board the owner listed.
+        memberFindings.push({
+          kind: 'workspace-member-missing',
+          level: 'error',
+          message: `workspace-member-missing: [${key}] ${memberRoot} has no .repoboard/ (repos: in board.yml)`,
+        });
+        continue;
+      }
+      // W5: run the SAME `checkFindings`/`store.check` every other board runs, against the
+      // member's own state/logs/leases/config — then prefix every line `[<key>]`.
+      const memberOutcome = await memberStore.check(values.strict);
+      for (const f of memberOutcome.findings) {
+        memberFindings.push({ ...f, message: `[${key}] ${f.message}` });
+      }
+    }
+    allFindings = [...findings, ...memberFindings];
+  }
+  // W5: "exit code = the worst" — one `exitCodeForFindings` call over the combined list, the same
+  // function every other surface uses, so `--strict` cannot mean something different here.
+  const exitCode = exitCodeForFindings(allFindings, values.strict);
   if (values.json) {
-    io.stdout.write(`${formatRows(findings)}\n`);
+    io.stdout.write(`${formatRows(allFindings)}\n`);
     return exitCode;
   }
-  if (findings.length === 0) {
+  if (allFindings.length === 0) {
     io.stdout.write('ok\n');
     return 0;
   }
-  for (const f of findings) io.stdout.write(`${f.message}\n`);
+  for (const f of allFindings) io.stdout.write(`${f.message}\n`);
   return exitCode;
 }
 

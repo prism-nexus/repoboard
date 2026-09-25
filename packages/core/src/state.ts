@@ -191,18 +191,45 @@ function renderTemplate(
  * judged against `leasesNow`, defaulting to `opts.now` — pass the REAL clock here, not the doc's
  * stamp: unlike LIVE/LAST LANDINGS/SEATS (frozen as last WRITTEN), LEASES is a fresh read, same
  * as OWNER QUEUE, so a lease that went stale after the last write must not still show as live.
+ *
+ * RCB-153 (W5): `workspace`, when given, appends already-formatted MEMBER lines — `[<key>] …` —
+ * after the workspace's own generated OWNER QUEUE / LEASES bodies (never before: the workspace's
+ * own cards/leases always sort first). Omitted, or both arrays empty (a plain board, or a
+ * workspace with nothing to add), renders BYTE-IDENTICAL to before this card — the whole function
+ * falls through to exactly the pre-RCB-153 computation.
  */
+export interface WorkspaceStateExtra {
+  ownerQueueLines?: readonly string[];
+  leaseLines?: readonly string[];
+}
+
 export function renderState(
   sections: StateSections,
   openDecisions: readonly Card[],
   opts: { now: Date; actor: string },
   leasesDoc?: LeasesDoc,
   leasesNow?: Date,
+  workspace?: WorkspaceStateExtra,
 ): string {
   const at = leasesNow ?? opts.now;
-  const leasesBody =
+  let ownerQueueBody = renderOwnerQueue(openDecisions);
+  const extraOwner = workspace?.ownerQueueLines ?? [];
+  if (extraOwner.length > 0) {
+    ownerQueueBody =
+      ownerQueueBody === OWNER_QUEUE_PLACEHOLDER
+        ? extraOwner.join('\n')
+        : [ownerQueueBody, ...extraOwner].join('\n');
+  }
+  let leasesBody =
     leasesDoc !== undefined ? renderLeaseLines(liveLeases(leasesDoc, at), at) : undefined;
-  return renderTemplate(sections, renderOwnerQueue(openDecisions), opts, leasesBody);
+  const extraLeases = workspace?.leaseLines ?? [];
+  if (leasesBody !== undefined && extraLeases.length > 0) {
+    leasesBody =
+      leasesBody === '(no live leases)'
+        ? extraLeases.join('\n')
+        : [leasesBody, ...extraLeases].join('\n');
+  }
+  return renderTemplate(sections, ownerQueueBody, opts, leasesBody);
 }
 
 /** The ON-DISK rendering: OWNER QUEUE is always the placeholder, never generated content. */
@@ -261,7 +288,8 @@ export interface Finding {
     | 'systems-invalid'
     | 'systems-stale'
     | 'untracked-cards'
-    | 'seat-owner-queue-drift';
+    | 'seat-owner-queue-drift'
+    | 'workspace-member-missing';
   level: FindingLevel;
   message: string;
 }

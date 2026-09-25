@@ -66,6 +66,7 @@ import {
   toIso,
   trimLandings,
   type WorkspaceBoardRef,
+  type WorkspaceRepo,
   workspaceLeaseLines,
   workspaceOwnerQueueLines,
 } from '@repoboard/core';
@@ -87,13 +88,20 @@ import {
   type WindowRow,
 } from './mcp.js';
 import { formatResolvedRefs, resolveCardRefs, resolveRefSpec } from './refs.js';
-import { assignRepoKeys, hasBoardDir } from './repo-context.js';
+import { assignRepoKeys, hasBoardDir, type RootEntry } from './repo-context.js';
 import { loadGateHealth, recordGate } from './repo-health.js';
 import { type CardStore, openStore } from './store.js';
 import { runDetect } from './systems-detect.js';
 import { systemTests } from './systems-tests.js';
 import { VERSION } from './version.js';
-import { type OpenedWorkspaceMember, Workspace } from './workspace.js';
+import {
+  checkMembers,
+  expandHome,
+  memberStateRepos,
+  type OpenedWorkspaceMember,
+  resolveMemberRoot,
+  Workspace,
+} from './workspace.js';
 
 export { VERSION };
 
@@ -131,6 +139,17 @@ Usage:
                                         --practices also scaffolds STATE.md, today's log,
                                         leases.yml and a root NEXT-AGENT-PROMPT.md if absent —
                                         works on a repo that already has a board too
+  repoboard init --workspace [--repo <key>=<path>]...  [--practices]
+                                        RCB-153 W8: scaffold a WORKSPACE board — board.yml gets a
+                                        repos: entry per --repo (repeatable), path written relative
+                                        when it shares this directory's own parent (a sibling repo,
+                                        W2), absolute otherwise; ~ is expanded. Refuses if
+                                        .repoboard/ already exists (even with --practices — repos:
+                                        is a one-time scaffold, never a merge). A key must match
+                                        /^[a-z0-9][a-z0-9-]*$/ and be unique; a --repo path that
+                                        does not exist yet is allowed (repoboard check finds it as
+                                        workspace-member-missing) — the output says so. Never reads
+                                        or writes anything under a member's own path.
   repoboard card add "<title>" [options]      --status s --assignee a --priority high|medium|low
                                         --size S|M|L|XL
                                         --label l (repeatable) --file f (repeatable) --ref r (repeatable)
@@ -389,7 +408,13 @@ Usage:
                                         just registered — its board opens on first request (map on
                                         demand, K12) — and is listed by GET /api/repos. With no
                                         --root the one root is found by climbing from the cwd, as
-                                        before. The repo watcher honours .gitignore (K12); if what
+                                        before — UNLESS that board's board.yml has repos: (RCB-153
+                                        W6: a workspace), in which case the roots are the workspace
+                                        plus every member, in repos: order, keyed by the workspace's
+                                        own folder name and each member's configured repos[].key
+                                        (never re-derived); any --root flag overrides this and
+                                        serves exactly what was given. The repo watcher honours
+                                        .gitignore (K12); if what
                                         it would watch still exceeds --watch-cap (default 20000
                                         paths), or it hits EMFILE/ENFILE, it turns itself off and
                                         logs one warning — the map keeps working from the last scan,
@@ -731,19 +756,69 @@ async function scaffoldPractices(root: string, io: CliIO): Promise<void> {
   );
 }
 
+/**
+ * RCB-153 W8: `init --workspace --repo <key>=<path>` — split on the FIRST `=` (same rule as
+ * `--sibling`/`parseSiblingFlag`) — key and path both required.
+ */
+function parseRepoFlag(raw: string): { key: string; path: string } {
+  const i = raw.indexOf('=');
+  const key = (i === -1 ? raw : raw.slice(0, i)).trim();
+  const path = (i === -1 ? '' : raw.slice(i + 1)).trim();
+  if (!key || !path) {
+    throw new UserError(`--repo must be "<key>=<path>" (got "${raw}")`);
+  }
+  return { key, path };
+}
+
 async function cmdInit(args: string[], io: CliIO): Promise<number> {
-  const { values } = parse('init', args, { practices: { type: 'boolean', default: false } });
+  const { values } = parse('init', args, {
+    practices: { type: 'boolean', default: false },
+    workspace: { type: 'boolean', default: false },
+    repo: { type: 'string', multiple: true },
+  });
+  const repoFlags = values.repo ?? [];
+  if (repoFlags.length > 0 && !values.workspace) {
+    throw new UserError('init --repo requires --workspace (a plain board has no repos:)');
+  }
   const root = resolve(io.cwd);
   const repoboardDir = join(root, '.repoboard');
   const present = await stat(repoboardDir).then(
     () => true,
     () => false,
   );
-  if (present && !values.practices) {
+  // W8: --workspace refuses on an existing .repoboard/ even with --practices — repos: is a
+  // one-time scaffold, never a merge onto a board that might already have a different member
+  // list. Plain --practices (no --workspace) keeps today's behaviour: safe to layer onto an
+  // existing board, byte-identical (values.workspace defaults false).
+  if (present && (!values.practices || values.workspace)) {
     throw new UserError(`${repoboardDir} already exists; refusing to overwrite`);
   }
+  // RCB-153 W8: build `repos:` before writing anything. Each path is resolved PURELY in string
+  // space (`resolve`/`dirname`/`relative` — no `stat`, so this never reads a member, let alone
+  // writes one — O7): relative when the member and this workspace share a parent directory
+  // (the sibling-repo layout W2 assumes), absolute otherwise. Validation (the key regex AND
+  // duplicate keys) goes through the ONE schema `board.yml` parsing already uses
+  // (`BoardConfigSchema` via `parseBoard`/`serializeBoard`) rather than a second copy of the
+  // same rule, so a refusal here is always worded exactly like the one `check`/`serve` would
+  // give the same board.yml later.
+  let workspaceRepos: WorkspaceRepo[] | undefined;
+  if (values.workspace) {
+    const rawRepos: WorkspaceRepo[] = repoFlags.map((raw) => {
+      const { key, path } = parseRepoFlag(raw);
+      const memberAbs = resolve(root, expandHome(path));
+      const boardRoot =
+        dirname(memberAbs) === dirname(root) ? relative(root, memberAbs) : memberAbs;
+      return { key, root: boardRoot };
+    });
+    const draft: BoardConfig = { ...defaultBoardConfig(), repos: rawRepos };
+    const parsed = parseBoard(serializeBoard(draft));
+    if (!parsed.ok) throw new UserError(parsed.error);
+    workspaceRepos = parsed.config.repos ?? [];
+  }
   if (!present) {
-    const config = defaultBoardConfig();
+    const config: BoardConfig = workspaceRepos
+      ? { ...defaultBoardConfig(), repos: workspaceRepos }
+      : defaultBoardConfig();
     const now = io.now?.() ?? new Date();
     const welcome = createCard(
       {
@@ -764,6 +839,22 @@ async function cmdInit(args: string[], io: CliIO): Promise<number> {
     await writeFile(join(repoboardDir, 'board.yml'), serializeBoard(config));
     await writeFile(join(repoboardDir, 'cards', `${card.id}.md`), serializeCard(card));
     io.stdout.write(`initialised ${repoboardDir} with ${card.id} "Welcome"\n`);
+  }
+  // W8: one line per configured member, its written `root:` and — a plain `stat`, never a write,
+  // never opening the member's own store — whether that path exists yet. A nonexistent path is
+  // allowed (`repoboard check` reports `workspace-member-missing` once the board exists), but
+  // this is where the CLI says so, right when the owner typed it.
+  for (const repo of workspaceRepos ?? []) {
+    const abs = resolveMemberRoot(root, repo.root);
+    const exists = await stat(abs).then(
+      () => true,
+      () => false,
+    );
+    io.stdout.write(
+      `  repo ${repo.key} -> ${repo.root}` +
+        (exists ? '' : ' (not found yet; `repoboard check` will report workspace-member-missing)') +
+        '\n',
+    );
   }
   if (values.practices) {
     await scaffoldPractices(root, io);
@@ -1791,19 +1882,11 @@ async function cmdState(args: string[], io: CliIO): Promise<number> {
       leases: liveLeaseRows(store.leases(), now),
     };
     if (opened.length > 0) {
-      // RCB-153 W5: `--json` adds `repos: { <key>: { ownerQueue, leases, missing? } }` — one entry
-      // per configured member, in `repos:` order, `missing: true` (and empty rows) for one whose
-      // root has no `.repoboard/`.
-      const reposJson: NonNullable<typeof payload.repos> = {};
-      for (const { key, store: memberStore } of opened) {
-        reposJson[key] = memberStore.hasBoard
-          ? {
-              ownerQueue: ownerQueue(memberStore.list()),
-              leases: liveLeaseRows(memberStore.leases(), now),
-            }
-          : { ownerQueue: [], leases: [], missing: true };
-      }
-      payload.repos = reposJson;
+      // RCB-153 W5/slice 3b: `--json` adds `repos: { <key>: { ownerQueue, leases, missing? } }` —
+      // one entry per configured member, in `repos:` order, `missing: true` (and empty rows) for
+      // one whose root has no `.repoboard/`. `memberStateRepos` (workspace.ts) is the SAME
+      // function MCP's `get_state` builds its own `repos:` field from.
+      payload.repos = memberStateRepos(opened, ownerQueue, liveLeaseRows, now);
     }
     io.stdout.write(`${JSON.stringify(payload, null, 2)}\n`);
     return 0;
@@ -2190,25 +2273,11 @@ async function cmdCheck(args: string[], io: CliIO): Promise<number> {
   let allFindings: readonly Finding[] = findings;
   if (repos.length > 0) {
     const opened = await new Workspace(root, repos, io.now).openAll();
-    const memberFindings: Finding[] = [];
-    for (const { key, root: memberRoot, store: memberStore } of opened) {
-      if (!memberStore.hasBoard) {
-        // W3: a configured member whose root has no `.repoboard/` — error-grade, named by key and
-        // path, so `check` never silently skips a board the owner listed.
-        memberFindings.push({
-          kind: 'workspace-member-missing',
-          level: 'error',
-          message: `workspace-member-missing: [${key}] ${memberRoot} has no .repoboard/ (repos: in board.yml)`,
-        });
-        continue;
-      }
-      // W5: run the SAME `checkFindings`/`store.check` every other board runs, against the
-      // member's own state/logs/leases/config — then prefix every line `[<key>]`.
-      const memberOutcome = await memberStore.check(values.strict);
-      for (const f of memberOutcome.findings) {
-        memberFindings.push({ ...f, message: `[${key}] ${f.message}` });
-      }
-    }
+    // W3/W5, slice 3b: `checkMembers` (workspace.ts) is the SAME member loop MCP's `check` tool
+    // runs — a root with no `.repoboard/` is one `workspace-member-missing` error finding, every
+    // other member's own findings prefixed `[<key>] `. Moved, not changed: this call reproduces
+    // the loop that used to be inline here, findings identical.
+    const memberFindings = await checkMembers(opened, values.strict);
     allFindings = [...findings, ...memberFindings];
   }
   // W5: "exit code = the worst" — one `exitCodeForFindings` call over the combined list, the same
@@ -2690,6 +2759,46 @@ function parseSiblingFlag(raw: string): Sibling {
   return { name, url };
 }
 
+/**
+ * RCB-153 W6: `serve` with no `--root` at a workspace root — roots = [workspace, ...members in
+ * `repos:` order]. The workspace keeps `assignRepoKeys`'s own basename key; every member keeps
+ * its CONFIGURED `repos[].key` (never re-derived from its folder name — the config already
+ * promised that key to whoever wrote `board.yml`, and this is the SAME key `RepoRegistry`,
+ * `GET /api/repos` and `serve`'s own startup line all end up printing, because they all read it
+ * off the one `RootEntry[]` this function returns). `repos[].key`'s shape and uniqueness AMONG
+ * MEMBERS is already enforced by `BoardConfigSchema` at parse time (`openStore` → `parseBoard`);
+ * the only NEW collision checked here is a member key vs. the workspace's OWN key, or the
+ * reserved `repos` word (RCB-43 slice 2: `GET /api/repos` is the list route). A member whose
+ * `root` does not exist (or has no `.repoboard/`) is not an error here — `hasBoardDir`/`RepoRegistry`
+ * already treat that as map-only, and `cmdServe`'s per-root startup line says which key got which
+ * (`(board)` vs `(map-only)`), so a missing member is still named, never silently dropped.
+ */
+function workspaceServeRoots(workspaceRoot: string, config: BoardConfig): RootEntry[] {
+  const wsKey = basename(workspaceRoot).toLowerCase();
+  const entries: RootEntry[] = [{ key: wsKey, root: workspaceRoot }];
+  const seenKeys = new Set<string>([wsKey, 'repos']);
+  for (const repo of config.repos ?? []) {
+    if (repo.key === wsKey) {
+      throw new UserError(
+        `workspace member key "${repo.key}" collides with the workspace's own key ` +
+          `(rename one in board.yml)`,
+      );
+    }
+    if (repo.key === 'repos') {
+      throw new UserError(
+        'workspace member key "repos" is reserved (GET /api/repos lists every root); ' +
+          'rename it in board.yml',
+      );
+    }
+    if (seenKeys.has(repo.key)) {
+      throw new UserError(`duplicate workspace member key "${repo.key}" in board.yml`);
+    }
+    seenKeys.add(repo.key);
+    entries.push({ key: repo.key, root: resolveMemberRoot(workspaceRoot, repo.root) });
+  }
+  return entries;
+}
+
 function openInBrowser(url: string): void {
   const [cmd, args] =
     process.platform === 'darwin'
@@ -2741,6 +2850,20 @@ async function cmdServe(args: string[], io: CliIO): Promise<number> {
   const err = io.stderr ?? io.stdout;
   const store = await openStore(primaryRoot, { watch: true, now: io.now });
   store.on('warning', (m) => err.write(`warning: ${m}\n`));
+  // RCB-153 W6: NO `--root` at all, and the found board has `repos:` → the workspace plus every
+  // member, keyed by `repos[].key` (`workspaceServeRoots`) instead of `assignRepoKeys`. Any
+  // `--root` flag is the override (W6: "explicit `--root` flags still work exactly as today —
+  // no workspace expansion when any `--root` is given"), so `rootFlags.length > 0` skips this
+  // entirely and `roots`/the print loop below stay byte-identical to before this card.
+  let keyedRoots: RootEntry[] | undefined;
+  if (rootFlags.length === 0 && (store.config.repos?.length ?? 0) > 0) {
+    try {
+      keyedRoots = workspaceServeRoots(primaryRoot, store.config);
+    } catch (e) {
+      await store.close();
+      throw e;
+    }
+  }
   let server: RunningServer;
   try {
     server = await startServer({
@@ -2751,6 +2874,7 @@ async function cmdServe(args: string[], io: CliIO): Promise<number> {
       siblingsFlag,
       warn: (m) => err.write(`warning: ${m}\n`),
       roots,
+      ...(keyedRoots ? { keyedRoots } : {}),
       now: io.now,
     });
   } catch (e) {
@@ -2760,9 +2884,10 @@ async function cmdServe(args: string[], io: CliIO): Promise<number> {
     throw e;
   }
   io.stdout.write(`repoboard: serving ${primaryRoot}\n  ${server.url}\n`);
-  // RCB-43 slice 1: one line per `--root`, primary first and marked — the same key
-  // `GET /api/repos` uses, so a line here and an entry there always agree.
-  for (const { key, root: r } of assignRepoKeys(roots)) {
+  // RCB-43 slice 1 / RCB-153 W6: one line per root, primary first and marked — the SAME keys
+  // `GET /api/repos` uses (`keyedRoots` when this is a workspace serve, `assignRepoKeys(roots)`
+  // otherwise), so a line here and an entry there always agree.
+  for (const { key, root: r } of keyedRoots ?? assignRepoKeys(roots)) {
     const isPrimary = r === primaryRoot;
     const board = (isPrimary ? store.hasBoard : hasBoardDir(r)) ? 'board' : 'map-only';
     io.stdout.write(`  ${key}  ${r}  (${board})${isPrimary ? '  primary' : ''}\n`);

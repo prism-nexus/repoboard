@@ -5,6 +5,20 @@ All notable changes to this project are documented in this file. The format is b
 
 ## [Unreleased]
 
+### Highlights
+
+- **Workspace: one board that coordinates several (RCB-153).** A `board.yml` with `repos:` (each
+  `{key, root, writes?}`) makes a board a workspace over member boards. At its root: `state` and
+  `check` aggregate every member (`[<key>]`-prefixed; a missing member is a
+  `workspace-member-missing` finding, not a crash); card ids resolve by prefix across boards
+  (`<key>:<id>` when two share one); `card list --repo <key>|all`, `card add --repo <key>`; a
+  workspace card's `gate:` may name a member card; `serve` with no `--root` serves the workspace
+  and every member under their configured keys (any `--root` turns that off); `init --workspace
+  --repo <key>=<path>` scaffolds one; `mcp` gives the same verbs an optional `repo` argument
+  (tool count unchanged, and a board without `repos:` sees a byte-identical `tools/list`).
+  Members are read-only unless listed with `writes: cards`, and even then a write touches only
+  that member's card file and its `events.jsonl`.
+
 ## [0.2.0] — 2026-09-25
 
 ### Highlights

@@ -406,7 +406,7 @@ Per-tool bytes of the four new tools: `get_state` 432 B, `set_state_section` 645
 P8.2's five lease tools are: no `CARD_INTRO`/`ACTOR_DESC` reuse, because state/log/check are not
 cards.
 
-### Workspace (RCB-153 slice 1)
+### Workspace (RCB-153 slices 1-3b)
 
 A workspace is a normal board whose `board.yml` carries one more optional key — `repos:`, a list
 of member boards this one coordinates:
@@ -472,10 +472,75 @@ accepted for a known key. At a workspace root:
   OPTIONAL trailing `members: GateMemberFacts[]` (`{key, prefix, cards, config}`, never a verdict) —
   a member's own `done`/decided column decides clear-ness, from that member's OWN config. Every
   existing single-board caller (`rollup`, `seat`, MCP, web) passes none, so their output is
-  byte-identical. Wired into `card list`'s BLOCKED column at a workspace root; `seat`/`state`/mcp/
-  web stay single-board this slice (open for slice 3).
+  byte-identical. Wired into `card list`'s BLOCKED column at a workspace root only. Still
+  single-board (open, after RCB-153): `seat`, `state`'s gated count, MCP `list_cards`' `blocked`,
+  and the web board read a member-card gate as `blocked on <id> (no such card)` — never clear.
 
-`serve`/`mcp`/`init --workspace` stay single-board (slice 3).
+**`serve` expands (RCB-153 slice 3a, W6).** `repoboard serve` with NO `--root` at all, at a
+workspace root, serves the workspace plus every member — one process, roots = [workspace,
+...members in `repos:` order]. The workspace keeps its `assignRepoKeys` basename key (unchanged);
+every member keeps its CONFIGURED `repos[].key`, never re-derived from its folder name — the same
+key `GET /api/repos`, the per-root startup line, and `/api/repos/<key>/…` all end up printing,
+because they all read it off the one `RootEntry[]` `cli.ts`'s `workspaceServeRoots` builds
+(`packages/server/src/repo-context.ts`'s `RepoRegistry` takes this pre-keyed list directly instead
+of running it through `assignRepoKeys` — a NEW `keyedRoots` input on `ServerOptions`/`RepoRegistry`,
+not a second key function; a plain `roots: string[]` list is byte-identical to before). ANY
+`--root` flag is the override — no workspace expansion when one is given, so `serve --root .`
+serves only the workspace, exactly as a plain board would. `repos[].key`'s shape and uniqueness
+among members is already enforced by `board.yml` parsing (`BoardConfigSchema`); the only NEW
+collision this checks is a member key against the workspace's own key or the reserved `repos` word
+(`GET /api/repos` is the list route) — either throws a `UserError` naming the key. A member whose
+`root` does not exist is not an error here either — `serve`'s own per-root startup line already
+says `(board)` or `(map-only)` for every key, so a missing member is still named, never silently
+dropped.
+
+**`init --workspace` scaffolds one (RCB-153 slice 3a, W8).** `repoboard init --workspace --repo
+<key>=<path>` (repeatable) writes `board.yml` with a `repos:` entry per flag — the path relative
+when the member shares this directory's OWN parent (the sibling-repo layout W2 assumes), absolute
+otherwise, `~` expanded. Validation (the key regex, duplicate keys) goes through the SAME
+`BoardConfigSchema` `board.yml` parsing already uses, not a second copy of the rule, so a refusal
+here reads exactly like the one `check`/`serve` would give the same file later. It refuses when
+`.repoboard/` already exists — even with `--practices` (repos: is a one-time scaffold, never a
+merge onto a board that might already have a different member list; plain `--practices` with no
+`--workspace` is unaffected, exactly today's behaviour). It never reads or writes anything under a
+member's own path — path arithmetic is pure string math (`resolve`/`dirname`/`relative`), and a
+member that does not exist yet is allowed (`check` finds it later as `workspace-member-missing`);
+the CLI's own output says so, one line per configured member.
+
+**`mcp` sees the same store, the same resolution, the same 30 tools (RCB-153 slice 3b, W7).**
+`repoboard mcp` at a workspace root opens the workspace with its members, exactly like every other
+verb — no new tool, no new transport concept. Six read tools (`list_cards`, `board_summary`,
+`check`, `get_state`, `list_leases`, `get_log`) gain an OPTIONAL `repo` argument (a workspace member
+key; `list_cards`/`list_leases` also take `"all"`, the same "every board, each row tagged" shape
+`card list --repo all` gives the CLI); `create_card` gains an optional `repo` too (needs `writes:
+cards`, same as `card add --repo`). With no `repo` at all: `get_state`/`check` AGGREGATE exactly as
+`state`/`check` do (member lines `[<key>] `-prefixed, `check`'s exit code the worst of all of
+them); the other four are simply this board's own view, unaffected. The **`repo` property (and any
+description wording that mentions it) exists ONLY when the store is a workspace** — a plain board's
+`tools/list` is untouched, byte-identical, because `createMcpServer` builds each of these six tools'
+schema conditionally on `store.config.repos` at server-construction time (the same "board with no
+`repos:` is exactly today's board" rule every other slice keeps); the tool count pin stays 30.
+
+The seven card verbs that take an `id` (`get_card`, `move_card`, `update_card`, `add_note`,
+`ask_owner`, `record_decision`, `append_log`) resolve it by W4
+(`resolveWorkspaceCardRef`/`resolveWorkspaceWriteTarget`, `packages/server/src/workspace.ts`) —
+their SCHEMAS never change (id resolution is transparent to the caller), only what a bare id means:
+`BB-1` reaches the member whose prefix is `BB`; a write additionally clears `writes: cards`
+(`Workspace.storeForWrite`, the exact refusal text `member <key> is read-only (set writes: cards in
+board.yml)`) before it opens that member's store at all.
+
+**MCP is long-lived; a member is opened FRESH every call, never memoised across calls.** `serveMcp`
+opens the top-level board once, watched, for the life of the process — but a member's `CardStore` is
+a one-shot snapshot (`watch: false`) the moment it is opened, and nothing here refreshes it after
+that. Holding one open across calls would mean a member card edited on disk (another seat's commit)
+goes stale until this process restarts. So every tool that touches the workspace calls
+`openWorkspaceBoards`/`new Workspace(...)` again, from scratch, on every single invocation: a fresh
+`Workspace`, opened again, is strictly cheaper to get right than a long-lived one with its own
+invalidation logic, and a member board is small enough that re-reading it per call is not a cost
+worth avoiding. `cmdState`/`cmdCheck`'s own aggregation (`memberStateRepos`, `checkMembers`,
+`packages/server/src/workspace.ts`) moved out of `cli.ts` in the same slice so MCP's `get_state`/
+`check` share the identical loop instead of a second copy of it — the CLI's own output is
+byte-identical, only the code moved.
 
 | Command | Example |
 |---|---|
@@ -485,6 +550,14 @@ accepted for a known key. At a workspace root:
 | `repoboard card show BB-1` (workspace root) | resolves to the member whose prefix is `BB`, reads its card |
 | `repoboard card move BB-1 done` (workspace root) | resolved the same way, written through `bb`'s own store — refused if `bb` has no `writes: cards` |
 | `repoboard card list --repo all` (workspace root) | every board's cards, `REPO ID STATUS ASSIGNEE … TITLE` |
+| `repoboard serve` (workspace root, no `--root`) | one process, `GET /api/repos` = `[<workspace-key>, ...members]`, every key from `board.yml` |
+| `repoboard serve --root .` (workspace root) | overrides expansion — only the workspace, exactly a plain board |
+| `repoboard init --workspace --repo aa=../aa --repo bb=/abs/bb` | scaffolds `board.yml` with `repos: [{key: aa, root: ../aa}, {key: bb, root: /abs/bb}]` |
+| MCP `list_cards {repo:"bb"}` (workspace root) | BB's cards only, each row tagged `repo:"bb"` |
+| MCP `list_cards {repo:"all"}` (workspace root) | every board's cards, each row tagged with its own key |
+| MCP `get_card {id:"BB-1"}` (workspace root) | resolves by prefix, same as `card show BB-1` |
+| MCP `add_note {id:"AA-1", ...}` on a read-only member | refused, the exact W5 text; AA's tree untouched |
+| MCP `get_state`/`check` with no `repo` (workspace root) | aggregate, same shape `state`/`check` give the CLI |
 
 ## 4. Cost — what a cold agent loads, against a budget (P8.4)
 

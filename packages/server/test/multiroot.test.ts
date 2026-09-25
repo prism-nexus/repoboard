@@ -479,3 +479,78 @@ describe('RCB-43 slice 2: /api/repos/<key>/… and the per-root WS', () => {
     expect(await b.hasRepoboard()).toBe(false);
   });
 });
+
+// ---- RCB-153 W6: startServer({keyedRoots}) — cli.ts's workspaceServeRoots input ---------------
+//
+// `ServerOptions.roots` (a plain `string[]`) is untouched by this card — every scenario above
+// still goes through `assignRepoKeys`. `keyedRoots` is the NEW, separate input a workspace serve
+// uses instead: pre-keyed entries, taken as given, never re-derived from a folder name.
+describe('RCB-153 W6: startServer({keyedRoots}) — pre-keyed roots bypass assignRepoKeys', () => {
+  it('GET /api/repos uses the GIVEN keys, not basename(root) — even when they disagree', async () => {
+    const a = await makeTempRepoboard({});
+    const b = await makeTempRepoboard({});
+    cleanups.push(a.cleanup, b.cleanup);
+    const store = await openStore(a.root, { watch: true, now: () => NOW });
+    cleanups.push(() => store.close());
+    // Configured keys ("ws"/"bb") deliberately do NOT match either folder's basename — proof
+    // `assignRepoKeys` never ran on these roots.
+    const server = await startServer({
+      store,
+      port: 0,
+      scan: false,
+      keyedRoots: [
+        { key: 'ws', root: a.root },
+        { key: 'bb', root: b.root },
+      ],
+      now: () => NOW,
+    });
+    cleanups.push(() => server.close());
+
+    const body = await reposOf(server);
+    expect(body.repos.map((r) => r.key)).toEqual(['ws', 'bb']);
+    expect(body.primary).toBe('ws');
+    expect(body.repos.find((r) => r.key === 'bb')).toMatchObject({ root: b.root, hasBoard: true });
+  });
+
+  it('a plain roots: [] list (no keyedRoots) is byte-identical to before this card: still assignRepoKeys', async () => {
+    const a = await makeTempRepoboard({});
+    const b = await makeTempRepoboard({});
+    cleanups.push(a.cleanup, b.cleanup);
+    const store = await openStore(a.root, { watch: true, now: () => NOW });
+    cleanups.push(() => store.close());
+    const server = await startServer({ store, port: 0, scan: false, roots: [a.root, b.root] });
+    cleanups.push(() => server.close());
+
+    const body = await reposOf(server);
+    expect(body.repos.map((r) => r.key)).toEqual([
+      basename(a.root).toLowerCase(),
+      basename(b.root).toLowerCase(),
+    ]);
+  });
+
+  it('keyedRoots[0].root must equal store.root, the same contract roots[0] already has', async () => {
+    const a = await makeTempRepoboard({});
+    const b = await makeTempRepoboard({});
+    cleanups.push(a.cleanup, b.cleanup);
+    const store = await openStore(a.root, { watch: true, now: () => NOW });
+    cleanups.push(() => store.close());
+    let threw: unknown;
+    try {
+      await startServer({
+        store,
+        port: 0,
+        scan: false,
+        keyedRoots: [
+          { key: 'bb', root: b.root },
+          { key: 'ws', root: a.root },
+        ],
+      });
+    } catch (e) {
+      threw = e;
+    }
+    expect(threw).toBeInstanceOf(Error);
+    const message = threw instanceof Error ? threw.message : String(threw);
+    expect(message).toContain(b.root);
+    expect(message).toContain(a.root);
+  });
+});

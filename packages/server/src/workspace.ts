@@ -12,7 +12,8 @@
  */
 import { homedir } from 'node:os';
 import { isAbsolute, join, resolve } from 'node:path';
-import type { WorkspaceRepo } from '@repoboard/core';
+import type { Card, Finding, LeasesDoc, WorkspaceBoardRef, WorkspaceRepo } from '@repoboard/core';
+import { resolveCardRef } from '@repoboard/core';
 import { type CardStore, openStore } from './store.js';
 
 /** `~` alone, or `~/…`, expands to the user's home directory; anything else passes through
@@ -100,4 +101,149 @@ export class Workspace {
     if (!opening) throw new Error(`unknown workspace member "${key}"`); // unreachable, found above
     return opening;
   }
+}
+
+/**
+ * RCB-153 slice 3b (W7): one member resolved, or an error — the shape MCP's `fail()` wants,
+ * never a thrown `UserError` (that convention is `cli.ts`'s own, not this leaf module's).
+ */
+export type ResolvedWorkspaceTarget =
+  | { ok: true; store: CardStore; id: string }
+  | { ok: false; error: string };
+
+export interface OpenedWorkspace {
+  workspace: Workspace;
+  opened: readonly OpenedWorkspaceMember[];
+  boards: readonly WorkspaceBoardRef[];
+}
+
+/**
+ * W3/W4: open every configured member and build the `boards` list `resolveCardRef` needs to
+ * resolve a ref by prefix — `cli.ts`'s own (private) `openWorkspace` does the identical thing for
+ * the CLI's card verbs; this is the same shape, exported so MCP (`mcp.ts`, which cannot import a
+ * private function from `cli.ts`) can share it instead of re-deriving the rule.
+ *
+ * `null` when `store` carries no `repos:` — the "not a workspace" case every caller must treat
+ * identically to a plain board (byte-identical output, the hard constraint every slice of this
+ * card keeps).
+ *
+ * MCP is long-lived (`serveMcp` opens the top-level store once, watched, for the whole process),
+ * but a MEMBER opened once and reused would go stale the moment its file changes on disk — nothing
+ * here refreshes it after `load()`. So every MCP tool that needs a workspace calls this FRESH, once
+ * per tool invocation (never memoised across calls): a new `Workspace`, opened again each time, is
+ * strictly cheaper to get right than a long-lived one with its own invalidation logic, and a member
+ * board is small enough that re-reading it per call is not a cost worth avoiding.
+ */
+export async function openWorkspaceBoards(
+  root: string,
+  store: CardStore,
+  now?: () => Date,
+): Promise<OpenedWorkspace | null> {
+  const repos = store.config.repos ?? [];
+  if (repos.length === 0) return null;
+  const workspace = new Workspace(root, repos, now);
+  const opened = await workspace.openAll();
+  const boards: WorkspaceBoardRef[] = [
+    { key: null, prefix: store.config.prefix },
+    ...opened
+      .filter((m) => m.store.hasBoard)
+      .map((m) => ({ key: m.key, prefix: m.store.config.prefix })),
+  ];
+  return { workspace, opened, boards };
+}
+
+/** W4: resolve `id` for a READ card verb (`get_card`) — `ws: null` (not a workspace) returns
+ * `store`/`id` untouched, so a plain board never calls `resolveCardRef` at all (byte-identical to
+ * before this card). */
+export function resolveWorkspaceCardRef(
+  store: CardStore,
+  ws: OpenedWorkspace | null,
+  id: string,
+): ResolvedWorkspaceTarget {
+  if (!ws) return { ok: true, store, id };
+  const resolved = resolveCardRef(id, ws.boards);
+  if (!resolved.ok) return { ok: false, error: resolved.error };
+  if (resolved.key === null) return { ok: true, store, id: resolved.id };
+  const member = ws.opened.find((m) => m.key === resolved.key);
+  // Unreachable: `resolved.key` only ever names a board that came from `ws.boards`, which is
+  // itself built from `ws.opened` above — there is no key `resolveCardRef` could return here that
+  // is not already one of `ws.opened`'s own keys.
+  if (!member) return { ok: false, error: `unknown workspace member "${resolved.key}"` };
+  return { ok: true, store: member.store, id: resolved.id };
+}
+
+/**
+ * W4/W5: resolve `id` for a WRITE card verb (`move_card`/`update_card`/`add_note`/`ask_owner`/
+ * `record_decision`/`append_log`) — same resolution as `resolveWorkspaceCardRef`, but a member
+ * target must ALSO clear `Workspace.storeForWrite`, the ONE function that checks `writes: cards`
+ * (this function never checks it itself).
+ */
+export async function resolveWorkspaceWriteTarget(
+  store: CardStore,
+  ws: OpenedWorkspace | null,
+  id: string,
+): Promise<ResolvedWorkspaceTarget> {
+  if (!ws) return { ok: true, store, id };
+  const resolved = resolveCardRef(id, ws.boards);
+  if (!resolved.ok) return { ok: false, error: resolved.error };
+  if (resolved.key === null) return { ok: true, store, id: resolved.id };
+  try {
+    const memberStore = await ws.workspace.storeForWrite(resolved.key);
+    return { ok: true, store: memberStore, id: resolved.id };
+  } catch (e) {
+    return { ok: false, error: (e as Error).message };
+  }
+}
+
+/**
+ * W5: `check`'s member loop — split out of `cmdCheck` (RCB-153 slice 3b) so MCP's `check` tool can
+ * run the identical aggregation instead of a second copy of it. A root with no `.repoboard/` is
+ * one `workspace-member-missing` error finding naming the key and the resolved path; otherwise the
+ * member's own `check` runs (the SAME `checkFindings`/`store.check` every board runs) and every one
+ * of its findings is prefixed `[<key>] `. `cmdCheck`'s own output is unchanged by this split — same
+ * loop, same ordering, only moved.
+ */
+export async function checkMembers(
+  opened: readonly OpenedWorkspaceMember[],
+  strict: boolean,
+): Promise<Finding[]> {
+  const memberFindings: Finding[] = [];
+  for (const { key, root: memberRoot, store } of opened) {
+    if (!store.hasBoard) {
+      memberFindings.push({
+        kind: 'workspace-member-missing',
+        level: 'error',
+        message: `workspace-member-missing: [${key}] ${memberRoot} has no .repoboard/ (repos: in board.yml)`,
+      });
+      continue;
+    }
+    const outcome = await store.check(strict);
+    for (const f of outcome.findings) {
+      memberFindings.push({ ...f, message: `[${key}] ${f.message}` });
+    }
+  }
+  return memberFindings;
+}
+
+/**
+ * W5: `state --json`'s `repos:` field — split out of `cmdState` (RCB-153 slice 3b) so MCP
+ * `get_state`'s analogous aggregate (no `repo` given, at a workspace) can share it. Generic over
+ * the row shape so this leaf module never imports `card-query.ts`'s `ownerQueue` or `mcp.ts`'s
+ * `liveLeaseRows` itself — either import would risk a cycle (`mcp.ts` needs `Workspace` from this
+ * file for W7); both current callers (`cmdState`, MCP `get_state`) already import those functions
+ * for their own top-level fields, so passing them through here costs nothing.
+ */
+export function memberStateRepos<Q, L>(
+  opened: readonly OpenedWorkspaceMember[],
+  toOwnerQueue: (cards: readonly Card[]) => Q[],
+  toLeaseRows: (doc: LeasesDoc, now: Date) => L[],
+  now: Date,
+): Record<string, { ownerQueue: Q[]; leases: L[]; missing?: true }> {
+  const out: Record<string, { ownerQueue: Q[]; leases: L[]; missing?: true }> = {};
+  for (const { key, store } of opened) {
+    out[key] = store.hasBoard
+      ? { ownerQueue: toOwnerQueue(store.list()), leases: toLeaseRows(store.leases(), now) }
+      : { ownerQueue: [], leases: [], missing: true };
+  }
+  return out;
 }

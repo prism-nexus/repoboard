@@ -6,6 +6,7 @@
  * Tool descriptions are written for an agent that has never seen this board: they say what a
  * card is, that `status` is a column id, and that `list_cards` is the cheap first call.
  */
+import { basename } from 'node:path';
 import {
   answeredDecisions,
   type BoardConfig,
@@ -13,7 +14,10 @@ import {
   type Card,
   type CardPatch,
   type Column,
+  type CreateCardInput,
   computeBoardSummary,
+  exitCodeForFindings,
+  type Finding,
   filterLogBlocks,
   isStale,
   type Lease,
@@ -26,6 +30,8 @@ import {
   type StateSectionName,
   toIso,
   type Window,
+  workspaceLeaseLines,
+  workspaceOwnerQueueLines,
 } from '@repoboard/core';
 import { z } from 'zod';
 import { filterCards, ownerQueue } from './card-query.js';
@@ -36,6 +42,14 @@ import { loadGateHealth, recordGate } from './repo-health.js';
 import { type CardStore, openStore } from './store.js';
 import { systemTests } from './systems-tests.js';
 import { VERSION } from './version.js';
+import {
+  checkMembers,
+  memberStateRepos,
+  openWorkspaceBoards,
+  resolveWorkspaceCardRef,
+  resolveWorkspaceWriteTarget,
+  Workspace,
+} from './workspace.js';
 
 export const MCP_TOOL_NAMES = [
   'list_cards',
@@ -217,6 +231,14 @@ export function createMcpServer(opts: McpServerOptions): McpServer {
   const { store, defaultActor } = opts;
   const now = opts.now ?? (() => new Date());
   const columnIds = () => store.config.columns.map((c) => c.id).join(', ');
+  // RCB-153 W7: fixed for the life of this server (like `columnIds` above) — a `repos:` added to
+  // board.yml after startup gains the `repo` argument only on the next `repoboard mcp` restart,
+  // same limitation `columnIds()`'s baked-in column list already has for a column added live.
+  const repos = store.config.repos ?? [];
+  const isWorkspace = repos.length > 0;
+  const workspaceKey = () => basename(store.root).toLowerCase();
+  const REPO_DESC =
+    'Workspace member key (this board only when omitted). `list_cards`/`list_leases` also take "all".';
   const server = new McpServer(
     { name: 'repoboard', version: VERSION },
     {
@@ -229,49 +251,66 @@ export function createMcpServer(opts: McpServerOptions): McpServer {
     },
   );
 
-  server.registerTool(
-    'list_cards',
-    {
-      title: 'List cards',
-      description:
-        'Returns a compact JSON array of {id, title, status, assignee, priority, ' +
-        'size, labels, files, parent, phase, gate, blocked, updated} without bodies (RCB-68: parent, ' +
-        'phase, gate mirror the frontmatter; blocked is the reason or null). Call this first: ' +
-        `it is the cheap way to learn what exists and which column ids are in use (this board: ` +
-        `${columnIds()}). Filters are ` +
-        'exact matches and combine with AND; omit them all for every card. Pass full: true ' +
-        'only when you need every body at once (several times the bytes); get_card is cheaper ' +
-        'for one.',
-      inputSchema: {
-        status: z
-          .string()
-          .optional()
-          .describe(`Only cards in this column id (one of: ${columnIds()}).`),
-        assignee: z.string().optional().describe('Only cards whose assignee equals this string.'),
-        label: z.string().optional().describe('Only cards whose labels include this label.'),
-        size: SIZE.optional().describe('Only cards of this size.'),
-        needsDecision: z
-          .boolean()
-          .optional()
-          .describe(
-            'Only cards with an OPEN decision (asked, not yet answered) — the owner queue.',
-          ),
-        parent: z
-          .string()
-          .optional()
-          .describe("RCB-68: only that card's STEPS, in phase order (not id order)."),
-        unblocked: z
-          .boolean()
-          .optional()
-          .describe('With parent: keep only its not-done, not-blocked steps.'),
-        full: z
-          .boolean()
-          .optional()
-          .describe("Include each card's markdown body and `## Log`. Default false."),
-      },
-      annotations: { readOnlyHint: true },
-    },
-    ({
+  const listCardsFields = {
+    status: z
+      .string()
+      .optional()
+      .describe(`Only cards in this column id (one of: ${columnIds()}).`),
+    assignee: z.string().optional().describe('Only cards whose assignee equals this string.'),
+    label: z.string().optional().describe('Only cards whose labels include this label.'),
+    size: SIZE.optional().describe('Only cards of this size.'),
+    needsDecision: z
+      .boolean()
+      .optional()
+      .describe('Only cards with an OPEN decision (asked, not yet answered) — the owner queue.'),
+    parent: z
+      .string()
+      .optional()
+      .describe("RCB-68: only that card's STEPS, in phase order (not id order)."),
+    unblocked: z
+      .boolean()
+      .optional()
+      .describe('With parent: keep only its not-done, not-blocked steps.'),
+    full: z
+      .boolean()
+      .optional()
+      .describe("Include each card's markdown body and `## Log`. Default false."),
+  };
+  const listCardsDescription =
+    'Returns a compact JSON array of {id, title, status, assignee, priority, ' +
+    'size, labels, files, parent, phase, gate, blocked, updated} without bodies (RCB-68: parent, ' +
+    'phase, gate mirror the frontmatter; blocked is the reason or null). Call this first: ' +
+    `it is the cheap way to learn what exists and which column ids are in use (this board: ` +
+    `${columnIds()}). Filters are ` +
+    'exact matches and combine with AND; omit them all for every card. Pass full: true ' +
+    'only when you need every body at once (several times the bytes); get_card is cheaper ' +
+    'for one.' +
+    (isWorkspace
+      ? ' RCB-153: repo narrows to one workspace member (or "all" for every board, each row ' +
+        'gaining a repo field); omitted, this is the board you opened only.'
+      : '');
+  const listCardsHandler = async ({
+    status,
+    assignee,
+    label,
+    size,
+    needsDecision: needsDecisionFilter,
+    parent,
+    unblocked,
+    full,
+    repo,
+  }: {
+    status?: string;
+    assignee?: string;
+    label?: string;
+    size?: z.infer<typeof SIZE>;
+    needsDecision?: boolean;
+    parent?: string;
+    unblocked?: boolean;
+    full?: boolean;
+    repo?: string;
+  }): Promise<CallToolResult> => {
+    const filters = {
       status,
       assignee,
       label,
@@ -279,27 +318,72 @@ export function createMcpServer(opts: McpServerOptions): McpServer {
       needsDecision: needsDecisionFilter,
       parent,
       unblocked,
-      full,
-    }) => {
-      const all = store.list();
-      let cards: Card[];
-      try {
-        cards = filterCards(all, store.config, {
-          status,
-          assignee,
-          label,
-          size,
-          needsDecision: needsDecisionFilter,
-          parent,
-          unblocked,
-        });
-      } catch (e) {
-        return fail((e as Error).message);
+    };
+    if (repo !== undefined) {
+      // RCB-153 W7: fresh Workspace per call (never memoised across calls — see
+      // `openWorkspaceBoards`'s doc comment on why).
+      const workspace = new Workspace(store.root, repos, now);
+      const wsKey = workspaceKey();
+      let targets: { key: string; store: CardStore }[];
+      if (repo === 'all') {
+        const opened = await workspace.openAll();
+        targets = [{ key: wsKey, store }, ...opened.map((m) => ({ key: m.key, store: m.store }))];
+      } else if (repo === wsKey) {
+        targets = [{ key: wsKey, store }];
+      } else {
+        const opening = workspace.open(repo);
+        if (!opening) return fail(`repo: unknown workspace member "${repo}"`);
+        targets = [{ key: repo, store: await opening }];
       }
-      const rows: readonly unknown[] = full ? cards : cards.map((c) => toRow(c, all, store.config));
+      const rows: unknown[] = [];
+      for (const t of targets) {
+        const all = t.store.list();
+        let cards: Card[];
+        try {
+          cards = filterCards(all, t.store.config, filters);
+        } catch (e) {
+          return fail((e as Error).message);
+        }
+        const tRows: readonly unknown[] = full
+          ? cards
+          : cards.map((c) => toRow(c, all, t.store.config));
+        for (const r of tRows) rows.push({ ...(r as Record<string, unknown>), repo: t.key });
+      }
       return { content: [{ type: 'text', text: formatRows(rows) }] };
-    },
-  );
+    }
+    const all = store.list();
+    let cards: Card[];
+    try {
+      cards = filterCards(all, store.config, filters);
+    } catch (e) {
+      return fail((e as Error).message);
+    }
+    const rows: readonly unknown[] = full ? cards : cards.map((c) => toRow(c, all, store.config));
+    return { content: [{ type: 'text', text: formatRows(rows) }] };
+  };
+  if (isWorkspace) {
+    server.registerTool(
+      'list_cards',
+      {
+        title: 'List cards',
+        description: listCardsDescription,
+        inputSchema: { ...listCardsFields, repo: z.string().optional().describe(REPO_DESC) },
+        annotations: { readOnlyHint: true },
+      },
+      listCardsHandler,
+    );
+  } else {
+    server.registerTool(
+      'list_cards',
+      {
+        title: 'List cards',
+        description: listCardsDescription,
+        inputSchema: listCardsFields,
+        annotations: { readOnlyHint: true },
+      },
+      listCardsHandler,
+    );
+  }
 
   server.registerTool(
     'get_card',
@@ -321,60 +405,92 @@ export function createMcpServer(opts: McpServerOptions): McpServer {
       annotations: { readOnlyHint: true },
     },
     async ({ id, resolveRefs }) => {
-      const card = store.get(id);
-      if (!card) return fail(`id: unknown card "${id}" (list_cards shows the ids)`);
+      // RCB-153 W4: resolves `id` across the workspace by prefix (`ws: null` on a plain board —
+      // no `repos:` — returns `store`/`id` untouched, so this is byte-identical to before).
+      const ws = await openWorkspaceBoards(store.root, store, now);
+      const target = resolveWorkspaceCardRef(store, ws, id);
+      if (!target.ok) return fail(target.error);
+      const card = target.store.get(target.id);
+      if (!card) return fail(`id: unknown card "${target.id}" (list_cards shows the ids)`);
       if (!resolveRefs) return ok(card);
-      return ok({ ...card, refs: await resolveCardRefs(store.root, card) });
+      return ok({ ...card, refs: await resolveCardRefs(target.store.root, card) });
     },
   );
 
-  server.registerTool(
-    'create_card',
-    {
-      title: 'Create a card',
-      description:
-        'Creates a new card file with the next free id and returns it. ' +
-        `\`status\` must be a column id (this board: ${columnIds()}); it defaults to the first ` +
-        'column. Titles may contain anything; they are quoted on disk for you.',
-      inputSchema: {
-        title: z.string().min(1).describe('One line. Required.'),
-        status: z
-          .string()
-          .optional()
-          .describe(`Column id (one of: ${columnIds()}). Default: first column.`),
-        assignee: z.string().optional().describe('Who owns it, e.g. claude/web-agent.'),
-        priority: PRIORITY.optional(),
-        size: SIZE.optional().describe(
-          'S ≤2h · M half a day · L days, investigate first · XL plan-sized',
-        ),
-        labels: z.array(z.string()).optional(),
-        files: z.array(z.string()).optional().describe('Repo-relative paths the task touches.'),
-        refs: z
-          .array(z.string())
-          .optional()
-          .describe(
-            'Pointers the board renders live: path#Heading, path@Token, path:L10-L20, or path. ' +
-              'Point at where a note lives instead of pasting it into the body.',
-          ),
-        body: z
-          .string()
-          .optional()
-          .describe('Markdown description. A `## Log` section is added on first log line.'),
-        parent: z.string().optional().describe('RCB-68: makes this card a STEP of that card.'),
-        phase: z.string().optional().describe('RCB-68: free short label, e.g. PH.3.'),
-        gate: z
-          .string()
-          .optional()
-          .describe('RCB-68: a card id or a sentence naming what blocks this card.'),
-        actor: z.string().optional().describe(ACTOR_DESC),
+  const createCardFields = {
+    title: z.string().min(1).describe('One line. Required.'),
+    status: z
+      .string()
+      .optional()
+      .describe(`Column id (one of: ${columnIds()}). Default: first column.`),
+    assignee: z.string().optional().describe('Who owns it, e.g. claude/web-agent.'),
+    priority: PRIORITY.optional(),
+    size: SIZE.optional().describe(
+      'S ≤2h · M half a day · L days, investigate first · XL plan-sized',
+    ),
+    labels: z.array(z.string()).optional(),
+    files: z.array(z.string()).optional().describe('Repo-relative paths the task touches.'),
+    refs: z
+      .array(z.string())
+      .optional()
+      .describe(
+        'Pointers the board renders live: path#Heading, path@Token, path:L10-L20, or path. ' +
+          'Point at where a note lives instead of pasting it into the body.',
+      ),
+    body: z
+      .string()
+      .optional()
+      .describe('Markdown description. A `## Log` section is added on first log line.'),
+    parent: z.string().optional().describe('RCB-68: makes this card a STEP of that card.'),
+    phase: z.string().optional().describe('RCB-68: free short label, e.g. PH.3.'),
+    gate: z
+      .string()
+      .optional()
+      .describe('RCB-68: a card id or a sentence naming what blocks this card.'),
+    actor: z.string().optional().describe(ACTOR_DESC),
+  };
+  const createCardDescription =
+    'Creates a new card file with the next free id and returns it. ' +
+    `\`status\` must be a column id (this board: ${columnIds()}); it defaults to the first ` +
+    'column. Titles may contain anything; they are quoted on disk for you.' +
+    (isWorkspace
+      ? ' RCB-153: repo targets one workspace member (needs writes: cards); omitted, creates on ' +
+        'the board you opened.'
+      : '');
+  const createCardHandler = async ({
+    actor,
+    repo,
+    ...input
+  }: CreateCardInput & { actor?: string; repo?: string }): Promise<CallToolResult> => {
+    let target = store;
+    if (repo !== undefined) {
+      try {
+        target = await new Workspace(store.root, repos, now).storeForWrite(repo);
+      } catch (e) {
+        return fail((e as Error).message);
+      }
+    }
+    const res = await target.create(input, actor ?? defaultActor);
+    if (!res.ok) return fail(nameField(res.error));
+    return ok(res.card);
+  };
+  if (isWorkspace) {
+    server.registerTool(
+      'create_card',
+      {
+        title: 'Create a card',
+        description: createCardDescription,
+        inputSchema: { ...createCardFields, repo: z.string().optional().describe(REPO_DESC) },
       },
-    },
-    async ({ actor, ...input }) => {
-      const res = await store.create(input, actor ?? defaultActor);
-      if (!res.ok) return fail(nameField(res.error));
-      return ok(res.card);
-    },
-  );
+      createCardHandler,
+    );
+  } else {
+    server.registerTool(
+      'create_card',
+      { title: 'Create a card', description: createCardDescription, inputSchema: createCardFields },
+      createCardHandler,
+    );
+  }
 
   server.registerTool(
     'move_card',
@@ -393,7 +509,13 @@ export function createMcpServer(opts: McpServerOptions): McpServer {
       },
     },
     async ({ id, status, actor }) => {
-      const res = await store.move(id, status, actor ?? defaultActor);
+      // RCB-153 W4/W5: resolves `id` across the workspace, then a member target must clear
+      // `writes: cards` (`resolveWorkspaceWriteTarget` → `Workspace.storeForWrite`, the ONE place
+      // that checks it). `ws: null` on a plain board returns `store`/`id` untouched.
+      const ws = await openWorkspaceBoards(store.root, store, now);
+      const target = await resolveWorkspaceWriteTarget(store, ws, id);
+      if (!target.ok) return fail(target.error);
+      const res = await target.store.move(target.id, status, actor ?? defaultActor);
       if (!res.ok) return fail(nameField(res.error));
       return ok({ card: res.card, warnings: res.warnings });
     },
@@ -463,7 +585,10 @@ export function createMcpServer(opts: McpServerOptions): McpServer {
       if (fields.parent !== undefined) patch.parent = fields.parent;
       if (fields.phase !== undefined) patch.phase = fields.phase;
       if (fields.gate !== undefined) patch.gate = fields.gate;
-      const res = await store.update(id, patch, actor ?? defaultActor);
+      const ws = await openWorkspaceBoards(store.root, store, now);
+      const target = await resolveWorkspaceWriteTarget(store, ws, id);
+      if (!target.ok) return fail(target.error);
+      const res = await target.store.update(target.id, patch, actor ?? defaultActor);
       if (!res.ok) return fail(nameField(res.error));
       return ok(res.card);
     },
@@ -484,7 +609,10 @@ export function createMcpServer(opts: McpServerOptions): McpServer {
       },
     },
     async ({ id, text, actor }) => {
-      const res = await store.appendLog(id, text, actor ?? defaultActor);
+      const ws = await openWorkspaceBoards(store.root, store, now);
+      const target = await resolveWorkspaceWriteTarget(store, ws, id);
+      if (!target.ok) return fail(target.error);
+      const res = await target.store.appendLog(target.id, text, actor ?? defaultActor);
       if (!res.ok) return fail(nameField(res.error));
       return ok(res.card);
     },
@@ -507,7 +635,10 @@ export function createMcpServer(opts: McpServerOptions): McpServer {
       },
     },
     async ({ id, text, actor }) => {
-      const res = await store.addNote(id, text, actor ?? defaultActor);
+      const ws = await openWorkspaceBoards(store.root, store, now);
+      const target = await resolveWorkspaceWriteTarget(store, ws, id);
+      if (!target.ok) return fail(target.error);
+      const res = await target.store.addNote(target.id, text, actor ?? defaultActor);
       if (!res.ok) return fail(nameField(res.error));
       return ok(res.card);
     },
@@ -548,7 +679,14 @@ export function createMcpServer(opts: McpServerOptions): McpServer {
       },
     },
     async ({ id, question, options, replace, kind, actor }) => {
-      const res = await store.ask(id, { question, options, replace, kind }, actor ?? defaultActor);
+      const ws = await openWorkspaceBoards(store.root, store, now);
+      const target = await resolveWorkspaceWriteTarget(store, ws, id);
+      if (!target.ok) return fail(target.error);
+      const res = await target.store.ask(
+        target.id,
+        { question, options, replace, kind },
+        actor ?? defaultActor,
+      );
       if (!res.ok) return fail(nameField(res.error));
       return ok({ card: res.card, warnings: res.warnings });
     },
@@ -572,7 +710,10 @@ export function createMcpServer(opts: McpServerOptions): McpServer {
       },
     },
     async ({ id, letter, words, actor }) => {
-      const res = await store.decide(id, { letter, words }, actor ?? defaultActor);
+      const ws = await openWorkspaceBoards(store.root, store, now);
+      const target = await resolveWorkspaceWriteTarget(store, ws, id);
+      if (!target.ok) return fail(target.error);
+      const res = await target.store.decide(target.id, { letter, words }, actor ?? defaultActor);
       if (!res.ok) return fail(nameField(res.error));
       return ok({ card: res.card, warnings: res.warnings });
     },
@@ -614,42 +755,70 @@ export function createMcpServer(opts: McpServerOptions): McpServer {
     },
   );
 
-  server.registerTool(
-    'board_summary',
-    {
-      title: 'Board summary',
-      description:
-        'Returns the columns (id, title, active, wip, done, count), the active ' +
-        'cards (in an `active` column and updated within activeWindowMinutes), WIP breaches, ' +
-        'and any card files that failed to parse. No arguments.',
-      annotations: { readOnlyHint: true },
-    },
-    () => {
-      const config = store.config;
-      const summary = computeBoardSummary(store.list(), config, now());
-      const columns = config.columns.map((c) => ({
-        id: c.id,
-        title: c.title ?? c.id,
-        active: c.active ?? false,
-        wip: c.wip ?? null,
-        done: c.done ?? false,
-        count: summary.perColumn[c.id] ?? 0,
-      }));
-      const configured = new Set(config.columns.map((c) => c.id));
-      const unknownStatuses = Object.entries(summary.perColumn)
-        .filter(([id]) => !configured.has(id))
-        .map(([status, count]) => ({ status, count }));
-      return ok({
-        prefix: config.prefix,
-        activeWindowMinutes: config.activeWindowMinutes,
-        columns,
-        unknownStatuses,
-        active: summary.active.map((c) => toRow(c, store.list(), config)),
-        wipBreaches: summary.wipBreaches,
-        invalid: store.invalid,
-      });
-    },
-  );
+  const boardSummaryDescription =
+    'Returns the columns (id, title, active, wip, done, count), the active ' +
+    'cards (in an `active` column and updated within activeWindowMinutes), WIP breaches, ' +
+    'and any card files that failed to parse.' +
+    (isWorkspace
+      ? ' RCB-153: repo (a workspace member key) reports that board instead; omitted, this is ' +
+        'the board you opened.'
+      : ' No arguments.');
+  const boardSummaryHandler = async ({ repo }: { repo?: string } = {}): Promise<CallToolResult> => {
+    let target = store;
+    if (repo !== undefined) {
+      const wsKey = workspaceKey();
+      if (repo !== wsKey) {
+        const opening = new Workspace(store.root, repos, now).open(repo);
+        if (!opening) return fail(`repo: unknown workspace member "${repo}"`);
+        target = await opening;
+      }
+    }
+    const config = target.config;
+    const summary = computeBoardSummary(target.list(), config, now());
+    const columns = config.columns.map((c) => ({
+      id: c.id,
+      title: c.title ?? c.id,
+      active: c.active ?? false,
+      wip: c.wip ?? null,
+      done: c.done ?? false,
+      count: summary.perColumn[c.id] ?? 0,
+    }));
+    const configured = new Set(config.columns.map((c) => c.id));
+    const unknownStatuses = Object.entries(summary.perColumn)
+      .filter(([id]) => !configured.has(id))
+      .map(([status, count]) => ({ status, count }));
+    return ok({
+      prefix: config.prefix,
+      activeWindowMinutes: config.activeWindowMinutes,
+      columns,
+      unknownStatuses,
+      active: summary.active.map((c) => toRow(c, target.list(), config)),
+      wipBreaches: summary.wipBreaches,
+      invalid: target.invalid,
+    });
+  };
+  if (isWorkspace) {
+    server.registerTool(
+      'board_summary',
+      {
+        title: 'Board summary',
+        description: boardSummaryDescription,
+        inputSchema: { repo: z.string().optional().describe(REPO_DESC) },
+        annotations: { readOnlyHint: true },
+      },
+      boardSummaryHandler,
+    );
+  } else {
+    server.registerTool(
+      'board_summary',
+      {
+        title: 'Board summary',
+        description: boardSummaryDescription,
+        annotations: { readOnlyHint: true },
+      },
+      boardSummaryHandler,
+    );
+  }
 
   server.registerTool(
     'set_columns',
@@ -721,24 +890,67 @@ export function createMcpServer(opts: McpServerOptions): McpServer {
     },
   );
 
-  server.registerTool(
-    'list_leases',
-    {
-      title: 'List leases and windows',
-      description:
-        'Every held lease and time window in .repoboard/leases.yml: leases as ' +
-        '[{resource, holder, since, until, state: live|stale, note}], windows as ' +
-        '[{resource, start, end, name}]. Cheap; call before take_lease.',
-      annotations: { readOnlyHint: true },
-    },
-    () => {
-      const doc = store.leases();
-      return ok({
-        leases: doc.leases.map((l) => toLeaseRow(l, now())),
-        windows: doc.windows.map(toWindowRow),
-      });
-    },
-  );
+  const listLeasesDescription =
+    'Every held lease and time window in .repoboard/leases.yml: leases as ' +
+    '[{resource, holder, since, until, state: live|stale, note}], windows as ' +
+    '[{resource, start, end, name}]. Cheap; call before take_lease.' +
+    (isWorkspace
+      ? ' RCB-153: repo narrows to one workspace member (or "all" for every board, each row ' +
+        'gaining a repo field); omitted, this is the board you opened only.'
+      : '');
+  const listLeasesHandler = async ({ repo }: { repo?: string } = {}): Promise<CallToolResult> => {
+    if (repo !== undefined) {
+      const workspace = new Workspace(store.root, repos, now);
+      const wsKey = workspaceKey();
+      let targets: { key: string; store: CardStore }[];
+      if (repo === 'all') {
+        const opened = await workspace.openAll();
+        targets = [{ key: wsKey, store }, ...opened.map((m) => ({ key: m.key, store: m.store }))];
+      } else if (repo === wsKey) {
+        targets = [{ key: wsKey, store }];
+      } else {
+        const opening = workspace.open(repo);
+        if (!opening) return fail(`repo: unknown workspace member "${repo}"`);
+        targets = [{ key: repo, store: await opening }];
+      }
+      const nowDate = now();
+      const leases: unknown[] = [];
+      const windows: unknown[] = [];
+      for (const t of targets) {
+        const doc = t.store.leases();
+        for (const l of doc.leases) leases.push({ ...toLeaseRow(l, nowDate), repo: t.key });
+        for (const w of doc.windows) windows.push({ ...toWindowRow(w), repo: t.key });
+      }
+      return ok({ leases, windows });
+    }
+    const doc = store.leases();
+    return ok({
+      leases: doc.leases.map((l) => toLeaseRow(l, now())),
+      windows: doc.windows.map(toWindowRow),
+    });
+  };
+  if (isWorkspace) {
+    server.registerTool(
+      'list_leases',
+      {
+        title: 'List leases and windows',
+        description: listLeasesDescription,
+        inputSchema: { repo: z.string().optional().describe(REPO_DESC) },
+        annotations: { readOnlyHint: true },
+      },
+      listLeasesHandler,
+    );
+  } else {
+    server.registerTool(
+      'list_leases',
+      {
+        title: 'List leases and windows',
+        description: listLeasesDescription,
+        annotations: { readOnlyHint: true },
+      },
+      listLeasesHandler,
+    );
+  }
 
   server.registerTool(
     'add_window',
@@ -780,51 +992,111 @@ export function createMcpServer(opts: McpServerOptions): McpServer {
       ok(store.checkResource(resource, at !== undefined ? new Date(at) : undefined)),
   );
 
-  server.registerTool(
-    'get_state',
-    {
-      title: 'Get STATE.md, rendered',
-      description:
-        "The repo's one-page STATE.md: {stamp, actor, sections: {live, lastLandings, seats}, " +
-        'ownerQueue: [{id, question, options}], leases: [{resource, holder, since, until, state, ' +
-        'note}], text}. OWNER QUEUE and LEASES (RCB-131: live leases only, in `text` too, right ' +
-        'after OWNER QUEUE — never stored on disk) are both generated fresh from current data — ' +
-        'never trust stale text from a prior read.',
-      annotations: { readOnlyHint: true },
-    },
-    () => {
-      const doc = store.state();
-      if (!doc) {
-        return ok({
-          stamp: null,
-          actor: null,
-          sections: null,
-          ownerQueue: [],
-          leases: [],
-          text: null,
-        });
-      }
-      const all = store.list();
-      const openCards = all.filter((c) => needsDecision(c));
-      const leasesDoc = store.leases();
-      const nowDate = now();
-      const text = renderState(
-        doc.sections,
-        openCards,
-        { now: new Date(Date.parse(doc.stamp)), actor: doc.actor },
-        leasesDoc,
-        nowDate,
-      );
-      return ok({
-        stamp: doc.stamp,
-        actor: doc.actor,
-        sections: doc.sections,
-        ownerQueue: ownerQueue(all),
-        leases: liveLeaseRows(leasesDoc, nowDate),
-        text,
-      });
-    },
-  );
+  /** The pre-RCB-153 `get_state` body, unchanged — `stateFor(store)` reproduces it exactly (the
+   * byte-identical path for a plain board, and for a workspace's `repo: <key>`/its own key). */
+  function stateFor(target: CardStore) {
+    const doc = target.state();
+    if (!doc) {
+      return { stamp: null, actor: null, sections: null, ownerQueue: [], leases: [], text: null };
+    }
+    const all = target.list();
+    const openCards = all.filter((c) => needsDecision(c));
+    const leasesDoc = target.leases();
+    const nowDate = now();
+    const text = renderState(
+      doc.sections,
+      openCards,
+      { now: new Date(Date.parse(doc.stamp)), actor: doc.actor },
+      leasesDoc,
+      nowDate,
+    );
+    return {
+      stamp: doc.stamp,
+      actor: doc.actor,
+      sections: doc.sections,
+      ownerQueue: ownerQueue(all),
+      leases: liveLeaseRows(leasesDoc, nowDate),
+      text,
+    };
+  }
+  const getStateDescription =
+    "The repo's one-page STATE.md: {stamp, actor, sections: {live, lastLandings, seats}, " +
+    'ownerQueue: [{id, question, options}], leases: [{resource, holder, since, until, state, ' +
+    'note}], text}. OWNER QUEUE and LEASES (RCB-131: live leases only, in `text` too, right ' +
+    'after OWNER QUEUE — never stored on disk) are both generated fresh from current data — ' +
+    'never trust stale text from a prior read.' +
+    (isWorkspace
+      ? ' RCB-153: with no repo, OWNER QUEUE/LEASES aggregate every configured member ([<key>] ' +
+        'lines) and repos: {<key>: {ownerQueue, leases, missing?}} is added; repo (a member key) ' +
+        "reports that one board's own state instead, unaggregated."
+      : '');
+  const getStateHandler = async ({ repo }: { repo?: string } = {}): Promise<CallToolResult> => {
+    const wsKey = workspaceKey();
+    if (repo !== undefined) {
+      if (repo === wsKey) return ok(stateFor(store));
+      const opening = new Workspace(store.root, repos, now).open(repo);
+      if (!opening) return fail(`repo: unknown workspace member "${repo}"`);
+      return ok(stateFor(await opening));
+    }
+    if (repos.length === 0) return ok(stateFor(store));
+    const doc = store.state();
+    if (!doc) return ok(stateFor(store));
+    const ws = await openWorkspaceBoards(store.root, store, now);
+    if (!ws) return ok(stateFor(store)); // unreachable: repos.length > 0 above
+    const all = store.list();
+    const openCards = all.filter((c) => needsDecision(c));
+    const leasesDoc = store.leases();
+    const nowDate = now();
+    const text = renderState(
+      doc.sections,
+      openCards,
+      { now: new Date(Date.parse(doc.stamp)), actor: doc.actor },
+      leasesDoc,
+      nowDate,
+      {
+        ownerQueueLines: workspaceOwnerQueueLines(
+          ws.opened.map(({ key, store: m }) => ({ key, cards: m.hasBoard ? m.list() : null })),
+        ),
+        leaseLines: workspaceLeaseLines(
+          ws.opened
+            .filter(({ store: m }) => m.hasBoard)
+            .map(({ key, store: m }) => ({ key, leases: m.leases() })),
+          nowDate,
+        ),
+      },
+    );
+    return ok({
+      stamp: doc.stamp,
+      actor: doc.actor,
+      sections: doc.sections,
+      ownerQueue: ownerQueue(all),
+      leases: liveLeaseRows(leasesDoc, nowDate),
+      text,
+      repos: memberStateRepos(ws.opened, ownerQueue, liveLeaseRows, nowDate),
+    });
+  };
+  if (isWorkspace) {
+    server.registerTool(
+      'get_state',
+      {
+        title: 'Get STATE.md, rendered',
+        description: getStateDescription,
+        inputSchema: { repo: z.string().optional().describe(REPO_DESC) },
+        annotations: { readOnlyHint: true },
+      },
+      getStateHandler,
+    );
+  } else {
+    server.registerTool(
+      'get_state',
+      {
+        title: 'Get STATE.md, rendered',
+        description: getStateDescription,
+        annotations: { readOnlyHint: true },
+      },
+      getStateHandler,
+    );
+  }
 
   server.registerTool(
     'set_state_section',
@@ -869,46 +1141,86 @@ export function createMcpServer(opts: McpServerOptions): McpServer {
     },
   );
 
-  server.registerTool(
-    'get_log',
-    {
-      title: "Read a day's log, or one seat's newest block",
-      description:
-        "Reads a day's log (default today): {date, blocks: [{seat, ts, title, text}]} — same " +
-        'object `log show --json` prints. `seat` narrows to one seat; `since` (full ISO-8601, ' +
-        'or HH:MMZ for that UTC time on `date`) and `tail` (last N) narrow further, applied in ' +
-        'that order. `last` (a seat name, exclusive with date/seat/since/tail) instead returns ' +
-        "that seat's NEWEST block anywhere in the log: {date, block}, or nulls when it has none.",
-      inputSchema: {
-        date: z.string().optional().describe('YYYY-MM-DD. Default: today.'),
-        seat: z.string().optional().describe("Only this seat's blocks."),
-        since: z.string().optional().describe('Full ISO-8601 datetime, or HH:MMZ for `date`.'),
-        tail: z.number().int().min(0).optional().describe('Only the last N blocks.'),
-        last: z.string().optional().describe('A seat name; exclusive with date/seat/since/tail.'),
+  const getLogFields = {
+    date: z.string().optional().describe('YYYY-MM-DD. Default: today.'),
+    seat: z.string().optional().describe("Only this seat's blocks."),
+    since: z.string().optional().describe('Full ISO-8601 datetime, or HH:MMZ for `date`.'),
+    tail: z.number().int().min(0).optional().describe('Only the last N blocks.'),
+    last: z.string().optional().describe('A seat name; exclusive with date/seat/since/tail.'),
+  };
+  const getLogDescription =
+    "Reads a day's log (default today): {date, blocks: [{seat, ts, title, text}]} — same " +
+    'object `log show --json` prints. `seat` narrows to one seat; `since` (full ISO-8601, ' +
+    'or HH:MMZ for that UTC time on `date`) and `tail` (last N) narrow further, applied in ' +
+    'that order. `last` (a seat name, exclusive with date/seat/since/tail) instead returns ' +
+    "that seat's NEWEST block anywhere in the log: {date, block}, or nulls when it has none." +
+    (isWorkspace ? ` RCB-153: ${REPO_DESC}` : '');
+  const getLogHandler = async ({
+    date,
+    seat,
+    last,
+    since,
+    tail,
+    repo,
+  }: {
+    date?: string;
+    seat?: string;
+    since?: string;
+    tail?: number;
+    last?: string;
+    repo?: string;
+  }): Promise<CallToolResult> => {
+    let target = store;
+    if (repo !== undefined) {
+      const wsKey = workspaceKey();
+      if (repo !== wsKey) {
+        const opening = new Workspace(store.root, repos, now).open(repo);
+        if (!opening) return fail(`repo: unknown workspace member "${repo}"`);
+        target = await opening;
+      }
+    }
+    if (last !== undefined) {
+      if (date !== undefined || seat !== undefined) {
+        return fail('last is exclusive with date/seat');
+      }
+      if (since !== undefined || tail !== undefined) {
+        return fail('last is exclusive with since/tail');
+      }
+      const res = await target.lastRepoLogBlock(last);
+      return ok(res ? { date: res.date, block: res.block } : { date: null, block: null });
+    }
+    const log = await target.log(date);
+    if (!log) return ok({ date: date ?? toIso(now()).slice(0, 10), blocks: [] });
+    if (seat === undefined && since === undefined && tail === undefined) {
+      return ok({ date: log.date, blocks: log.blocks });
+    }
+    const filtered = filterLogBlocks(log.blocks, log.date, { seat, since, tail });
+    if (!filtered.ok) return fail(`since: ${filtered.error}`);
+    return ok({ date: log.date, blocks: filtered.blocks });
+  };
+  if (isWorkspace) {
+    server.registerTool(
+      'get_log',
+      {
+        title: "Read a day's log, or one seat's newest block",
+        description: getLogDescription,
+        inputSchema: { ...getLogFields, repo: z.string().optional().describe(REPO_DESC) },
+        annotations: { readOnlyHint: true },
       },
-      annotations: { readOnlyHint: true },
-    },
-    async ({ date, seat, last, since, tail }) => {
-      if (last !== undefined) {
-        if (date !== undefined || seat !== undefined) {
-          return fail('last is exclusive with date/seat');
-        }
-        if (since !== undefined || tail !== undefined) {
-          return fail('last is exclusive with since/tail');
-        }
-        const res = await store.lastRepoLogBlock(last);
-        return ok(res ? { date: res.date, block: res.block } : { date: null, block: null });
-      }
-      const log = await store.log(date);
-      if (!log) return ok({ date: date ?? toIso(now()).slice(0, 10), blocks: [] });
-      if (seat === undefined && since === undefined && tail === undefined) {
-        return ok({ date: log.date, blocks: log.blocks });
-      }
-      const filtered = filterLogBlocks(log.blocks, log.date, { seat, since, tail });
-      if (!filtered.ok) return fail(`since: ${filtered.error}`);
-      return ok({ date: log.date, blocks: filtered.blocks });
-    },
-  );
+      getLogHandler,
+    );
+  } else {
+    server.registerTool(
+      'get_log',
+      {
+        title: "Read a day's log, or one seat's newest block",
+        description: getLogDescription,
+        inputSchema: getLogFields,
+        annotations: { readOnlyHint: true },
+      },
+      getLogHandler,
+    );
+  }
 
   server.registerTool(
     'get_seat',
@@ -976,23 +1288,70 @@ export function createMcpServer(opts: McpServerOptions): McpServer {
     async () => ok(await loadGateHealth(store.root)),
   );
 
-  server.registerTool(
-    'check',
-    {
-      title: 'Health check: STATE, leases, decisions',
-      description:
-        'Call before starting and before stopping (locked practice). Returns {findings, ' +
-        'exitCode}: stale-state, active-without-lease (warning, strict-only), stale-lease, ' +
-        'live-lease (info), needs-ask (warning, ' +
-        'strict-only — no open ask), cost-over-budget, systems-invalid (error), systems-stale ' +
-        '(warning), needs-decision (info). Empty findings means ok.',
-      inputSchema: {
-        strict: z.boolean().optional().describe('Also block on warning-grade findings.'),
+  const checkFields = {
+    strict: z.boolean().optional().describe('Also block on warning-grade findings.'),
+  };
+  const checkDescription =
+    'Call before starting and before stopping (locked practice). Returns {findings, ' +
+    'exitCode}: stale-state, active-without-lease (warning, strict-only), stale-lease, ' +
+    'live-lease (info), needs-ask (warning, ' +
+    'strict-only — no open ask), cost-over-budget, systems-invalid (error), systems-stale ' +
+    '(warning), needs-decision (info). Empty findings means ok.' +
+    (isWorkspace
+      ? ' RCB-153: with no repo, aggregates every configured member too (findings prefixed ' +
+        '[<key>], exitCode the worst of all of them); repo (a member key) checks that one board ' +
+        'alone.'
+      : '');
+  const checkHandler = async ({
+    strict,
+    repo,
+  }: {
+    strict?: boolean;
+    repo?: string;
+  }): Promise<CallToolResult> => {
+    const s = strict ?? false;
+    if (repo !== undefined) {
+      const wsKey = workspaceKey();
+      if (repo === wsKey) return ok(await store.check(s));
+      const opening = new Workspace(store.root, repos, now).open(repo);
+      if (!opening) return fail(`repo: unknown workspace member "${repo}"`);
+      const memberStore = await opening;
+      const findings = await checkMembers(
+        [{ key: repo, root: memberStore.root, store: memberStore }],
+        s,
+      );
+      return ok({ findings, exitCode: exitCodeForFindings(findings, s) });
+    }
+    const own = await store.check(s);
+    const ws = await openWorkspaceBoards(store.root, store, now);
+    if (!ws) return ok(own);
+    const memberFindings = await checkMembers(ws.opened, s);
+    const findings: Finding[] = [...own.findings, ...memberFindings];
+    return ok({ findings, exitCode: exitCodeForFindings(findings, s) });
+  };
+  if (isWorkspace) {
+    server.registerTool(
+      'check',
+      {
+        title: 'Health check: STATE, leases, decisions',
+        description: checkDescription,
+        inputSchema: { ...checkFields, repo: z.string().optional().describe(REPO_DESC) },
+        annotations: { readOnlyHint: true },
       },
-      annotations: { readOnlyHint: true },
-    },
-    async ({ strict }) => ok(await store.check(strict ?? false)),
-  );
+      checkHandler,
+    );
+  } else {
+    server.registerTool(
+      'check',
+      {
+        title: 'Health check: STATE, leases, decisions',
+        description: checkDescription,
+        inputSchema: checkFields,
+        annotations: { readOnlyHint: true },
+      },
+      checkHandler,
+    );
+  }
 
   server.registerTool(
     'cost',
@@ -1160,7 +1519,13 @@ export interface ServeMcpOptions {
   warn?: (message: string) => void;
 }
 
-/** `repoboard mcp`: serve over stdio until stdin closes. Watches `.repoboard/` so direct edits are seen. */
+/**
+ * `repoboard mcp`: serve over stdio until stdin closes. Watches `.repoboard/` so direct edits are
+ * seen — for the TOP-LEVEL board only. RCB-153 W7: at a workspace root, every tool that touches a
+ * member opens it FRESH per call (`openWorkspaceBoards`/`Workspace`, never held across calls), so a
+ * member card edited on disk after this process started is seen on the very next tool call without
+ * this server watching the member trees itself (see `openWorkspaceBoards`'s own doc comment).
+ */
 export async function serveMcp(opts: ServeMcpOptions): Promise<void> {
   const store = await openStore(opts.root, { watch: true, now: opts.now });
   if (opts.warn) store.on('warning', opts.warn);

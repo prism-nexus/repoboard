@@ -1274,6 +1274,19 @@ export function assignRepoKeys(roots: string[]): RootEntry[] {
 type RegistryTemplate = Omit<RepoContextOptions, 'store'>;
 
 /**
+ * RCB-153 W6: a plain `string[]` still goes through `assignRepoKeys` exactly as before (the
+ * byte-identical `--root` path); a pre-keyed `RootEntry[]` — the workspace's own basename key plus
+ * each member's CONFIGURED `repos[].key` (`cli.ts`'s `workspaceServeRoots`) — is used as given.
+ * One key function (`assignRepoKeys`) still exists; this only decides whether to call it, so a
+ * configured key is never re-derived from the folder name.
+ */
+function isKeyedRoots(
+  roots: readonly string[] | readonly RootEntry[],
+): roots is readonly RootEntry[] {
+  return roots.length > 0 && typeof roots[0] !== 'string';
+}
+
+/**
  * RCB-43 slice 1: a lazy, keyed table of `RepoContext`s over the `--root` list (K12 "map on
  * demand"). The primary is opened eagerly by `startServer`, which hands it to `setOpened` —
  * this class never opens it and never closes its store. Every other root opens on its first
@@ -1287,8 +1300,12 @@ export class RepoRegistry {
   /** Roots THIS registry opened (and so must close, store included) — never the primary. */
   private readonly ownedStores = new Map<string, CardStore>();
 
-  constructor(roots: string[], template: RegistryTemplate) {
-    this.roots = assignRepoKeys(roots);
+  constructor(roots: readonly string[] | readonly RootEntry[], template: RegistryTemplate) {
+    if (isKeyedRoots(roots)) {
+      this.roots = [...roots];
+    } else {
+      this.roots = assignRepoKeys([...roots]);
+    }
     this.template = template;
   }
 

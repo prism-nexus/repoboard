@@ -358,6 +358,38 @@ status, this section only routes. Shapes for `.repoboard/systems.yml`, `GET /api
 `systems` wire field land in §2–§4 when PH.1 lands, not before. PH.7 (the plan-on-the-board
 experiment) runs first, per Q6.
 
+### P10 Workspace — one coordinator seat across several boards (owner decision O13, 2026-09-25)
+Source card RCB-153; the plan is `docs/RCB-153.md` (W1-W9 decisions, §3 slices, §4 controls) —
+this section only routes. A workspace is a normal board whose `board.yml` gains an optional
+`repos:` list of member boards (W1); a board with no `repos:` is exactly today's board, the
+regression control every slice carries.
+
+- **Slice 1 — core + state/check** (`e1c067e`). `repos:` schema and validation
+  (`packages/core/src/board.ts`); the member registry (`packages/server/src/workspace.ts`, lazy,
+  read-only, W3); `resolveCardRef` (W4, `packages/core/src/card-ref.ts`); `state`/`check`
+  aggregation, `[<key>] `-prefixed, `workspace-member-missing`. `docs/REFERENCE.md` §3 "Workspace".
+- **Slice 2 — card verbs across boards** (`d27645f`). `card show/move/note/ask/decide/update`
+  resolve a ref across the workspace by prefix (W4); `card add --repo <key>`, `card list --repo
+  <key>|all`; write verbs refuse a member with no `writes: cards` (W5) through the one function
+  that checks it (`Workspace.storeForWrite`); `gate <id>` resolves on a workspace card's foreign
+  target (`packages/core/src/phases.ts`'s `GateMemberFacts`).
+- **Slice 3a — serve + init + docs (this one, landing).** `serve` with no `--root` at a workspace
+  root serves the workspace plus every member, keyed by each member's own configured
+  `repos[].key` rather than `assignRepoKeys` (W6) — `ServerOptions`/`RepoRegistry` gain a
+  `keyedRoots` input alongside `roots`, a plain `--root` list unaffected; any `--root` flag
+  overrides the expansion. `init --workspace --repo <key>=<path>` scaffolds `board.yml`'s `repos:`
+  (W8), refusing on an existing `.repoboard/`, an invalid or duplicate key, without reading or
+  writing a member. README "Workspace", CHANGELOG `[Unreleased]`, `docs/REFERENCE.md` §3 gain
+  serve + init.
+- **Slice 3b — MCP** (not yet landed, a separate brief/card): `repoboard mcp` at a workspace root
+  (W7) — `list_cards`/`board_summary`/`check`/`get_state`/`list_leases`/`get_log` gain an optional
+  `repo` argument; the 30-tool count pin stays 30.
+
+**Exit criterion for P10:** a seat cold-starting at a workspace root sees every member's owner
+queue and leases in one `state`, moves a card on any member with `writes: cards` through one CLI,
+and `repoboard serve`/`repoboard mcp` from the workspace replace a hand-typed multi-root command
+line — all without a single byte written into a member outside its own opt-in.
+
 ## §6 Repo layout
 ```
 packages/core/      domain, I/O-free
@@ -494,3 +526,16 @@ Answered 2026-09-22:
   layered layout in core, inline SVG, no diagram library; Q3 a third top-level view `flow`; Q4
   repoboard first, then freshpickedjobs read-only; Q5 4,096 B default budget for `systems.yml`,
   `board.yml` override; Q6 the PH.7 board experiment runs before PH.1. Phase P9.
+
+Answered 2026-09-25:
+- **O13 — the coordinator seat moves a level up; built as this repo's "workspace" feature
+  (RCB-153).** Cross-project decision, the owner's word heard at the coordinator's terminal, not
+  here — the row of record is freshpickedjobs `docs/OWNER-DECISIONS.md`, "COORDINATOR SEAT MOVES A
+  LEVEL UP" (2026-09-25 12:4x pm Pacific / 19:4xZ): the coordinator sits above the repos, not
+  inside freshpickedjobs, so it coordinates freshpickedjobs, repoboard and a new repo the owner is
+  creating; the cross-repo record (STATE, log, decisions) moves with it. Built as a repoboard
+  workspace: the coordinator's own board's `board.yml` lists the coordinated repos under `repos:`,
+  and every existing verb (`state`, `check`, `card *`, now `serve`/`init --workspace`) works on
+  that board unchanged. Gate: RCB-51 (the 0.2.0 publish) was held until RCB-153 landed and verified
+  (freshpickedjobs row "ONE LAUNCH, RCB-153 FIRST", 2026-09-25 1:1x pm Pacific / 20:1xZ, verified
+  on repoboard's own `origin/main` at `22f3ba4`). Phase P10.

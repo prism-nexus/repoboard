@@ -184,6 +184,42 @@ the same serializer `init` uses, so every other key survives but hand-written YA
 not; cards already on disk are never touched, and one in a column you remove still shows, marked
 "not in board.yml".
 
+## Workspace
+
+A workspace is a normal board whose `board.yml` lists member boards it coordinates — the shape a
+seat needs to work across several repos from one cold start (RCB-153):
+
+```yaml
+name: fpj-workspace
+prefix: WS
+repos:
+  - key: freshpickedjobs      # ^[a-z0-9][a-z0-9-]*$ — the CLI/MCP/`/api/repos` key
+    root: ../freshpickedjobs  # relative to THIS board's root, or absolute; `~` expanded
+    writes: cards             # optional; absent = read-only member (O7's read-only default)
+  - key: repoboard
+    root: ../Remember-Connect-Build
+```
+
+A board with no `repos:` is exactly today's board — nothing here changes it. At a workspace root:
+`state` and `check` aggregate every member (`[<key>] `-prefixed lines, a missing member shown as
+`(missing)`/`workspace-member-missing` rather than a crash); `card show`/`move`/`note`/`ask`/
+`decide`/`update <id>` resolve `<id>` across every board by its `prefix:` (`<key>:<id>` always
+works when a prefix collides); `card list --repo <key>|all`; `card add --repo <key>`. `serve` with
+no `--root` at all serves the workspace plus every member in one process, keyed by each member's
+own configured `repos[].key` (any `--root` flag turns the expansion off: exactly the roots you
+name are served, keyed by folder name as before). `init --workspace --repo <key>=<path>`
+(repeatable) scaffolds `board.yml`'s `repos:` for you.
+
+**O7, with teeth: `writes: cards`.** Listing a member is consent to READ it — `state`/`check`/
+`card show`/`serve` never write a byte into it. Listing one is NOT consent to write to it: a card
+write verb targeting a member with no `writes: cards` refuses with `member <key> is read-only (set
+writes: cards in board.yml)`, and touches nothing. The only value in v1 is `cards` — even then, a
+write only ever touches that member's own card file and appends one line to its own
+`events.jsonl`; its `STATE.md`, log, leases, gate ledger and `.repoboard/local/` are never touched
+from the workspace, no matter what `writes:` says.
+
+Details, every command's exact behaviour, and the bytes measured: [`docs/REFERENCE.md`](docs/REFERENCE.md) §3 "Workspace".
+
 ## Develop
 
 ```sh

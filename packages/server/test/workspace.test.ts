@@ -3,11 +3,12 @@
  * workspace aggregation `state`/`check` do at a workspace root. No `card`/`serve`/`mcp` verbs yet
  * (slices 2-3) — those keep today's single-board behaviour untouched.
  */
-import { mkdir, readdir, rm, stat, writeFile } from 'node:fs/promises';
-import { join, relative } from 'node:path';
+import { mkdir, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import { basename, join, relative } from 'node:path';
 import {
   defaultBoardConfig,
   initialStateText,
+  parseBoard,
   serializeBoard,
   type WorkspaceRepo,
 } from '@repoboard/core';
@@ -406,5 +407,244 @@ describe('repoboard card show — plain board (no repos:) regression', () => {
     const shown = await repoboard(root, 'card', 'show', 'NOPE-1');
     expect(shown.code).toBe(1);
     expect(shown.err).toBe('repoboard: unknown card "NOPE-1"\n');
+  });
+});
+
+// ---- RCB-153 slice 3a: serve completes control 2 (W6) -----------------------------------------
+//
+// Slice 2's own describe above ("state+check only") already covers `state`/`check`; this finishes
+// §4 control 2 with `card list --repo all`, `card show AA-1`, and one `serve` request to
+// `/api/repos/aa/…` — the SAME `snapshotFiles` before/after comparison, reused rather than a
+// second copy of the byte-for-byte check.
+
+describe('repoboard card list/show + serve — read-only members (RCB-153 §4 control 2, completed)', () => {
+  it('card list --repo all, card show AA-1, and one GET /api/repos/aa/board leave both member trees byte-for-byte unchanged', async () => {
+    const { aaRoot, bbRoot, aaId } = await makeMembers();
+    const wsRoot = await makeWorkspace(aaRoot, bbRoot);
+
+    const beforeAa = await snapshotFiles(aaRoot);
+    const beforeBb = await snapshotFiles(bbRoot);
+
+    expect((await repoboard(wsRoot, 'card', 'list', '--repo', 'all')).code).toBe(0);
+    expect((await repoboard(wsRoot, 'card', 'show', aaId)).code).toBe(0);
+
+    const stdout = new Sink();
+    const ac = new AbortController();
+    let url = '';
+    const running = run(['serve', '--port', '0', '--no-fun'], {
+      cwd: wsRoot,
+      stdout,
+      env: { REPOBOARD_ACTOR: 'test-actor' },
+      now: () => NOW,
+      signal: ac.signal,
+      onServe: (s) => {
+        url = s.url;
+      },
+    });
+    for (let i = 0; i < 250 && !url; i++) await new Promise((r) => setTimeout(r, 20));
+    if (!url) {
+      ac.abort();
+      throw new Error(`serve never listened: ${stdout.text}`);
+    }
+    const res = await fetch(`${url}api/repos/aa/board`);
+    expect(res.status).toBe(200);
+    ac.abort();
+    expect(await running).toBe(0);
+
+    expect(await snapshotFiles(aaRoot)).toEqual(beforeAa);
+    expect(await snapshotFiles(bbRoot)).toEqual(beforeBb);
+  });
+
+  // Control (§4 control 2): a deliberate `mkdir` of `local/` in the open path must make the
+  // read-only assertion FAIL — watched failing before trusting the test above.
+  it('control: a bare mkdir of AA’s .repoboard/local/ makes the "unchanged" assertion fail', async () => {
+    const { aaRoot, bbRoot } = await makeMembers();
+    const beforeAa = await snapshotFiles(aaRoot);
+    await mkdir(join(aaRoot, '.repoboard', 'local'));
+    expect(await snapshotFiles(aaRoot)).not.toEqual(beforeAa);
+    // bb (never perturbed) still compares equal — the failure above is real, not a fixture bug.
+    const beforeBb = await snapshotFiles(bbRoot);
+    expect(await snapshotFiles(bbRoot)).toEqual(beforeBb);
+  });
+});
+
+// ---- RCB-153 slice 3a: serve (W6, §4 control 7) ------------------------------------------------
+
+describe('repoboard serve — workspace expansion (RCB-153 §4 control 7, W6)', () => {
+  it('no --root at a workspace root serves [workspace, aa, bb] with the configured keys; --root . lists only the workspace', async () => {
+    const aaRoot = await boardRoot('AA');
+    const bbRoot = await boardRoot('BB');
+    const wsRoot = await makeTempDir('repoboard-ws-serve-');
+    dirs.push(wsRoot);
+    await mkdir(join(wsRoot, '.repoboard', 'cards'), { recursive: true });
+    await writeFile(
+      join(wsRoot, '.repoboard', 'board.yml'),
+      serializeBoard({
+        ...defaultBoardConfig(),
+        prefix: 'WS',
+        repos: [
+          { key: 'aa', root: relative(wsRoot, aaRoot) },
+          { key: 'bb', root: relative(wsRoot, bbRoot), writes: 'cards' },
+        ],
+      }),
+    );
+    await writeStateMd(wsRoot);
+
+    async function reposAt(
+      ...argv: string[]
+    ): Promise<{ primary: string; repos: { key: string }[] }> {
+      const stdout = new Sink();
+      const ac = new AbortController();
+      let url = '';
+      const running = run(['serve', '--port', '0', '--no-fun', ...argv], {
+        cwd: wsRoot,
+        stdout,
+        env: { REPOBOARD_ACTOR: 'test-actor' },
+        now: () => NOW,
+        signal: ac.signal,
+        onServe: (s) => {
+          url = s.url;
+        },
+      });
+      for (let i = 0; i < 250 && !url; i++) await new Promise((r) => setTimeout(r, 20));
+      if (!url) {
+        ac.abort();
+        throw new Error(`serve never listened: ${stdout.text}`);
+      }
+      const body = (await (await fetch(`${url}api/repos`)).json()) as {
+        primary: string;
+        repos: { key: string }[];
+      };
+      ac.abort();
+      await running;
+      return body;
+    }
+
+    const noRoot = await reposAt();
+    expect(noRoot.repos.map((r) => r.key).slice(-2)).toEqual(['aa', 'bb']);
+    expect(noRoot.repos[0]?.key).toBe(noRoot.primary);
+    expect(noRoot.repos).toHaveLength(3);
+
+    const explicit = await reposAt('--root', '.');
+    expect(explicit.repos.map((r) => r.key)).toEqual([noRoot.primary]);
+  });
+
+  it('a configured member key colliding with the workspace’s own key is a UserError naming it', async () => {
+    const bbRoot = await boardRoot('BB');
+    const wsRoot = await makeTempDir('repoboard-ws-collide-');
+    dirs.push(wsRoot);
+    const wsKey = basename(wsRoot).toLowerCase();
+    await mkdir(join(wsRoot, '.repoboard', 'cards'), { recursive: true });
+    await writeFile(
+      join(wsRoot, '.repoboard', 'board.yml'),
+      serializeBoard({
+        ...defaultBoardConfig(),
+        prefix: 'WS',
+        repos: [{ key: wsKey, root: relative(wsRoot, bbRoot) }],
+      }),
+    );
+    await writeStateMd(wsRoot);
+    const res = await repoboard(wsRoot, 'serve', '--port', '0');
+    expect(res.code).toBe(1);
+    expect(res.err).toContain(wsKey);
+    expect(res.err).toContain('collides');
+  });
+});
+
+// ---- RCB-153 slice 3a: init --workspace (W8) ---------------------------------------------------
+
+describe('repoboard init --workspace (RCB-153 W8)', () => {
+  it('happy path: --repo <key>=<path> round-trips through serializeBoard — relative for a sibling, absolute otherwise; never touches a member', async () => {
+    const parent = await makeTempDir('repoboard-init-parent-');
+    dirs.push(parent);
+    const wsRoot = join(parent, 'ws');
+    const siblingRoot = join(parent, 'sib'); // shares wsRoot's OWN parent -> written relative
+    const farParent = await makeTempDir('repoboard-init-far-');
+    dirs.push(farParent);
+    const farRoot = join(farParent, 'far'); // different parent -> written absolute
+    await mkdir(wsRoot, { recursive: true });
+
+    const res = await repoboard(
+      wsRoot,
+      'init',
+      '--workspace',
+      '--repo',
+      `sib=${siblingRoot}`,
+      '--repo',
+      `far=${farRoot}`,
+    );
+    expect(res.code).toBe(0);
+
+    const text = await readFile(join(wsRoot, '.repoboard', 'board.yml'), 'utf8');
+    const parsed = parseBoard(text);
+    if (!parsed.ok) throw new Error(parsed.error);
+    expect(parsed.config.repos).toEqual([
+      { key: 'sib', root: relative(wsRoot, siblingRoot) },
+      { key: 'far', root: farRoot },
+    ]);
+    // Neither member path was created, read, or written — init never touches a member (O7).
+    expect(
+      await stat(siblingRoot).then(
+        () => true,
+        () => false,
+      ),
+    ).toBe(false);
+    expect(
+      await stat(farRoot).then(
+        () => true,
+        () => false,
+      ),
+    ).toBe(false);
+    // Allowed, but the CLI says so — a nonexistent path is a later `check` finding, not a refusal.
+    expect(res.out).toContain('repo sib -> ');
+    expect(res.out).toContain('repo far -> ');
+    expect(res.out.match(/not found yet/g)?.length).toBe(2);
+  });
+
+  it('refuses when .repoboard/ already exists, even with --practices; plain --practices (no --workspace) is unaffected', async () => {
+    const root = await boardRoot('RB');
+    const res = await repoboard(root, 'init', '--workspace', '--practices');
+    expect(res.code).toBe(1);
+    expect(res.err).toContain('already exists');
+    const plain = await repoboard(root, 'init', '--practices');
+    expect(plain.code).toBe(0);
+  });
+
+  it('refuses a key that fails the repos[].key schema, naming it', async () => {
+    const wsRoot = await makeTempDir('repoboard-init-badkey-');
+    dirs.push(wsRoot);
+    const res = await repoboard(wsRoot, 'init', '--workspace', '--repo', 'Bad Key=../x');
+    expect(res.code).toBe(1);
+    expect(res.err).toBe('repoboard: repos.0.key: must match /^[a-z0-9][a-z0-9-]*$/\n');
+  });
+
+  it('refuses a duplicate key, naming it', async () => {
+    const wsRoot = await makeTempDir('repoboard-init-dupe-');
+    dirs.push(wsRoot);
+    const res = await repoboard(
+      wsRoot,
+      'init',
+      '--workspace',
+      '--repo',
+      'aa=../aa',
+      '--repo',
+      'aa=../aa2',
+    );
+    expect(res.code).toBe(1);
+    expect(res.err).toBe('repoboard: repos.1.key: duplicate repos[] key "aa"\n');
+  });
+
+  it('--repo without --workspace refuses (a plain board has no repos:)', async () => {
+    const wsRoot = await makeTempDir('repoboard-init-noworkspace-');
+    dirs.push(wsRoot);
+    const res = await repoboard(wsRoot, 'init', '--repo', 'aa=../aa');
+    expect(res.code).toBe(1);
+    expect(res.err).toContain('--workspace');
+    expect(
+      await stat(join(wsRoot, '.repoboard')).then(
+        () => true,
+        () => false,
+      ),
+    ).toBe(false);
   });
 });

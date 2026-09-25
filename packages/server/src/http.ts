@@ -23,6 +23,7 @@ import {
   openRepoContext,
   type RepoContext,
   RepoRegistry,
+  type RootEntry,
   sendJson,
 } from './repo-context.js';
 import type { ScanResult } from './scanner.js';
@@ -67,6 +68,15 @@ export interface ServerOptions {
    * the primary. Every root after the first opens lazily, on its first `openRepo(key)` (slice 2).
    */
   roots?: string[];
+  /**
+   * RCB-153 W6: pre-keyed roots (the workspace's own basename key, then each member's CONFIGURED
+   * `repos[].key` — `cli.ts`'s `workspaceServeRoots`) — used INSTEAD of `roots` when present, and
+   * passed to `RepoRegistry` as given rather than through `assignRepoKeys`. `keyedRoots[0].root`
+   * MUST equal `store.root`, exactly `roots[0]`'s contract. Absent: today's `roots` behaviour,
+   * byte-identical — this is the "keyed-roots input" the brief asks for instead of a second key
+   * function.
+   */
+  keyedRoots?: readonly RootEntry[];
   /**
    * Clock passed to `openStore` for every root THIS process opens lazily after the primary
    * (`RepoRegistry.openRepo`) — the same one the primary's `store` was already opened with, so a
@@ -309,12 +319,19 @@ export async function startServer(opts: ServerOptions): Promise<RunningServer> {
   // RCB-43 slice 1: absent (or empty) `roots` is exactly today's single-root shape — one root,
   // `store.root`, the primary. `roots[0]` must equal `store.root` (a contract, not a guess): the
   // caller always opens the primary's store itself and hands it in as `store`.
-  const roots = opts.roots && opts.roots.length > 0 ? opts.roots : [store.root];
+  // RCB-153 W6: `keyedRoots`, when present, is the SAME contract on its `.root`s — checked below
+  // either way — and is what `RepoRegistry` receives instead of `roots` (skipping `assignRepoKeys`
+  // for a workspace's configured member keys).
+  const roots = opts.keyedRoots
+    ? opts.keyedRoots.map((r) => r.root)
+    : opts.roots && opts.roots.length > 0
+      ? opts.roots
+      : [store.root];
   if (roots[0] !== store.root) {
     throw new Error(`ServerOptions.roots[0] (${roots[0]}) must equal store.root (${store.root})`);
   }
 
-  const registry = new RepoRegistry(roots, {
+  const registry = new RepoRegistry(opts.keyedRoots ?? roots, {
     fun,
     scan,
     watchRepo,

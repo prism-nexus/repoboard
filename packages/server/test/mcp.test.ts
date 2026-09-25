@@ -2,17 +2,17 @@
  * P5.1: drive the MCP server in-process through the SDK's InMemoryTransport pair against a
  * temp `.repoboard/`. The repo's own board is never touched.
  */
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
-import { dirname, join } from 'node:path';
+import { mkdir, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import { dirname, join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
-import type { Card } from '@repoboard/core';
+import { type Card, defaultBoardConfig, serializeBoard, type WorkspaceRepo } from '@repoboard/core';
 import { afterEach, describe, expect, it } from 'vitest';
 import { createMcpServer, MCP_TOOL_NAMES } from '../src/mcp.js';
 import { type CardStore, openStore } from '../src/store.js';
-import { cardText, makeTempRepoboard, NOW, type TempRepo } from './helpers.js';
+import { cardText, makeTempDir, makeTempRepoboard, NOW, type TempRepo } from './helpers.js';
 
 const cleanups: Array<() => Promise<void>> = [];
 afterEach(async () => {
@@ -54,6 +54,83 @@ function textOf(res: CallToolResult): string {
   const first = res.content[0];
   if (first?.type !== 'text') throw new Error('expected a text result');
   return first.text;
+}
+
+interface WorkspaceRig {
+  wsRoot: string;
+  aaRoot: string;
+  bbRoot: string;
+  store: CardStore;
+  client: Client;
+  call(name: string, args?: Record<string, unknown>): Promise<CallToolResult>;
+  json<T = unknown>(name: string, args?: Record<string, unknown>): Promise<T>;
+}
+
+/**
+ * RCB-153 slice 3b (W7): a workspace root (`prefix: WS`, `repos: [{key:'aa',...}, {key:'bb',...,
+ * writes:'cards'}]`) plus its two members — the MCP-server equivalent of `workspace.test.ts`'s
+ * `makeWorkspace`/`makeMembers` (that file drives the CLI; this one drives `createMcpServer`
+ * directly, the same way `rig()` above does for a plain board). `aa` is read-only (no `writes:`);
+ * `bb` carries `writes: cards`.
+ */
+async function makeWorkspaceRig(): Promise<WorkspaceRig> {
+  const aa = await makeTempRepoboard({ 'AA-1.md': cardText('AA-1', 'todo') });
+  cleanups.push(aa.cleanup);
+  await writeFile(
+    join(aa.root, '.repoboard', 'board.yml'),
+    serializeBoard({ ...defaultBoardConfig(), prefix: 'AA' }),
+  );
+  const bb = await makeTempRepoboard({ 'BB-1.md': cardText('BB-1', 'todo') });
+  cleanups.push(bb.cleanup);
+  await writeFile(
+    join(bb.root, '.repoboard', 'board.yml'),
+    serializeBoard({ ...defaultBoardConfig(), prefix: 'BB' }),
+  );
+
+  const wsRoot = await makeTempDir('repoboard-mcp-ws-');
+  cleanups.push(() => rm(wsRoot, { recursive: true, force: true }));
+  await mkdir(join(wsRoot, '.repoboard', 'cards'), { recursive: true });
+  const repos: WorkspaceRepo[] = [
+    { key: 'aa', root: relative(wsRoot, aa.root) },
+    { key: 'bb', root: relative(wsRoot, bb.root), writes: 'cards' },
+  ];
+  await writeFile(
+    join(wsRoot, '.repoboard', 'board.yml'),
+    serializeBoard({ ...defaultBoardConfig(), prefix: 'WS', repos }),
+  );
+
+  const store = await openStore(wsRoot, { watch: false, now: () => NOW });
+  const server = createMcpServer({ store, defaultActor: 'test/mcp', now: () => NOW });
+  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+  await server.connect(serverTransport);
+  const client = new Client({ name: 'repoboard-test', version: '0.0.0' });
+  await client.connect(clientTransport);
+  cleanups.push(async () => {
+    await client.close();
+    await server.close();
+  });
+  const call = async (name: string, args: Record<string, unknown> = {}) =>
+    (await client.callTool({ name, arguments: args })) as CallToolResult;
+  const json = async <T>(name: string, args: Record<string, unknown> = {}) => {
+    const res = await call(name, args);
+    expect(res.isError, `tool ${name} failed: ${textOf(res)}`).toBeFalsy();
+    return JSON.parse(textOf(res)) as T;
+  };
+  return { wsRoot, aaRoot: aa.root, bbRoot: bb.root, store, client, call, json };
+}
+
+/** Every file under `root`, path (relative to `root`) → mtimeMs — the same read-only proof
+ * `workspace.test.ts`'s own `snapshotFiles` uses, reimplemented here since that file's helper is
+ * not exported (each test file owns its own fixtures, RCB-153 slice 1's own convention). */
+async function snapshotFiles(root: string): Promise<Record<string, number>> {
+  const names = (await readdir(root, { recursive: true })) as string[];
+  const out: Record<string, number> = {};
+  for (const name of names) {
+    const full = join(root, name);
+    const st = await stat(full);
+    out[name] = st.isDirectory() ? -1 : st.mtimeMs;
+  }
+  return out;
 }
 
 /** The card/board tools (P8.1 and before, plus RCB-70's add_note); the five P8.2 lease/window
@@ -1458,4 +1535,141 @@ describe('repoboard mcp: get_state ownerQueue, now card-query.ts’s shared func
       expect(state.ownerQueue.map((q) => q.id)).toEqual(['RB-1']);
     },
   );
+});
+
+// ---- RCB-153 slice 3b: MCP at a workspace (W7) -----------------------------------------------
+
+describe('repoboard mcp: workspace (RCB-153 §4 control 8, W7)', () => {
+  it('list_cards {repo:"bb"} returns only BB’s cards, tagged repo:"bb"; tool count stays 30', async () => {
+    const r = await makeWorkspaceRig();
+    const rows = await r.json<Array<{ id: string; repo: string }>>('list_cards', { repo: 'bb' });
+    expect(rows).toEqual([expect.objectContaining({ id: 'BB-1', repo: 'bb' })]);
+
+    const { tools } = await r.client.listTools();
+    expect(tools).toHaveLength(30);
+    expect(tools.map((t) => t.name).sort()).toEqual([...MCP_TOOL_NAMES].sort());
+  });
+
+  it('list_cards {repo:"all"} returns every board’s cards, each tagged with its own repo key', async () => {
+    const r = await makeWorkspaceRig();
+    const rows = await r.json<Array<{ id: string; repo: string }>>('list_cards', { repo: 'all' });
+    const byId = Object.fromEntries(rows.map((row) => [row.id, row.repo]));
+    expect(byId['AA-1']).toBe('aa');
+    expect(byId['BB-1']).toBe('bb');
+  });
+
+  it('list_cards {repo:"nope"} (not a configured member) fails naming it', async () => {
+    const r = await makeWorkspaceRig();
+    const res = await r.call('list_cards', { repo: 'nope' });
+    expect(res.isError).toBe(true);
+    expect(textOf(res)).toContain('unknown workspace member "nope"');
+  });
+
+  it('a plain board’s list_cards has no repo argument at all — an extra {repo:"x"} is silently stripped (zod default), never a per-repo filter', async () => {
+    const r = await rig({ 'RB-1.md': cardText('RB-1', 'todo') });
+    const rows = await r.json<Array<{ id: string; repo?: string }>>('list_cards', { repo: 'x' });
+    expect(rows).toEqual([expect.objectContaining({ id: 'RB-1' })]);
+    expect(rows[0]).not.toHaveProperty('repo');
+  });
+});
+
+describe('repoboard mcp: workspace write refusal (RCB-153 §4 control 3, W5)', () => {
+  it('add_note on AA (read-only, no writes: cards) refuses with the exact W5 text; AA’s tree is untouched', async () => {
+    const r = await makeWorkspaceRig();
+    const before = await snapshotFiles(r.aaRoot);
+    const res = await r.call('add_note', { id: 'AA-1', text: 'x' });
+    expect(res.isError).toBe(true);
+    expect(textOf(res)).toBe('member aa is read-only (set writes: cards in board.yml)');
+    expect(await snapshotFiles(r.aaRoot)).toEqual(before);
+  });
+
+  it('add_note on BB (writes: cards) writes exactly its card file plus one events.jsonl line', async () => {
+    const r = await makeWorkspaceRig();
+    const before = await snapshotFiles(r.bbRoot);
+    const noted = await r.json<{ id: string }>('add_note', { id: 'BB-1', text: 'x' });
+    expect(noted.id).toBe('BB-1');
+    const after = await snapshotFiles(r.bbRoot);
+    const allPaths = new Set([...Object.keys(before), ...Object.keys(after)]);
+    const changed = [...allPaths].filter((p) => before[p] !== after[p]).sort();
+    expect(changed).toEqual(
+      [join('.repoboard', 'cards', 'BB-1.md'), join('.repoboard', 'events.jsonl')].sort(),
+    );
+  });
+});
+
+describe('repoboard mcp: get_card resolves across the workspace (RCB-153 §4 control 4, W4)', () => {
+  it('get_card BB-1 resolves to BB’s own card by prefix, with no key: prefix typed', async () => {
+    const r = await makeWorkspaceRig();
+    const card = await r.json<{ id: string; title: string }>('get_card', { id: 'BB-1' });
+    expect(card.id).toBe('BB-1');
+  });
+
+  it('get_card aa:AA-1 (keyed form) also resolves', async () => {
+    const r = await makeWorkspaceRig();
+    const card = await r.json<{ id: string }>('get_card', { id: 'aa:AA-1' });
+    expect(card.id).toBe('AA-1');
+  });
+});
+
+describe('repoboard mcp: a long-lived server never serves a stale member (RCB-153 §4, W7)', () => {
+  it('a member card edited on disk AFTER this server started is seen on the very next call', async () => {
+    const r = await makeWorkspaceRig();
+    const before = await r.json<{ title: string }>('get_card', { id: 'BB-1' });
+    expect(before.title).not.toBe('edited on disk after startup');
+
+    // Not through any tool — a direct filesystem edit, the same as another seat committing to BB
+    // while this MCP process (opened once, long-lived) keeps running.
+    await writeFile(
+      join(r.bbRoot, '.repoboard', 'cards', 'BB-1.md'),
+      cardText('BB-1', 'todo', { title: 'edited on disk after startup' }),
+    );
+
+    const after = await r.json<{ title: string }>('get_card', { id: 'BB-1' });
+    expect(after.title).toBe('edited on disk after startup');
+  });
+});
+
+describe('repoboard mcp: plain-board tools/list carries no trace of W7 (RCB-153 §4 control 9, regression)', () => {
+  // The six tools W7 touches, plus create_card — every one of their `inputSchema`s must be
+  // EXACTLY what they were before this card: no `repo` property, byte-identical `tools/list`.
+  const REPO_AWARE_TOOLS = [
+    'list_cards',
+    'board_summary',
+    'check',
+    'get_state',
+    'list_leases',
+    'get_log',
+    'create_card',
+  ];
+
+  it('none of the seven repo-aware tools mention "repo" anywhere in their schema or description', async () => {
+    const r = await rig({ 'RB-1.md': cardText('RB-1', 'todo') });
+    const { tools } = await r.client.listTools();
+    for (const name of REPO_AWARE_TOOLS) {
+      const t = tools.find((x) => x.name === name);
+      expect(t, name).toBeDefined();
+      expect(JSON.stringify(t?.inputSchema ?? {}), name).not.toContain('repo');
+      expect(t?.description ?? '', name).not.toContain('RCB-153');
+    }
+  });
+
+  it('the same seven tools DO gain repo at a workspace root (byte count moves, on purpose)', async () => {
+    const plain = await rig({ 'RB-1.md': cardText('RB-1', 'todo') });
+    const { tools: plainTools } = await plain.client.listTools();
+    const ws = await makeWorkspaceRig();
+    const { tools: wsTools } = await ws.client.listTools();
+    for (const name of REPO_AWARE_TOOLS) {
+      const plainTool = plainTools.find((x) => x.name === name);
+      const wsTool = wsTools.find((x) => x.name === name);
+      expect(plainTool, name).toBeDefined();
+      expect(wsTool, name).toBeDefined();
+      expect(JSON.stringify(wsTool?.inputSchema), name).toContain('"repo"');
+      // The plain board's own bytes are exactly what they were pre-RCB-153 (asserted above); this
+      // just confirms the workspace root's schema is the thing that actually grew, not the plain
+      // one shrinking to match by coincidence.
+      const plainBytes = Buffer.byteLength(JSON.stringify(plainTool));
+      const wsBytes = Buffer.byteLength(JSON.stringify(wsTool));
+      expect(wsBytes, name).toBeGreaterThan(plainBytes);
+    }
+  });
 });

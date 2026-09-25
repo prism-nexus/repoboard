@@ -50,13 +50,13 @@
     "prepack": "node ../../scripts/prepack-server.mjs"
   },
   "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.30.0",
     "chokidar": "^5.0.0",
     "ws": "^8.21.3",
     "yaml": "^2.9.0",
     "zod": "^4.5.4"
   },
   "devDependencies": {
+    "@modelcontextprotocol/sdk": "^1.30.0",
     "@repoboard/core": "workspace:*",
     "@types/node": "^26.4.1",
     "@types/ws": "^8.18.1",

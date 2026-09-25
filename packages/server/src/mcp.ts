@@ -6,9 +6,6 @@
  * Tool descriptions are written for an agent that has never seen this board: they say what a
  * card is, that `status` is a column id, and that `list_cards` is the cheap first call.
  */
-import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
-import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
-import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import {
   type BoardConfig,
   blockedReason,
@@ -28,6 +25,7 @@ import {
 import { z } from 'zod';
 import { filterCards, ownerQueue } from './card-query.js';
 import { applySyncPlan, computeSyncPlan } from './issues.js';
+import { type CallToolResult, McpServer, StdioServerTransport } from './mcp-rpc.js';
 import { resolveCardRefs, resolveRefSpec } from './refs.js';
 import { loadGateHealth, recordGate } from './repo-health.js';
 import { type CardStore, openStore } from './store.js';

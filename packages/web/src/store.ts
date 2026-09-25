@@ -695,14 +695,21 @@ export function columnsWithCards(
     list.push(c);
     byStatus.set(c.status, list);
   }
-  const byUpdatedDesc = (a: Card, b: Card) => Date.parse(b.updated) - Date.parse(a.updated);
-  const sortDesc = (list: Card[]) =>
-    sortBy === 'size'
+  // RCB-151: `Date.parse` once per card here, not once per COMPARISON inside the sort — a
+  // comparator runs O(n log n) times, `Date.parse` on a fixed string doesn't need to. Values
+  // (and so the order, ties included) are unchanged: each comparison used to read
+  // `Date.parse(x.updated)` fresh; it now reads the same number out of `updatedMs`.
+  const sortDesc = (list: Card[]) => {
+    const updatedMs = new Map<Card, number>(list.map((c) => [c, Date.parse(c.updated)]));
+    const byUpdatedDesc = (a: Card, b: Card) =>
+      (updatedMs.get(b) ?? NaN) - (updatedMs.get(a) ?? NaN);
+    return sortBy === 'size'
       ? [...list].sort((a, b) => {
           const rank = (c: Card) => (c.size === undefined ? 4 : SIZE_RANK[c.size]);
           return rank(a) - rank(b) || byUpdatedDesc(a, b);
         })
       : [...list].sort(byUpdatedDesc);
+  };
   const out: ColumnCards[] = columns.map((col) => ({
     id: col.id,
     title: col.title ?? col.id,

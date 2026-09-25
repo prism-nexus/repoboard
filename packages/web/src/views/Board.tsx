@@ -15,7 +15,6 @@ import {
   type Column as ColumnConfig,
   findColumn,
   isActive,
-  isPlanParent,
   rollup,
   type Size,
   stepsOf,
@@ -36,6 +35,7 @@ import {
   gateChipText,
   type Lane,
   lanesFor,
+  type PhaseInfo,
   phaseInfoFor,
   type SortBy,
   type Store,
@@ -51,12 +51,14 @@ function laneParentId(lane: Lane): string | undefined {
 /**
  * RCB-108: the WIP-adjusted count for a column's SHOWN cards (`colCards`, already run through the
  * size filter) — a plan parent doesn't count by default (`WIP_COUNTS_PARENTS`). Parent-ness is
- * judged against `cards`, the FULL board (same reasoning as the RCB-67 comment above on
- * `laneColumns`): a step hidden by the size filter must not flip whether its parent counts.
+ * judged against `parentIds`, built from `cards`, the FULL board (same reasoning as the RCB-67
+ * comment above on `laneColumns`): a step hidden by the size filter must not flip whether its
+ * parent counts. `parentIds.has(c.id)` is `isPlanParent(c, cards)` (`stepsOf(c.id, cards).length >
+ * 0`) restated as a set membership test, so it can be built once per render instead of per card.
  */
-function wipCountFor(colCards: Card[], cards: readonly Card[]): number {
+function wipCountFor(colCards: Card[], parentIds: ReadonlySet<string>): number {
   if (WIP_COUNTS_PARENTS) return colCards.length;
-  return colCards.filter((c) => !isPlanParent(c, cards)).length;
+  return colCards.filter((c) => !parentIds.has(c.id)).length;
 }
 
 /** RCB-108: a lane-chain chip's class — `done` in a `done: true` column, `here` in THIS column
@@ -70,6 +72,12 @@ function laneStepClass(
   if (step.status === columnId) return 'lane__step lane__step--here';
   return 'lane__step';
 }
+
+/** RCB-151: module constants, not inline objects — `useSensor` memoizes on its options' identity,
+ * so a fresh object each render gave `DndContext` a new `sensors` array and a new context value,
+ * re-rendering every memoized `CardItem` through `useSortable` on a select. */
+const POINTER_SENSOR_OPTIONS = { activationConstraint: { distance: 4 } };
+const KEYBOARD_SENSOR_OPTIONS = { coordinateGetter: sortableKeyboardCoordinates };
 
 /** Where a drop lands: a column id, or the column of the card it was dropped on. */
 export function resolveDropStatus(
@@ -172,6 +180,22 @@ export function Board() {
       }),
     [columns, cards],
   );
+  // RCB-151: one `phaseInfoFor` pass over the FULL `cards` per render that actually changes cards
+  // or config, instead of once per CardItem per render — `CardItem`'s `phase` prop then comes out
+  // of this map (referentially stable when neither `cards` nor `config` changed).
+  const phaseById = useMemo(() => {
+    const map = new Map<string, PhaseInfo | null>();
+    for (const c of cards) map.set(c.id, phaseInfoFor(c, cards, config));
+    return map;
+  }, [cards, config]);
+  // RCB-151: every id that appears as SOME card's `parent`, over the FULL `cards` — the set
+  // `wipCountFor` tests membership against instead of each column re-running `isPlanParent`
+  // (itself an O(N) `stepsOf` scan) once per card, which made the WIP count O(N^2) in the column.
+  const parentIds = useMemo(() => {
+    const ids = new Set<string>();
+    for (const c of cards) if (c.parent !== undefined) ids.add(c.parent);
+    return ids;
+  }, [cards]);
   const [dragging, setDragging] = useState<Card | null>(null);
 
   const columnIndex = useCallback((s: string) => columns.findIndex((c) => c.id === s), [columns]);
@@ -186,8 +210,8 @@ export function Board() {
   const arrivals = useArrivals(cards, columnIndex, isActiveColumn, isDoneColumn);
 
   const sensors = useSensors(
-    useSensor(PointerSensor, { activationConstraint: { distance: 4 } }),
-    useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
+    useSensor(PointerSensor, POINTER_SENSOR_OPTIONS),
+    useSensor(KeyboardSensor, KEYBOARD_SENSOR_OPTIONS),
   );
 
   const onDragStart = (ev: DragStartEvent) =>
@@ -268,7 +292,7 @@ export function Board() {
             <Column
               key={col.id}
               column={col}
-              wipCount={wipCountFor(col.cards, cards)}
+              wipCount={wipCountFor(col.cards, parentIds)}
               onArchive={col.done ? archiveDone : undefined}
             >
               {col.lanes.map((lane) => {
@@ -325,7 +349,7 @@ export function Board() {
                         pinned={pinned.includes(card.id)}
                         onPin={pin}
                         onHover={hover}
-                        phase={phaseInfoFor(card, cards, config)}
+                        phase={phaseById.get(card.id) ?? null}
                       />
                     ))}
                   </Fragment>

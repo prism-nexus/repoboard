@@ -1,6 +1,6 @@
 import { useDroppable } from '@dnd-kit/core';
 import { SortableContext, verticalListSortingStrategy } from '@dnd-kit/sortable';
-import type { ReactNode } from 'react';
+import { type ReactNode, useMemo } from 'react';
 import type { ColumnCards } from '../store.js';
 
 interface Props {
@@ -19,6 +19,10 @@ interface Props {
 
 export function Column({ column, children, onArchive, wipCount }: Props) {
   const { setNodeRef, isOver } = useDroppable({ id: column.id, data: { type: 'column' } });
+  // RCB-151: a fresh array every render made `SortableContext`'s `items` referentially unstable,
+  // which defeats memoizing the `CardItem`s inside it. Same ids in the same order every time
+  // `column.cards` itself doesn't change.
+  const items = useMemo(() => column.cards.map((c) => c.id), [column.cards]);
   const rawCount = column.cards.length;
   const count = wipCount ?? rawCount;
   const excludedParents = rawCount - count;
@@ -70,10 +74,7 @@ export function Column({ column, children, onArchive, wipCount }: Props) {
         ) : null}
       </header>
       <div ref={setNodeRef} className="column__cards">
-        <SortableContext
-          items={column.cards.map((c) => c.id)}
-          strategy={verticalListSortingStrategy}
-        >
+        <SortableContext items={items} strategy={verticalListSortingStrategy}>
           {children}
         </SortableContext>
         {rawCount === 0 ? <p className="column__empty">Drop a card here</p> : null}

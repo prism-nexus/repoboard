@@ -1,6 +1,7 @@
 import { useSortable } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
 import type { Card, Decision, Size } from '@repoboard/core';
+import { memo } from 'react';
 import type { Arrival } from '../hooks.js';
 import { gateChipText, type PhaseInfo } from '../store.js';
 import { Avatar } from './Avatar.jsx';
@@ -112,7 +113,13 @@ interface Props {
   phase?: PhaseInfo | null;
 }
 
-export function CardItem({
+/** RCB-151: memoized (default shallow prop compare) — at N cards on a board, an unmemoized
+ * `CardItem` re-renders on every store change even when its own props didn't change (a select, a
+ * filter toggle, a sort change). Every prop `Board.tsx` passes is built to stay referentially
+ * stable across such a render (see that file's `phaseById`/`parentIds` memos and its
+ * `useCallback`-wrapped handlers), so this memo actually skips work instead of always re-rendering
+ * on a new inline object/function. */
+export const CardItem = memo(function CardItem({
   card,
   active,
   arrival,
@@ -226,4 +233,4 @@ export function CardItem({
       </div>
     </div>
   );
-}
+});

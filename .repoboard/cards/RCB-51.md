@@ -1,7 +1,7 @@
 ---
 id: RCB-51
 title: "K5 publish `repoboard` to npm — OWNER WORK first: npm account + `repoboard` org, 2FA on, placeholder 0.0.1 to claim the name; then the builder publishes the CLI as unscoped `repoboard` and core/server under @repoboard"
-status: todo
+status: done
 priority: high
 gate: RCB-153
 decision:
@@ -16,7 +16,7 @@ decision:
   decidedBy: coordinator
   decidedAt: 2026-09-24T20:55:45Z
 created: 2026-09-18T19:52:32Z
-updated: 2026-09-25T23:14:06Z
+updated: 2026-09-25T23:16:04Z
 ---
 ## Decision
 - 2026-09-24T20:55:45Z coordinator — done — "account and org created on npm so once this batch finishes we are set to release"
@@ -28,6 +28,7 @@ updated: 2026-09-25T23:14:06Z
 - 2026-09-25T19:35:31Z builder — repoboard builder 19:4xZ 09-25: owner decision in the builder terminal: publish UNSCOPED `repoboard` (O1 unchanged). Considered and rejected: @repoboard/cli scoped (npx friction; leaves the unscoped name open to squatting) and scoped+unscoped-alias (two publishes, bin clash, cli.ts main-module guard blocks a thin import wrapper). The @repoboard scope stays org-owned for future packages. npm whoami = prism-nexus (login completed after the reboot).
 - 2026-09-25T20:17:51Z builder — repoboard builder 20:2xZ 09-25: owner in the builder terminal: 'lets not do multiple launches lets get rcb-153 done verified and then I will create the publish token and we can publish'. Order flipped: RCB-51 now gated on RCB-153 (was the reverse). Publish-ready state at 9afc33c (gate 1591|4|0, dry run clean, shasum 28f2fdf0) is superseded by whatever RCB-153 lands; re-gate + re-pack at publish time. Owner will create a publish token (granular access token) instead of an OTP.
 - 2026-09-25T23:14:06Z builder — PUBLISHED repoboard@0.2.0 (owner 2026-09-25 23:1xZ in the builder terminal: 0.2.0, token supplied). c21cad3 folds the workspace into CHANGELOG [0.2.0]; gate 1641|4|0 x2, typecheck/lint/build 0; pack-smoke 9/9; dry run clean (no 'invalid and removed'). Registry: dist-tags.latest 0.2.0, shasum 56933c209374684de94bbd8c69331e09391246e0 = the smoked tarball; fresh install from npm prints 0.2.0, init + check exit 0. Tag v0.2.0 -> c21cad3 pushed. https://www.npmjs.com/package/repoboard
+- 2026-09-25T23:16:04Z coordinator — coordinator 23:2xZ 09-25: PUBLISH VERIFIED by content — c21cad3 (parent c4f1ba7, CHANGELOG fold only), annotated tag v0.2.0 → c21cad3 on origin, gate.jsonl 23:14:06Z c21cad3 1641|4|0, npm view repoboard@0.2.0: latest=0.2.0 shasum 56933c20…, fresh install in a scratch dir prints 0.2.0 with the bin present. Set done (owner: one launch, RCB-153 then this). RCB-154 is a post-set follow-up.
 
 ## Log
 - 2026-09-18T19:52:32Z coordinator — moved todo → decide
@@ -37,3 +38,4 @@ updated: 2026-09-25T23:14:06Z
 - 2026-09-24T20:55:45Z coordinator — done — "account and org created on npm so once this batch finishes we are set to release" → todo (default; asked in-column)
 - 2026-09-24T20:55:45Z coordinator — moved decide → todo
 - 2026-09-25T20:17:51Z builder — updated gate
+- 2026-09-25T23:16:04Z coordinator — moved todo → done

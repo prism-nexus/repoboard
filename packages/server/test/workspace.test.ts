@@ -258,3 +258,153 @@ describe('repoboard check — workspace aggregation (RCB-153 §4 control 5)', ()
     expect(rechecked.out).not.toContain('workspace-member-missing');
   });
 });
+
+// ---- RCB-153 slice 2: card verbs across boards (W4, W5) --------------------------------------
+
+/** The id `card list --json`'s LAST row carries — same trick `addDecideCard` uses above. */
+async function lastCardId(root: string): Promise<string> {
+  const list = JSON.parse((await repoboard(root, 'card', 'list', '--json')).out) as Array<{
+    id: string;
+  }>;
+  const id = list[list.length - 1]?.id;
+  if (!id) throw new Error('no card id');
+  return id;
+}
+
+describe('repoboard card note — write opt-in (RCB-153 §4 control 3)', () => {
+  it('a read-only member REFUSES with the exact W5 text (AA untouched); a writable member writes exactly its card file + one events.jsonl line', async () => {
+    const { aaRoot, bbRoot, aaId, bbId } = await makeMembers();
+    const wsRoot = await makeWorkspace(aaRoot, bbRoot);
+
+    const beforeAa = await snapshotFiles(aaRoot);
+    const refused = await repoboard(wsRoot, 'card', 'note', aaId, 'x');
+    expect(refused.code).toBe(1);
+    expect(refused.err).toBe(
+      `repoboard: member aa is read-only (set writes: cards in board.yml)\n`,
+    );
+    expect(await snapshotFiles(aaRoot)).toEqual(beforeAa);
+
+    const beforeBb = await snapshotFiles(bbRoot);
+    const noted = await repoboard(wsRoot, 'card', 'note', bbId, 'x');
+    expect(noted.code).toBe(0);
+    const afterBb = await snapshotFiles(bbRoot);
+    const allPaths = new Set([...Object.keys(beforeBb), ...Object.keys(afterBb)]);
+    const changed = [...allPaths].filter((p) => beforeBb[p] !== afterBb[p]).sort();
+    expect(changed).toEqual(
+      [join('.repoboard', 'cards', `${bbId}.md`), join('.repoboard', 'events.jsonl')].sort(),
+    );
+  });
+});
+
+describe('repoboard card show — prefix resolution across the workspace (RCB-153 §4 control 4)', () => {
+  it('a bare id resolves to the one member whose prefix matches', async () => {
+    const { aaRoot, bbRoot, bbId } = await makeMembers();
+    const wsRoot = await makeWorkspace(aaRoot, bbRoot);
+    const shown = await repoboard(wsRoot, 'card', 'show', bbId);
+    expect(shown.code).toBe(0);
+    expect(shown.out).toContain(`id: ${bbId}`);
+  });
+
+  it('two members sharing a prefix: a bare id errors naming BOTH keys; <key>:<id> always resolves', async () => {
+    const aaRoot = await boardRoot('AA');
+    const aa2Root = await boardRoot('AA');
+    await repoboard(aaRoot, 'card', 'add', 'aa card');
+    await repoboard(aa2Root, 'card', 'add', 'aa2 card');
+    const wsRoot = await makeTempDir('repoboard-ws-clash-');
+    dirs.push(wsRoot);
+    await mkdir(join(wsRoot, '.repoboard', 'cards'), { recursive: true });
+    await writeFile(
+      join(wsRoot, '.repoboard', 'board.yml'),
+      serializeBoard({
+        ...defaultBoardConfig(),
+        prefix: 'WS',
+        repos: [
+          { key: 'aa', root: relative(wsRoot, aaRoot) },
+          { key: 'aa2', root: relative(wsRoot, aa2Root) },
+        ],
+      }),
+    );
+    await writeStateMd(wsRoot);
+
+    const ambiguous = await repoboard(wsRoot, 'card', 'show', 'AA-1');
+    expect(ambiguous.code).toBe(1);
+    expect(ambiguous.err).toContain('aa');
+    expect(ambiguous.err).toContain('aa2');
+
+    const viaAa = await repoboard(wsRoot, 'card', 'show', 'aa:AA-1');
+    expect(viaAa.code).toBe(0);
+    expect(viaAa.out).toContain('aa card');
+    const viaAa2 = await repoboard(wsRoot, 'card', 'show', 'aa2:AA-1');
+    expect(viaAa2.code).toBe(0);
+    expect(viaAa2.out).toContain('aa2 card');
+  });
+
+  it('workspace-first (W4): a workspace card wins over a member sharing the workspace’s OWN prefix', async () => {
+    const bbRoot = await boardRoot('BB');
+    await repoboard(bbRoot, 'card', 'add', 'bb card'); // BB-1, on the member
+    const wsRoot = await makeTempDir('repoboard-ws-ownprefix-');
+    dirs.push(wsRoot);
+    await mkdir(join(wsRoot, '.repoboard', 'cards'), { recursive: true });
+    await writeFile(
+      join(wsRoot, '.repoboard', 'board.yml'),
+      serializeBoard({
+        ...defaultBoardConfig(),
+        prefix: 'BB', // same prefix as the member below — workspace-first must still win
+        repos: [{ key: 'bb', root: relative(wsRoot, bbRoot) }],
+      }),
+    );
+    await writeStateMd(wsRoot);
+    const wsCard = await repoboard(wsRoot, 'card', 'add', 'workspace card'); // BB-1, on the workspace
+    expect(wsCard.code).toBe(0);
+
+    const shown = await repoboard(wsRoot, 'card', 'show', 'BB-1');
+    expect(shown.code).toBe(0);
+    expect(shown.out).toContain('workspace card'); // the WORKSPACE's own BB-1, not the member's
+  });
+});
+
+describe('repoboard card list — gate across boards (RCB-153 §4 control 6)', () => {
+  it('a workspace card’s gate: BB-1 is blocked while BB-1 is todo, clear after `card move BB-1 done` through the workspace', async () => {
+    const aaRoot = await boardRoot('AA');
+    const bbRoot = await boardRoot('BB');
+    const addTarget = await repoboard(bbRoot, 'card', 'add', 'bb target', '--status', 'todo');
+    expect(addTarget.code).toBe(0);
+    const bbId = await lastCardId(bbRoot);
+
+    const wsRoot = await makeWorkspace(aaRoot, bbRoot); // bb carries `writes: cards`
+    const wsCard = await repoboard(wsRoot, 'card', 'add', 'ws gated card', '--gate', bbId);
+    expect(wsCard.code).toBe(0);
+
+    const before = await repoboard(wsRoot, 'card', 'list');
+    expect(before.code).toBe(0);
+    expect(before.out).toContain(`blocked on ${bbId} (todo)`);
+
+    const moved = await repoboard(wsRoot, 'card', 'move', bbId, 'done');
+    expect(moved.code).toBe(0);
+
+    const after = await repoboard(wsRoot, 'card', 'list');
+    expect(after.code).toBe(0);
+    expect(after.out).not.toContain('BLOCKED');
+    expect(after.out).not.toContain(`blocked on ${bbId}`);
+  });
+
+  it('control: gate ZZ-9 (matching no board at all) stays "no such card", workspace or not', async () => {
+    const aaRoot = await boardRoot('AA');
+    const bbRoot = await boardRoot('BB');
+    const wsRoot = await makeWorkspace(aaRoot, bbRoot);
+    const wsCard = await repoboard(wsRoot, 'card', 'add', 'gate on unknown', '--gate', 'ZZ-9');
+    expect(wsCard.code).toBe(0);
+    const listed = await repoboard(wsRoot, 'card', 'list');
+    expect(listed.code).toBe(0);
+    expect(listed.out).toContain('blocked on ZZ-9 (no such card)');
+  });
+});
+
+describe('repoboard card show — plain board (no repos:) regression', () => {
+  it('an unknown id on a plain board never touches resolveCardRef — the error text is byte-identical to before this card', async () => {
+    const root = await boardRoot('RB');
+    const shown = await repoboard(root, 'card', 'show', 'NOPE-1');
+    expect(shown.code).toBe(1);
+    expect(shown.err).toBe('repoboard: unknown card "NOPE-1"\n');
+  });
+});

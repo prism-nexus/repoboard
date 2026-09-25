@@ -6,6 +6,7 @@ import { describe, expect, it } from 'vitest';
 import { defaultBoardConfig } from '../src/board.js';
 import {
   blockedReason,
+  type GateMemberFacts,
   gateState,
   rollup,
   stepsOf,
@@ -128,6 +129,63 @@ describe('gateState / blockedReason', () => {
     expect(gateState(card, [card], noDone)).toEqual({
       kind: 'blocked',
       reason: 'blocked: owner buys the domain',
+    });
+  });
+});
+
+describe('gateState with member facts (RCB-153 W4/W5 gate) — additive', () => {
+  const config = defaultBoardConfig(); // this board's own prefix is 'RB'
+
+  function memberFacts(overrides: Partial<GateMemberFacts> = {}): GateMemberFacts {
+    return { key: 'bb', prefix: 'BB', cards: [], config, ...overrides };
+  }
+
+  it('a gate not found on THIS board resolves against a member by prefix (W4) — blocked while todo', () => {
+    const memberTarget = makeCard({ id: 'BB-1', status: 'todo' });
+    const card = makeCard({ id: 'RB-1', gate: 'BB-1' });
+    const members = [memberFacts({ cards: [memberTarget] })];
+    expect(gateState(card, [card], config, members)).toEqual({
+      kind: 'blocked',
+      reason: 'blocked on BB-1 (todo)',
+    });
+    expect(blockedReason(card, [card], config, members)).toBe('blocked on BB-1 (todo)');
+  });
+
+  it('the same member card, now done → clear, decided by the MEMBER’s own column, not this board’s', () => {
+    const memberTarget = makeCard({ id: 'BB-1', status: 'done' });
+    const card = makeCard({ id: 'RB-1', gate: 'BB-1' });
+    const members = [memberFacts({ cards: [memberTarget] })];
+    expect(gateState(card, [card], config, members)).toEqual({ kind: 'clear', by: 'BB-1 (done)' });
+    expect(blockedReason(card, [card], config, members)).toBeNull();
+  });
+
+  it('this board’s own prefix still wins first (W4 workspace-first), even with members passed', () => {
+    const ownTarget = makeCard({ id: 'RB-9', status: 'todo' });
+    const card = makeCard({ id: 'RB-1', gate: 'RB-9' });
+    // A member ALSO carrying an "RB-9" is never even consulted: the plain `cards.find` above any
+    // member lookup already found this board's own RB-9 first.
+    const members = [memberFacts({ cards: [makeCard({ id: 'RB-9', status: 'done' })] })];
+    expect(gateState(card, [card, ownTarget], config, members)).toEqual({
+      kind: 'blocked',
+      reason: 'blocked on RB-9 (todo)',
+    });
+  });
+
+  it('a gate matching no board’s prefix at all stays "no such card", members or not', () => {
+    const card = makeCard({ id: 'RB-1', gate: 'ZZ-9' });
+    const members = [memberFacts({ cards: [makeCard({ id: 'BB-1' })] })];
+    expect(gateState(card, [card], config, members)).toEqual({
+      kind: 'blocked',
+      reason: 'blocked on ZZ-9 (no such card)',
+    });
+  });
+
+  it('omitting `members` entirely (every single-board caller today) never resolves a foreign gate', () => {
+    const card = makeCard({ id: 'RB-1', gate: 'BB-1' });
+    // No 4th argument at all — the exact call every existing caller (rollup, seat, MCP, web) makes.
+    expect(gateState(card, [card], config)).toEqual({
+      kind: 'blocked',
+      reason: 'blocked on BB-1 (no such card)',
     });
   });
 });

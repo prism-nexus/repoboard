@@ -12,6 +12,7 @@
  */
 import { findColumn } from './board.js';
 import { isDecided } from './card.js';
+import { resolveCardRef, type WorkspaceBoardRef } from './card-ref.js';
 import type { BoardConfig, Card } from './types.js';
 
 /** `<PREFIX>-<n>`, e.g. `RCB-9` — what makes a `gate:` value a card reference rather than a
@@ -24,6 +25,19 @@ export type GateState =
   | { kind: 'blocked'; reason: string };
 
 /**
+ * RCB-153 W4/W5-gate: one member board's facts, as `gateState` needs them to try resolving a
+ * WORKSPACE card's `gate:` value against a card on ANOTHER board — raw facts only (`cards`,
+ * `config`), never a caller's own blocked/clear verdict, so this function computes a member's
+ * gate the exact same way it computes its own board's.
+ */
+export interface GateMemberFacts {
+  key: string;
+  prefix: string;
+  cards: readonly Card[];
+  config: BoardConfig;
+}
+
+/**
  * `card.gate`'s state, against `cards`/`config` (the whole board — a gate can name any card on
  * it, not just a sibling step). Absent gate → `none`. A gate naming a card on this board is
  * `clear` iff that card sits in a `done: true` column OR is decided (`isDecided`, which an owner
@@ -33,8 +47,20 @@ export type GateState =
  * `blocked`, cleared by removing the field by hand — OR, RCB-105: a card that itself sits in a
  * `done: true` column reads its own gate as history, `clear` with `by: "<gate> — card done"`
  * (a gate naming an already-clear card keeps today's `by` unchanged, e.g. `"RCB-9 (done)"`).
+ *
+ * RCB-153 W4/W5: `members`, when given, is a WORKSPACE's opened member boards — a gate not found
+ * on THIS board is then tried against them by the SAME prefix rule `resolveCardRef` gives a typed
+ * ref (this board's own prefix wins first, so this can never override the plain "no such card on
+ * THIS board" case above). `members` defaults to `[]`: every existing caller (a single board —
+ * `rollup` here, `state`/`seat`/MCP/web elsewhere) passes none, so this whole branch is a no-op
+ * for them and their output is byte-identical to before this card.
  */
-export function gateState(card: Card, cards: readonly Card[], config: BoardConfig): GateState {
+export function gateState(
+  card: Card,
+  cards: readonly Card[],
+  config: BoardConfig,
+  members: readonly GateMemberFacts[] = [],
+): GateState {
   const gate = card.gate;
   if (gate === undefined) return { kind: 'none' };
   const cardIsDone = findColumn(config, card.status)?.done === true;
@@ -51,6 +77,27 @@ export function gateState(card: Card, cards: readonly Card[], config: BoardConfi
   if (target) {
     return { kind: 'blocked', reason: `blocked on ${target.id} (${target.status})` };
   }
+  if (members.length > 0 && CARD_ID_SHAPE.test(gate)) {
+    const boards: WorkspaceBoardRef[] = [
+      { key: null, prefix: config.prefix },
+      ...members.map((m) => ({ key: m.key, prefix: m.prefix })),
+    ];
+    const resolved = resolveCardRef(gate, boards);
+    if (resolved.ok && resolved.key !== null) {
+      const member = members.find((m) => m.key === resolved.key);
+      const memberTarget = member?.cards.find((c) => c.id === resolved.id);
+      if (member && memberTarget) {
+        const memberColumn = findColumn(member.config, memberTarget.status);
+        if (memberColumn?.done === true || isDecided(memberTarget)) {
+          return { kind: 'clear', by: `${memberTarget.id} (${memberTarget.status})` };
+        }
+        return {
+          kind: 'blocked',
+          reason: `blocked on ${memberTarget.id} (${memberTarget.status})`,
+        };
+      }
+    }
+  }
   if (CARD_ID_SHAPE.test(gate)) {
     return { kind: 'blocked', reason: `blocked on ${gate} (no such card)` };
   }
@@ -62,8 +109,9 @@ export function blockedReason(
   card: Card,
   cards: readonly Card[],
   config: BoardConfig,
+  members: readonly GateMemberFacts[] = [],
 ): string | null {
-  const state = gateState(card, cards, config);
+  const state = gateState(card, cards, config, members);
   return state.kind === 'blocked' ? state.reason : null;
 }
 

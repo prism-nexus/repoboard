@@ -81,4 +81,23 @@ export class Workspace {
     }
     return out;
   }
+
+  /**
+   * RCB-153 slice 2, W5: the ONE function that decides whether a member may be WRITTEN to — every
+   * card write verb goes through this, never checking `writes:` itself. Throws the EXACT W5
+   * refusal text when the member's `writes:` is absent (`board.yml` never granted it — O7's
+   * "listing a repo is consent to read it; `writes: cards` is the explicit ask to write"), so
+   * every write verb reports the same wording. Opening only happens once that check passes, so a
+   * refused write never even opens the member's store.
+   */
+  async storeForWrite(key: string): Promise<CardStore> {
+    const member = this.members.find((m) => m.key === key);
+    if (!member) throw new Error(`unknown workspace member "${key}"`);
+    if (member.writes !== 'cards') {
+      throw new Error(`member ${key} is read-only (set writes: cards in board.yml)`);
+    }
+    const opening = this.open(key);
+    if (!opening) throw new Error(`unknown workspace member "${key}"`); // unreachable, found above
+    return opening;
+  }
 }

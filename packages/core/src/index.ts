@@ -27,6 +27,8 @@ export {
   SizeSchema,
   serializeCard,
 } from './card.js';
+export type { ResolveCardRefResult, WorkspaceBoardRef } from './card-ref.js';
+export { resolveCardRef } from './card-ref.js';
 export type {
   CostEntry,
   CostReport,
@@ -114,7 +116,7 @@ export {
 } from './log.js';
 export type { AddNoteOptions, AddNoteResult } from './notes.js';
 export { addNote } from './notes.js';
-export type { GateState } from './phases.js';
+export type { GateMemberFacts, GateState } from './phases.js';
 export {
   blockedReason,
   gateState,
@@ -327,10 +329,5 @@ export type {
   Window,
   WorkspaceRepo,
 } from './types.js';
-export type {
-  ResolveCardRefResult,
-  WorkspaceBoardRef,
-  WorkspaceLeasesMember,
-  WorkspaceOwnerQueueMember,
-} from './workspace.js';
-export { resolveCardRef, workspaceLeaseLines, workspaceOwnerQueueLines } from './workspace.js';
+export type { WorkspaceLeasesMember, WorkspaceOwnerQueueMember } from './workspace.js';
+export { workspaceLeaseLines, workspaceOwnerQueueLines } from './workspace.js';

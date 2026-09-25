@@ -6,7 +6,7 @@
 import { spawn } from 'node:child_process';
 import { realpathSync } from 'node:fs';
 import { mkdir, readFile, stat, writeFile } from 'node:fs/promises';
-import { dirname, join, relative, resolve } from 'node:path';
+import { basename, dirname, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { type ParseArgsConfig, parseArgs } from 'node:util';
 import {
@@ -36,6 +36,7 @@ import {
   formatSystemsTable,
   type GateCheckName,
   type GateCheckResult,
+  type GateMemberFacts,
   type GateRecord,
   initialStateText,
   isOwnerTask,
@@ -47,6 +48,7 @@ import {
   renderSeatBundle,
   renderSeatList,
   renderState,
+  resolveCardRef,
   resolveOlderThan,
   resolveSince,
   resolveTimeSpec,
@@ -63,6 +65,7 @@ import {
   systemsSummary,
   toIso,
   trimLandings,
+  type WorkspaceBoardRef,
   workspaceLeaseLines,
   workspaceOwnerQueueLines,
 } from '@repoboard/core';
@@ -86,11 +89,11 @@ import {
 import { formatResolvedRefs, resolveCardRefs, resolveRefSpec } from './refs.js';
 import { assignRepoKeys, hasBoardDir } from './repo-context.js';
 import { loadGateHealth, recordGate } from './repo-health.js';
-import { openStore } from './store.js';
+import { type CardStore, openStore } from './store.js';
 import { runDetect } from './systems-detect.js';
 import { systemTests } from './systems-tests.js';
 import { VERSION } from './version.js';
-import { Workspace } from './workspace.js';
+import { type OpenedWorkspaceMember, Workspace } from './workspace.js';
 
 export { VERSION };
 
@@ -133,7 +136,16 @@ Usage:
                                         --label l (repeatable) --file f (repeatable) --ref r (repeatable)
                                         --parent <id> --phase PH.<n> --gate <id|"sentence">
                                         --as actor
+                                        RCB-153: at a workspace root, --repo <key> creates it on
+                                        that member instead (needs \`writes: cards\`); absent means
+                                        the workspace itself
   repoboard card move <id> <status> [--as a]  move a card to a column
+                                        RCB-153: at a workspace root, <id> resolves across members
+                                        by prefix (W4: <PREFIX>-<n>, or <key>:<id> to disambiguate);
+                                        a member target needs \`writes: cards\` in board.yml, else
+                                        refused: "member <key> is read-only (set writes: cards in
+                                        board.yml)" — same resolution/refusal for move/update/ask/
+                                        decide/note below
   repoboard card update <id> [options]        --title t --assignee a --priority high|medium|low
                                         --size S|M|L|XL
                                         --label l --file f --ref r (repeatable; each one REPLACES
@@ -154,6 +166,10 @@ Usage:
                                         --parent lists that card's steps in phase order (ID PHASE
                                         STATUS ASSIGNEE GATE BLOCKED TITLE); --unblocked keeps
                                         the not-done, not-blocked ones
+                                        RCB-153: at a workspace root, --repo <key> lists just that
+                                        member's own table; --repo all lists every board (REPO
+                                        column first, workspace rows tagged with its own basename
+                                        key); --json rows gain a \`repo\` field either way
   repoboard card show <id> [--resolve] [--steps] [--json]  print the card file; --resolve appends
                                         the lines each refs: entry points at, read live from the
                                         file; an archived id prints
@@ -163,6 +179,8 @@ Usage:
                                         plus steps (compact rows, only with --steps) and refs
                                         (resolved, only with --resolve); an archived id prints
                                         {"archived": "<path>"}
+                                        RCB-153: at a workspace root, <id> resolves across members
+                                        by prefix (W4), same rule as \`card move\`
   repoboard card ask <id> "<question>" [--option "A1 <text>"]... [--as a] [--replace] [--task]
                                         open a decision on a card (P8.1); --replace withdraws one
                                         already open. With no options, the owner answers with --words.
@@ -483,6 +501,99 @@ async function requireRoot(io: CliIO): Promise<string> {
   return root;
 }
 
+// ---- RCB-153 slice 2: card verbs across a workspace (W4, W5) --------------------------------
+
+interface OpenedWorkspace {
+  workspace: Workspace;
+  opened: readonly OpenedWorkspaceMember[];
+  /** `resolveCardRef`'s board list: this board's own prefix first, then every OPENED member that
+   * actually has a board (W3 — a missing member's default-config prefix is not a real collision
+   * candidate). */
+  boards: readonly WorkspaceBoardRef[];
+}
+
+/**
+ * `null` when `repos:` is absent/empty — the ONLY signal any card verb uses to decide whether it
+ * is even AT a workspace. Every member is opened (read-only, memoised — W3) up front, because
+ * resolving one ref by prefix (W4) needs every OTHER member's prefix too, to detect a collision.
+ */
+async function openWorkspace(
+  root: string,
+  store: CardStore,
+  io: CliIO,
+): Promise<OpenedWorkspace | null> {
+  const repos = store.config.repos ?? [];
+  if (repos.length === 0) return null;
+  const workspace = new Workspace(root, repos, io.now);
+  const opened = await workspace.openAll();
+  const boards: WorkspaceBoardRef[] = [
+    { key: null, prefix: store.config.prefix },
+    ...opened
+      .filter((m) => m.store.hasBoard)
+      .map((m) => ({ key: m.key, prefix: m.store.config.prefix })),
+  ];
+  return { workspace, opened, boards };
+}
+
+/** RCB-153 gate (W4/W5): `opened`'s members as `gateState`'s member FACTS — raw `cards`/`config`,
+ * never a verdict this function itself computed. A missing member (`hasBoard: false`) contributes
+ * nothing to resolve against (W3: a finding elsewhere, not a crash here). */
+function gateMemberFacts(opened: readonly OpenedWorkspaceMember[]): GateMemberFacts[] {
+  return opened
+    .filter((m) => m.store.hasBoard)
+    .map((m) => ({
+      key: m.key,
+      prefix: m.store.config.prefix,
+      cards: m.store.list(),
+      config: m.store.config,
+    }));
+}
+
+/**
+ * W4: resolve `ref` for a READ verb (`card show`) — the SAME store/id, untouched, when `repos:`
+ * is absent/empty (the hard constraint: ids never go through `resolveCardRef` on a plain board,
+ * so every existing card-verb error text is byte-identical to before this card).
+ */
+async function resolveCardTarget(
+  root: string,
+  store: CardStore,
+  ref: string,
+  io: CliIO,
+): Promise<{ store: CardStore; id: string }> {
+  const ws = await openWorkspace(root, store, io);
+  if (!ws) return { store, id: ref };
+  const resolved = resolveCardRef(ref, ws.boards);
+  if (!resolved.ok) throw new UserError(resolved.error);
+  if (resolved.key === null) return { store, id: resolved.id };
+  const member = ws.opened.find((m) => m.key === resolved.key);
+  if (!member) throw new UserError(`unknown workspace member "${resolved.key}"`); // unreachable
+  return { store: member.store, id: resolved.id };
+}
+
+/**
+ * W4/W5: resolve `ref` for a WRITE verb (`move`/`note`/`ask`/`decide`/`update`) — same resolution
+ * as `resolveCardTarget`, but a member target must ALSO clear `Workspace.storeForWrite`, the ONE
+ * function that checks `writes: cards` (this function never checks it itself).
+ */
+async function resolveWriteTarget(
+  root: string,
+  store: CardStore,
+  ref: string,
+  io: CliIO,
+): Promise<{ store: CardStore; id: string }> {
+  const ws = await openWorkspace(root, store, io);
+  if (!ws) return { store, id: ref };
+  const resolved = resolveCardRef(ref, ws.boards);
+  if (!resolved.ok) throw new UserError(resolved.error);
+  if (resolved.key === null) return { store, id: resolved.id };
+  try {
+    const memberStore = await ws.workspace.storeForWrite(resolved.key);
+    return { store: memberStore, id: resolved.id };
+  } catch (e) {
+    throw new UserError((e as Error).message);
+  }
+}
+
 /**
  * P7.1/P7.2: where `serve` opens.
  *
@@ -680,11 +791,27 @@ async function cmdCardAdd(args: string[], io: CliIO): Promise<number> {
     gate: { type: 'string' },
     body: { type: 'string' },
     as: { type: 'string' },
+    repo: { type: 'string' },
   });
   const title = positionals.join(' ').trim();
   if (!title) throw new UserError('card add needs a title: repoboard card add "<title>"');
   const root = await requireRoot(io);
   const store = await openStore(root, { watch: false, now: io.now });
+  // RCB-153 W5: `--repo <key>` targets a member (needs `writes: cards`, the ONE check
+  // `Workspace.storeForWrite` owns); absent means the workspace itself — exactly today's target,
+  // for a plain board too, since `--repo` is never mentioned there (byte-identical default path).
+  let target = store;
+  if (values.repo !== undefined) {
+    const repos = store.config.repos ?? [];
+    if (repos.length === 0) {
+      throw new UserError('card add --repo requires repos: in board.yml (not a workspace)');
+    }
+    try {
+      target = await new Workspace(root, repos, io.now).storeForWrite(values.repo);
+    } catch (e) {
+      throw new UserError((e as Error).message);
+    }
+  }
   const input: CreateCardInput = { title };
   if (values.status !== undefined) input.status = values.status;
   if (values.assignee !== undefined) input.assignee = values.assignee;
@@ -699,7 +826,7 @@ async function cmdCardAdd(args: string[], io: CliIO): Promise<number> {
   if (values.phase !== undefined) input.phase = values.phase;
   if (values.gate !== undefined) input.gate = values.gate;
   if (values.body !== undefined) input.body = values.body;
-  const res = await store.create(input, actorFrom(values.as, io));
+  const res = await target.create(input, actorFrom(values.as, io));
   if (!res.ok) throw new UserError(res.error);
   const { card } = res;
   io.stdout.write(`created ${card.id} (${card.status}) ${card.title}\n`);
@@ -712,10 +839,13 @@ async function cmdCardMove(args: string[], io: CliIO): Promise<number> {
   if (!id || !status) throw new UserError('usage: repoboard card move <id> <status>');
   const root = await requireRoot(io);
   const store = await openStore(root, { watch: false, now: io.now });
-  const res = await store.move(id, status, actorFrom(values.as, io));
+  // RCB-153 W4/W5: `id` resolves across the workspace by prefix; a member target needs `writes:
+  // cards` (`resolveWriteTarget` → `Workspace.storeForWrite`, the one place that checks it).
+  const target = await resolveWriteTarget(root, store, id, io);
+  const res = await target.store.move(target.id, status, actorFrom(values.as, io));
   if (!res.ok) throw new UserError(res.error);
   for (const w of res.warnings) (io.stderr ?? io.stdout).write(`warning: ${w}\n`);
-  io.stdout.write(`moved ${id} ${res.event.from} → ${res.event.to}\n`);
+  io.stdout.write(`moved ${target.id} ${res.event.from} → ${res.event.to}\n`);
   return 0;
 }
 
@@ -837,7 +967,8 @@ async function cmdCardUpdate(args: string[], io: CliIO): Promise<number> {
   }
   const root = await requireRoot(io);
   const store = await openStore(root, { watch: false, now: io.now });
-  const res = await store.update(id, patch, actorFrom(values.as, io));
+  const target = await resolveWriteTarget(root, store, id, io);
+  const res = await target.store.update(target.id, patch, actorFrom(values.as, io));
   if (!res.ok) throw new UserError(res.error);
   io.stdout.write(`updated ${res.card.id} ${changed.join(', ')}\n`);
   return 0;
@@ -871,18 +1002,19 @@ async function cmdCardAsk(args: string[], io: CliIO): Promise<number> {
   const kind = values.task ? ('task' as const) : undefined;
   const root = await requireRoot(io);
   const store = await openStore(root, { watch: false, now: io.now });
-  const res = await store.ask(
-    id,
+  const target = await resolveWriteTarget(root, store, id, io);
+  const res = await target.store.ask(
+    target.id,
     { question, options, replace: values.replace, kind },
     actorFrom(values.as, io),
   );
   if (!res.ok) throw new UserError(res.error);
   for (const w of res.warnings) (io.stderr ?? io.stdout).write(`warning: ${w}\n`);
   if (values.task) {
-    io.stdout.write(`owner task ${id}: ${question}\n`);
+    io.stdout.write(`owner task ${target.id}: ${question}\n`);
   } else {
     const n = options.length;
-    io.stdout.write(`asked ${id}: ${question} (${n} option${n === 1 ? '' : 's'})\n`);
+    io.stdout.write(`asked ${target.id}: ${question} (${n} option${n === 1 ? '' : 's'})\n`);
   }
   return 0;
 }
@@ -898,15 +1030,24 @@ async function cmdCardDecide(args: string[], io: CliIO): Promise<number> {
   }
   const root = await requireRoot(io);
   const store = await openStore(root, { watch: false, now: io.now });
-  const res = await store.decide(id, { letter, words: values.words }, actorFrom(values.as, io));
+  const target = await resolveWriteTarget(root, store, id, io);
+  const res = await target.store.decide(
+    target.id,
+    { letter, words: values.words },
+    actorFrom(values.as, io),
+  );
   if (!res.ok) throw new UserError(res.error);
   for (const w of res.warnings) (io.stderr ?? io.stdout).write(`warning: ${w}\n`);
   const chosen = res.card.decision?.chosen ?? null;
   const words = res.card.decision?.words ?? undefined;
   if (isOwnerTask(res.card)) {
-    io.stdout.write(words !== undefined ? `done ${id} — "${words}"\n` : `done ${id}\n`);
+    io.stdout.write(
+      words !== undefined ? `done ${target.id} — "${words}"\n` : `done ${target.id}\n`,
+    );
   } else {
-    io.stdout.write(chosen !== null ? `decided ${id} ${chosen}\n` : `decided ${id} — "${words}"\n`);
+    io.stdout.write(
+      chosen !== null ? `decided ${target.id} ${chosen}\n` : `decided ${target.id} — "${words}"\n`,
+    );
   }
   return 0;
 }
@@ -921,9 +1062,10 @@ async function cmdCardNote(args: string[], io: CliIO): Promise<number> {
   }
   const root = await requireRoot(io);
   const store = await openStore(root, { watch: false, now: io.now });
-  const res = await store.addNote(id, text, actorFrom(values.as, io));
+  const target = await resolveWriteTarget(root, store, id, io);
+  const res = await target.store.addNote(target.id, text, actorFrom(values.as, io));
   if (!res.ok) throw new UserError(res.error);
-  io.stdout.write(`noted ${id}\n`);
+  io.stdout.write(`noted ${target.id}\n`);
   return 0;
 }
 
@@ -951,15 +1093,25 @@ function renderFixedWidthTable(header: string[], rows: string[][]): string {
   return [line(header), ...rows.map(line)].join('\n');
 }
 
-export function formatTable(cards: Card[], all: readonly Card[], config: BoardConfig): string {
+/**
+ * RCB-153 W4/W5-gate: `members`, when given, is a WORKSPACE's opened member boards — a listed
+ * card's `gate:` can then resolve against them (`blockedReason`'s own trailing arg). Defaults to
+ * `[]`: every plain-board call (no `repos:`) is byte-identical to before this card.
+ */
+export function formatTable(
+  cards: Card[],
+  all: readonly Card[],
+  config: BoardConfig,
+  members: readonly GateMemberFacts[] = [],
+): string {
   const anySize = cards.some((c) => c.size !== undefined);
   const anyDecision = cards.some((c) => needsDecision(c));
-  const anyBlocked = cards.some((c) => blockedReason(c, all, config) !== null);
+  const anyBlocked = cards.some((c) => blockedReason(c, all, config, members) !== null);
   const rows = cards.map((c) => {
     const row = [c.id, c.status, c.assignee ?? '-'];
     if (anySize) row.push(c.size ?? '');
     if (anyDecision) row.push(needsDecision(c) ? (isOwnerTask(c) ? '!' : '?') : '');
-    if (anyBlocked) row.push(blockedReason(c, all, config) ?? '');
+    if (anyBlocked) row.push(blockedReason(c, all, config, members) ?? '');
     row.push(c.title);
     return row;
   });
@@ -969,6 +1121,42 @@ export function formatTable(cards: Card[], all: readonly Card[], config: BoardCo
   if (anyBlocked) header.push('BLOCKED');
   header.push('TITLE');
   return renderFixedWidthTable(header, rows);
+}
+
+/**
+ * RCB-153 W5: `card list --repo all` — every board's cards in one table, a REPO column FIRST
+ * (`repos:` order, workspace rows tagged with its own basename key — same shape `GET /api/repos`
+ * gives the workspace's own primary, W6). Each row keeps its OWN board's `all`/`config` for
+ * `blockedReason` (a gate may point outside that board's OWN filtered rows, never another
+ * board's), and its own `members` facts (only the workspace's rows carry the W4/W5-gate member
+ * list — a member's own gate stays single-board, W5's "clear-ness from the MEMBER's own config").
+ */
+interface RepoTableRow {
+  key: string;
+  card: Card;
+  all: readonly Card[];
+  config: BoardConfig;
+  members: readonly GateMemberFacts[];
+}
+
+function formatTableAcrossRepos(rows: readonly RepoTableRow[]): string {
+  const anySize = rows.some((r) => r.card.size !== undefined);
+  const anyDecision = rows.some((r) => needsDecision(r.card));
+  const anyBlocked = rows.some((r) => blockedReason(r.card, r.all, r.config, r.members) !== null);
+  const tableRows = rows.map(({ key, card, all, config, members }) => {
+    const row = [key, card.id, card.status, card.assignee ?? '-'];
+    if (anySize) row.push(card.size ?? '');
+    if (anyDecision) row.push(needsDecision(card) ? (isOwnerTask(card) ? '!' : '?') : '');
+    if (anyBlocked) row.push(blockedReason(card, all, config, members) ?? '');
+    row.push(card.title);
+    return row;
+  });
+  const header = ['REPO', 'ID', 'STATUS', 'ASSIGNEE'];
+  if (anySize) header.push('SIZE');
+  if (anyDecision) header.push('DECISION');
+  if (anyBlocked) header.push('BLOCKED');
+  header.push('TITLE');
+  return renderFixedWidthTable(header, tableRows);
 }
 
 /**
@@ -993,6 +1181,93 @@ export function formatStepsTable(steps: Card[], all: readonly Card[], config: Bo
   return renderFixedWidthTable(header, rows);
 }
 
+/**
+ * RCB-153 W5: `card list --repo <key>|all` at a workspace — `<key>` is one member's own table
+ * (plain, no REPO column: the caller already knows which board it asked for); `all` is every
+ * board (workspace first, its own basename key, then every member in `repos:` order),
+ * `formatTableAcrossRepos`'s REPO-first table. `--json` always gains a `repo` field either way.
+ */
+async function cmdCardListAcrossRepos(
+  root: string,
+  store: CardStore,
+  repo: string,
+  filters: {
+    status: string | undefined;
+    size: Size | undefined;
+    needsDecision: boolean;
+    parent: string | undefined;
+    unblocked: boolean;
+  },
+  json: boolean,
+  full: boolean,
+  io: CliIO,
+): Promise<number> {
+  const repos = store.config.repos ?? [];
+  if (repos.length === 0) {
+    throw new UserError('card list --repo requires repos: in board.yml (not a workspace)');
+  }
+  const opened = await new Workspace(root, repos, io.now).openAll();
+  const workspaceKey = basename(root).toLowerCase();
+  const members = gateMemberFacts(opened);
+  let targets: { key: string; store: CardStore; members: readonly GateMemberFacts[] }[];
+  if (repo === 'all') {
+    targets = [
+      { key: workspaceKey, store, members },
+      ...opened.map((m) => ({ key: m.key, store: m.store, members: [] as GateMemberFacts[] })),
+    ];
+  } else if (repo === workspaceKey) {
+    targets = [{ key: workspaceKey, store, members }];
+  } else {
+    const member = opened.find((m) => m.key === repo);
+    if (!member) throw new UserError(`unknown workspace member "${repo}"`);
+    targets = [{ key: member.key, store: member.store, members: [] }];
+  }
+
+  const rows: RepoTableRow[] = [];
+  for (const t of targets) {
+    const boardAll = t.store.list();
+    let cards: Card[];
+    try {
+      cards = filterCards(boardAll, t.store.config, filters);
+    } catch (e) {
+      throw new UserError((e as Error).message);
+    }
+    for (const card of cards) {
+      rows.push({ key: t.key, card, all: boardAll, config: t.store.config, members: t.members });
+    }
+  }
+
+  if (json) {
+    const jsonRows = rows.map(({ key, card, all, config, members: m }) => ({
+      ...(full
+        ? card
+        : { ...toRow(card, all, config), blocked: blockedReason(card, all, config, m) }),
+      repo: key,
+    }));
+    io.stdout.write(`${formatRows(jsonRows)}\n`);
+    return 0;
+  }
+  if (targets.length > 1) {
+    io.stdout.write(`${formatTableAcrossRepos(rows)}\n`);
+    return 0;
+  }
+  const only = targets[0];
+  if (!only) throw new Error('unreachable: targets is non-empty'); // repo==='all' always has >=1
+  const cards = rows.map((r) => r.card);
+  io.stdout.write(
+    `${
+      filters.parent !== undefined
+        ? formatStepsTable(cards, only.store.list(), only.store.config)
+        : formatTable(cards, only.store.list(), only.store.config, only.members)
+    }\n`,
+  );
+  if (only.store.invalid.length > 0) {
+    const err = io.stderr ?? io.stdout;
+    for (const inv of only.store.invalid) err.write(`invalid: ${inv.path}: ${inv.error}\n`);
+  }
+  return 0;
+}
+
 async function cmdCardList(args: string[], io: CliIO): Promise<number> {
   const { values } = parse('card', args, {
     status: { type: 'string' },
@@ -1002,6 +1277,7 @@ async function cmdCardList(args: string[], io: CliIO): Promise<number> {
     'needs-decision': { type: 'boolean', default: false },
     parent: { type: 'string' },
     unblocked: { type: 'boolean', default: false },
+    repo: { type: 'string' },
   });
   if (values.full && !values.json) throw new UserError('--full only applies with --json');
   if (values.unblocked && values.parent === undefined) {
@@ -1010,6 +1286,25 @@ async function cmdCardList(args: string[], io: CliIO): Promise<number> {
   const size = sizeFrom(values.size);
   const root = await requireRoot(io);
   const store = await openStore(root, { watch: false, now: io.now });
+  // RCB-153 W5: `--repo` is a workspace-only flag; absent means exactly today's single-board
+  // listing (byte-identical — the hard constraint every existing `card list` test relies on).
+  if (values.repo !== undefined) {
+    return await cmdCardListAcrossRepos(
+      root,
+      store,
+      values.repo,
+      {
+        status: values.status,
+        size,
+        needsDecision: values['needs-decision'],
+        parent: values.parent,
+        unblocked: values.unblocked,
+      },
+      values.json,
+      values.full,
+      io,
+    );
+  }
   const all = store.list();
   const parentId = values.parent;
   let cards: Card[];
@@ -1024,15 +1319,31 @@ async function cmdCardList(args: string[], io: CliIO): Promise<number> {
   } catch (e) {
     throw new UserError((e as Error).message);
   }
+  // RCB-153 W4/W5-gate: member facts for a workspace's OWN cards' `gate:` resolution — `[]` (a
+  // no-op) when `repos:` is absent/empty, so a plain board's BLOCKED column is unchanged.
+  const repos = store.config.repos ?? [];
+  const members =
+    repos.length > 0 ? gateMemberFacts(await new Workspace(root, repos, io.now).openAll()) : [];
   if (values.json) {
     // Compact rows by default (K6): bodies only with --full. Same shape as MCP list_cards.
     io.stdout.write(
-      `${formatRows(values.full ? cards : cards.map((c) => toRow(c, all, store.config)))}\n`,
+      `${formatRows(
+        values.full
+          ? cards
+          : cards.map((c) => ({
+              ...toRow(c, all, store.config),
+              blocked: blockedReason(c, all, store.config, members),
+            })),
+      )}\n`,
     );
     return 0;
   }
   io.stdout.write(
-    `${parentId !== undefined ? formatStepsTable(cards, all, store.config) : formatTable(cards, all, store.config)}\n`,
+    `${
+      parentId !== undefined
+        ? formatStepsTable(cards, all, store.config)
+        : formatTable(cards, all, store.config, members)
+    }\n`,
   );
   if (store.invalid.length > 0) {
     const err = io.stderr ?? io.stdout;
@@ -1047,10 +1358,14 @@ async function cmdCardShow(args: string[], io: CliIO): Promise<number> {
     steps: { type: 'boolean', default: false },
     json: { type: 'boolean', default: false },
   });
-  const [id] = positionals;
-  if (!id) throw new UserError('usage: repoboard card show <id> [--resolve] [--steps] [--json]');
+  const [ref] = positionals;
+  if (!ref) throw new UserError('usage: repoboard card show <id> [--resolve] [--steps] [--json]');
   const root = await requireRoot(io);
-  const store = await openStore(root, { watch: false, now: io.now });
+  const openedStore = await openStore(root, { watch: false, now: io.now });
+  // RCB-153 W4: `ref` resolves across the workspace by prefix; a plain board (no `repos:`) never
+  // calls `resolveCardRef` at all, so `id`/`store` below are the SAME `ref`/`openedStore` as
+  // before this card — every existing error text (e.g. `unknown card "NOPE-1"`) is byte-identical.
+  const { store, id } = await resolveCardTarget(root, openedStore, ref, io);
   const card = store.get(id);
   if (!card) {
     const archivedPath = join(store.repoboardDir, 'archive', `${id}.md`);
@@ -1059,7 +1374,7 @@ async function cmdCardShow(args: string[], io: CliIO): Promise<number> {
       () => false,
     );
     if (isArchived) {
-      const archivedRel = relative(root, archivedPath);
+      const archivedRel = relative(store.root, archivedPath);
       if (values.json) {
         io.stdout.write(`${JSON.stringify({ archived: archivedRel }, null, 2)}\n`);
         return 0;

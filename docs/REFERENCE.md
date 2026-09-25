@@ -446,17 +446,45 @@ every board runs) and every one of its findings is prefixed `[<key>] `. Exit cod
 `exitCodeForFindings` call over the combined list — the worst of the workspace's own and every
 member's.
 
-**Card-id resolution (W4) is ready but not wired to any verb yet** — `resolveCardRef(ref, boards)`
-(`packages/core/src/workspace.ts`) is pure: a bare `<PREFIX>-<n>` checks the workspace's own prefix
-first, then exactly one member's; a prefix two members share is an error naming both keys and
-`<key>:<id>` is always accepted for a known key. Slice 2 wires this into `card show`/`note`/`move`/
-`ask`/`decide`/`update` and `gate <id>`; slice 3 wires `serve`/`mcp`/`init --workspace`.
+**Card-id resolution (W4) — wired into `card show`/`list`, plus every write verb (RCB-153 slice
+2).** `resolveCardRef(ref, boards)` is pure and now lives in its own leaf module,
+`packages/core/src/card-ref.ts` (still re-exported from `workspace.ts`, so no existing import of it
+needs to change): a bare `<PREFIX>-<n>` checks the workspace's own prefix first, then exactly one
+member's; a prefix two members share is an error naming both keys and `<key>:<id>` is always
+accepted for a known key. At a workspace root:
+
+- `card show <ref>` resolves `<ref>` by W4 and reads that board's own card (a plain board, no
+  `repos:`, never calls `resolveCardRef` at all — every existing error text is byte-identical).
+- `card move/note/ask/decide/update <ref>` resolve the same way, then write through
+  `Workspace.storeForWrite(key)` (`packages/server/src/workspace.ts`) — the ONE function that
+  checks `writes: cards`; every write verb goes through it and none checks `writes` itself. A
+  member with no `writes:` refuses with the exact text `member <key> is read-only (set writes:
+  cards in board.yml)`, and its tree is left byte-identical (the write never opens the member's
+  store when the check fails). `card add` targets `--repo <key>` instead (absent = the workspace
+  itself, unaffected by `writes:`).
+- `card list --repo <key>` is that one member's own table (unchanged shape); `--repo all` is every
+  board's cards in one table, a `REPO` column first (`repos:` order, the workspace's own rows
+  tagged with its own basename key, the same key `GET /api/repos` will give it in W6). `--json`
+  rows gain a `repo` field either way. With no `--repo` at all, `card list` is exactly the
+  workspace's own cards, unaffected.
+- A WORKSPACE card's `gate: <id>` resolves the same way (W4) when its target isn't found on the
+  workspace's own board: core's `gateState`/`blockedReason` (`packages/core/src/phases.ts`) take an
+  OPTIONAL trailing `members: GateMemberFacts[]` (`{key, prefix, cards, config}`, never a verdict) —
+  a member's own `done`/decided column decides clear-ness, from that member's OWN config. Every
+  existing single-board caller (`rollup`, `seat`, MCP, web) passes none, so their output is
+  byte-identical. Wired into `card list`'s BLOCKED column at a workspace root; `seat`/`state`/mcp/
+  web stay single-board this slice (open for slice 3).
+
+`serve`/`mcp`/`init --workspace` stay single-board (slice 3).
 
 | Command | Example |
 |---|---|
 | `repoboard state` (workspace root) | OWNER QUEUE/LEASES aggregate every configured member, `[<key>] `-prefixed, after the workspace's own lines |
 | `repoboard state --json` (workspace root) | adds `repos: { <key>: { ownerQueue, leases, missing? } }` |
 | `repoboard check` (workspace root) | runs `check` on the workspace, then every member, `[<key>] `-prefixed; a missing member is `workspace-member-missing` (error); exit = the worst of all of them |
+| `repoboard card show BB-1` (workspace root) | resolves to the member whose prefix is `BB`, reads its card |
+| `repoboard card move BB-1 done` (workspace root) | resolved the same way, written through `bb`'s own store — refused if `bb` has no `writes: cards` |
+| `repoboard card list --repo all` (workspace root) | every board's cards, `REPO ID STATUS ASSIGNEE … TITLE` |
 
 ## 4. Cost — what a cold agent loads, against a budget (P8.4)
 

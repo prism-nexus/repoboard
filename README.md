@@ -254,9 +254,14 @@ only by the tests' MCP client.
 - ~~**K15** `systems detect` proposed `env: [dev, prod]` even when `environments.prod` is `none`~~
   Closed 2026-09-24 (RCB-123): `applyDetected` drops a `none` env from systems and connections;
   a list that would become empty is kept as detected.
-- **K16** `serve`'s repo watcher can drop a file change that lands right after chokidar's `ready`
+- ~~**K16** `serve`'s repo watcher can drop a file change that lands right after chokidar's `ready`
   (macOS fs.watch; RCB-117 measured it in the K12 T4 test: 2 of 8 full-suite runs, watcher alive,
   scanCount unchanged for 8000 ms, a later write rescanned normally). The initial scan also runs
   before the watcher starts, so a file created in that gap waits for the next change. Harmless on
   a live repo (the next save rescans); a one-shot rescan after `ready` in `repo-context.ts` would
-  close the scan→watch gap but not a dropped event. Filed 2026-09-23.
+  close the scan→watch gap but not a dropped event. Filed 2026-09-23.~~ Closed 2026-09-25
+  (RCB-125): `ensureScanned()` fires that one rescan on the watcher's `ready` — the same debounced
+  path a real change already takes — without awaiting it, so a first map load still resolves the
+  moment `ready` does. A file created in the scan→watch gap is in the snapshot once the rescan
+  lands; the separate RCB-117 dropped-fs-event race is unchanged (still self-healing on the next
+  save).

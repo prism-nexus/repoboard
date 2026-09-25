@@ -9,6 +9,7 @@ import { join } from 'node:path';
 import { promisify } from 'node:util';
 import { afterEach, describe, expect, it } from 'vitest';
 import { startServer } from '../src/http.js';
+import { openRepoContext } from '../src/repo-context.js';
 import { openStore } from '../src/store.js';
 import { makeTempDir, sleep, waitUntil } from './helpers.js';
 
@@ -103,6 +104,12 @@ describe('K12 T3: a hard cap degrades to no-watch', () => {
     const res = await fetch(`${url}/api/board`);
     expect(res.status).toBe(200);
 
+    // RCB-125: `ready` now also fires one background rescan (K16 half 1), landing here whether
+    // or not the cap then shuts the watcher off. Settle to that count before capturing
+    // `scanCountBefore` — otherwise this rescan can land AFTER the capture (a race against the
+    // fetch above, decided by process-spawn timing) and falsely fail the "no further scan"
+    // assertion below.
+    await waitUntil(() => server.scanCount() === 2, 4000);
     const scanCountBefore = server.scanCount();
     await writeFile(join(root, 'new-file.txt'), 'hello\n');
     await sleep(2500); // longer than the 2000ms default debounce
@@ -131,4 +138,55 @@ describe('K12 T4: an untracked-but-not-ignored new file still triggers a rescan'
     expect(server.scanCount()).toBeGreaterThan(scanCountBefore);
     expect(server.repo()?.files.map((f) => f.path)).toContain('fresh.txt');
   }, 12000);
+});
+
+describe('RCB-125 K16 half 1: one non-blocking rescan on watcher ready closes the initial-scan gap', () => {
+  it('a file created between the initial scan and `ready` is missing right after ensureScanned() resolves, then appears once the background rescan lands — with no further scan needed', async () => {
+    const root = await makeTempDir('repoboard-ready-gap-');
+    cleanups.push(() => rm(root, { recursive: true, force: true }));
+    await git(root, 'init', '-q', '-b', 'main');
+    await writeFile(join(root, 'README.md'), '# hi\n');
+    await git(root, 'add', '.');
+    await git(root, 'commit', '-q', '-m', 'one');
+
+    const store = await openStore(root, {
+      watch: false,
+      now: () => new Date('2026-09-17T00:00:00Z'),
+    });
+    cleanups.push(() => store.close());
+
+    const ctx = await openRepoContext('primary', {
+      store,
+      fun: true,
+      scan: true,
+      watchRepo: true,
+      rescanDebounceMs: 2000,
+      watchCap: 20_000,
+      warn: () => undefined,
+      siblingsFlag: [],
+      // RCB-125 test seam (repo-context.ts `afterInitialScan`): fires once the initial scan has
+      // resolved but before the repo watcher is created — the exact gap K16 names.
+      afterInitialScan: () => writeFile(join(root, 'gap.txt'), 'created in the gap\n'),
+    });
+    cleanups.push(() => ctx.close());
+
+    await ctx.ensureScanned();
+
+    // RCB-125 half 1: `ensureScanned()` resolves the moment `ready` fires, same as before this
+    // change — it does NOT await the rescan `ready` also triggers. The gap file must therefore be
+    // ABSENT here: were it already present, the rescan would have been awaited (the parked
+    // patch's behaviour this brief rejected, since it puts a second full scan in front of every
+    // first map load).
+    expect(ctx.scanCount()).toBe(1);
+    expect(ctx.repo()?.files.map((f) => f.path)).not.toContain('gap.txt');
+
+    // The one rescan `ready` fires lands in the background; once it does, it must have picked up
+    // the gap file.
+    await waitUntil(() => ctx.scanCount() === 2, 4000);
+    expect(ctx.repo()?.files.map((f) => f.path)).toContain('gap.txt');
+
+    const scanCountAfterReady = ctx.scanCount();
+    await sleep(2500); // longer than the 2000ms debounce; no further change should arrive
+    expect(ctx.scanCount()).toBe(scanCountAfterReady);
+  });
 });

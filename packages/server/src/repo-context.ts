@@ -582,6 +582,9 @@ export interface RepoContextOptions {
   /** Whatever the store already uses; do not add a second clock. Only needed to open OTHER
    * roots' stores the same way (`RepoRegistry.openRepo`) — a context never calls this itself. */
   now?: () => Date;
+  /** RCB-125 test seam only: fires once the initial scan has resolved but before the repo
+   * watcher is created — the exact gap K16 names. Production callers never set this. */
+  afterInitialScan?: () => Promise<void> | void;
 }
 
 export interface RepoContext {
@@ -750,6 +753,7 @@ export async function openRepoContext(key: string, opts: RepoContextOptions): Pr
     if (scanStarted) return scanStarted;
     scanStarted = (async () => {
       if (scan) await doScan(true);
+      await opts.afterInitialScan?.();
 
       // K12: the watcher's ignore rule must agree with the scanner's idea of "the repo" — see
       // watch-ignore.ts's own header for the measured cause. `gitIgnoredPaths` is empty (not
@@ -783,8 +787,19 @@ export async function openRepoContext(key: string, opts: RepoContextOptions): Pr
 
         // Wait for the watcher to settle before counting what it holds — an error before `ready`
         // (e.g. an EMFILE mid-walk) must not hang startup either.
+        // RCB-125 (K16, half 1): a file created between the initial scan (above) and this
+        // `ready` is invisible to the snapshot until the next change. One rescan — the same
+        // debounced path a real change takes (`rescan()`, above) — closes that gap. It is fired
+        // here but NOT awaited: `ensureScanned()` still resolves the moment `ready` does, exactly
+        // as it did before this change (the parked patch awaited it and pushed a second full scan
+        // in front of the first map load; that regression is why this fires-and-forgets instead).
+        // `rescan()` -> `doScan(false)` already swallows its own errors, so this can never turn
+        // into a rejection nobody is watching for.
         await new Promise<void>((res) => {
-          watcher.once('ready', res);
+          watcher.once('ready', () => {
+            void rescan();
+            res();
+          });
           watcher.once('error', () => res());
         });
         if (repoWatcher) {

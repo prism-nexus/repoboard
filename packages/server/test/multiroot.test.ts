@@ -15,7 +15,14 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { WebSocket } from 'ws';
 import { type RunningServer, startServer } from '../src/http.js';
 import { openStore } from '../src/store.js';
-import { cardText, makeTempDir, makeTempRepoboard, makeTempRepoNoBoard, NOW } from './helpers.js';
+import {
+  cardText,
+  makeTempDir,
+  makeTempRepoboard,
+  makeTempRepoNoBoard,
+  NOW,
+  waitUntil,
+} from './helpers.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -195,7 +202,13 @@ describe('RCB-43 slice 1: startServer({roots}) and GET /api/repos', () => {
     expect(ctx1.watchedPaths()).toEqual([]);
 
     await ctx1.ensureScanned();
-    expect(ctx1.scanCount()).toBe(1);
+    // RCB-125: `ensureScanned()` now resolves the moment the watcher's `ready` fires, WITHOUT
+    // waiting for the rescan `ready` also triggers (K16 half 1) — so the count right here can be
+    // 1 (rescan still in flight) or 2 (already landed), depending on how fast the background scan
+    // ran relative to this line. Waiting for the settled count, rather than asserting immediately,
+    // is what makes this deterministic instead of a race two different ways could pass.
+    await waitUntil(() => ctx1.scanCount() === 2, 4000);
+    expect(ctx1.scanCount()).toBe(2);
   });
 
   it('5. read-only: opening and scanning a no-board root writes nothing into it', async () => {
@@ -365,7 +378,12 @@ describe('RCB-43 slice 2: /api/repos/<key>/… and the per-root WS', () => {
     expect(repoRes.status).toBe(200);
     const body = await jsonOf<{ files: unknown[] }>(repoRes);
     expect(Array.isArray(body.files)).toBe(true);
-    expect(server.context(bKey)?.scanCount()).toBe(1);
+    // RCB-125: the `/repo` route awaits `ensureScanned()`, which now resolves on `ready` without
+    // waiting for the rescan `ready` also fires (K16 half 1) — so the count right after the HTTP
+    // round trip can already be 2, not 1, depending on timing. Wait for the settled count instead
+    // of asserting the count this instant.
+    await waitUntil(() => server.context(bKey)?.scanCount() === 2, 4000);
+    expect(server.context(bKey)?.scanCount()).toBe(2);
   });
 
   it("5. per-root WS: connects to b's snapshot, card:move moves b's card only; a's /ws client gets nothing", async () => {

@@ -5,7 +5,11 @@ All notable changes to this project are documented in this file. The format is b
 
 ## [Unreleased]
 
+## [0.2.0] — 2026-09-25
+
 ### Highlights
+
+What changed since 0.1.0, card ids in parentheses point at `.repoboard/cards/<id>.md`:
 
 - **Workspace: one board that coordinates several (RCB-153).** A `board.yml` with `repos:` (each
   `{key, root, writes?}`) makes a board a workspace over member boards. At its root: `state` and
@@ -18,13 +22,6 @@ All notable changes to this project are documented in this file. The format is b
   (tool count unchanged, and a board without `repos:` sees a byte-identical `tools/list`).
   Members are read-only unless listed with `writes: cards`, and even then a write touches only
   that member's card file and its `events.jsonl`.
-
-## [0.2.0] — 2026-09-25
-
-### Highlights
-
-What changed since 0.1.0, card ids in parentheses point at `.repoboard/cards/<id>.md`:
-
 - **The systems map (Flow view).** The `systems.yml` model and layout (RCB-95); `systems detect
   [--root] [--apply] [--json]` — dry-run default, provenance stamped, hand rows win, and a
   `none` environment is now dropped from systems and connections instead of proposed (RCB-96;

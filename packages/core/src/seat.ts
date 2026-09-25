@@ -5,7 +5,12 @@
  * `SeatBundleInput`, this file turns it into a `SeatBundle` and renders it.
  */
 import { defaultBoardConfig, findColumn } from './board.js';
-import { needsDecision } from './decisions.js';
+import {
+  type AnsweredDecisionRow,
+  answeredDecisions,
+  formatAnsweredChoice,
+  needsDecision,
+} from './decisions.js';
 import { blockedReason, gateState, stepsOf } from './phases.js';
 import { formatLogBlock, type LogBlock } from './repolog.js';
 import { ownerQueueLine } from './state.js';
@@ -63,6 +68,10 @@ export interface SeatBundle {
   nextCardStep: { parentId: string; gateBy: string | null } | null;
   /** `needsDecision(c)`, list order — reused from `decisions.ts`, never re-derived. */
   openDecisions: Card[];
+  /** RCB-129: `answeredDecisions(cards).filter(r => !r.acknowledged)` — the owner answered on
+   *  another surface (typically the web) and nothing here changed otherwise; a seat's cold-start
+   *  read is the first place that would notice. Never re-derived by `renderSeatBundle`. */
+  answeredNotAck: AnsweredDecisionRow[];
   /**
    * RCB-118: non-null exactly when `nextCard` is null — a cold seat's "there is no todo card for
    * you" broken into WHY, so it can tell an empty board from one whose work is gated, owner-held,
@@ -582,6 +591,7 @@ export function seatBundle(input: SeatBundleInput): SeatBundle {
   }
 
   const openDecisions = input.cards.filter((c) => needsDecision(c));
+  const answeredNotAck = answeredDecisions(input.cards).filter((r) => !r.acknowledged);
 
   /**
    * RCB-118: WHY `nextCard` is null, computed only in that case (never for a seat that has a next
@@ -616,6 +626,7 @@ export function seatBundle(input: SeatBundleInput): SeatBundle {
     nextCardReason,
     nextCardStep: nextCardReason === 'parent-step' ? nextCardStep : null,
     openDecisions,
+    answeredNotAck,
     nextCardEmpty,
     rig: input.rig ?? null,
     inFlight: fields.inFlight,
@@ -624,6 +635,15 @@ export function seatBundle(input: SeatBundleInput): SeatBundle {
     // Any bullet counts, stamped or not — `listSeats` keeps only stamped ones.
     solo: bulletSpans((input.seatsSection ?? '').split('\n')).length === 0,
   };
+}
+
+/** RCB-129: one line of the seat bundle's "Answered, not acknowledged" block — same shape as
+ * `ownerQueueLine` (state.ts), plus who decided it, what they chose, and when. */
+function answeredDecisionLine(row: AnsweredDecisionRow): string {
+  return (
+    `${row.id} · ${row.question} → ${formatAnsweredChoice(row)} ` +
+    `(decided ${row.decidedAt} by ${row.decidedBy ?? '(unknown)'})`
+  );
 }
 
 /**
@@ -708,6 +728,12 @@ export function renderSeatBundle(b: SeatBundle, now: Date): string {
   lines.push('## Open decisions');
   lines.push(
     b.openDecisions.length > 0 ? b.openDecisions.map(ownerQueueLine).join('\n') : '(none)',
+  );
+  lines.push('');
+
+  lines.push('## Answered, not acknowledged');
+  lines.push(
+    b.answeredNotAck.length > 0 ? b.answeredNotAck.map(answeredDecisionLine).join('\n') : '(none)',
   );
 
   return `${lines.join('\n')}\n`;

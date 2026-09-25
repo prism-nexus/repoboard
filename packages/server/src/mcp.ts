@@ -7,6 +7,7 @@
  * card is, that `status` is a column id, and that `list_cards` is the cheap first call.
  */
 import {
+  answeredDecisions,
   type BoardConfig,
   blockedReason,
   type Card,
@@ -19,6 +20,7 @@ import {
   needsDecision,
   renderState,
   resolveOlderThan,
+  resolveSince,
   type StateSectionName,
   toIso,
   type Window,
@@ -45,6 +47,7 @@ export const MCP_TOOL_NAMES = [
   'set_columns',
   'ask_owner',
   'record_decision',
+  'list_decisions',
   'take_lease',
   'release_lease',
   'list_leases',
@@ -560,6 +563,42 @@ export function createMcpServer(opts: McpServerOptions): McpServer {
       const res = await store.decide(id, { letter, words }, actor ?? defaultActor);
       if (!res.ok) return fail(nameField(res.error));
       return ok({ card: res.card, warnings: res.warnings });
+    },
+  );
+
+  server.registerTool(
+    'list_decisions',
+    {
+      title: 'Answered decisions, acknowledged or not',
+      description:
+        'RCB-129: catches the case where the owner answers a decision on another surface (the ' +
+        'web) and nothing here changes otherwise — the card just leaves the OWNER QUEUE. Every ' +
+        'card whose decision is answered (`chosen !== null || decidedAt !== null`), newest ' +
+        'decidedAt first: {id, title, assignee, question, chosen, chosenText, words, decidedAt, ' +
+        'decidedBy, acknowledged}. `acknowledged` is true once someone OTHER than decidedBy has ' +
+        'written a `## Log` or `## Notes` line on the card after decidedAt — append_log and ' +
+        'add_note both count. Default returns unacknowledged rows only.',
+      inputSchema: {
+        since: z
+          .string()
+          .optional()
+          .describe('ISO-8601, or HH:MMZ for that UTC time today. Filters on decidedAt.'),
+        all: z
+          .boolean()
+          .optional()
+          .describe('Also return already-acknowledged rows. Default false.'),
+      },
+      annotations: { readOnlyHint: true },
+    },
+    ({ since, all }) => {
+      let sinceIso: string | undefined;
+      if (since !== undefined) {
+        const r = resolveSince(since, now());
+        if (!r.ok) return fail(`since: ${r.error}`);
+        sinceIso = r.iso;
+      }
+      const rows = answeredDecisions(store.list(), { since: sinceIso });
+      return ok(all ? rows : rows.filter((r) => !r.acknowledged));
     },
   );
 

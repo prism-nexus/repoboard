@@ -43,12 +43,23 @@ export {
   summarizeCost,
 } from './cost.js';
 export type {
+  AnsweredDecisionRow,
   AskDecisionOptions,
   AskDecisionResult,
   DecideOptions,
   DecideResult,
+  ResolveSinceResult,
 } from './decisions.js';
-export { askDecision, decide, isDecided, isOwnerTask, needsDecision } from './decisions.js';
+export {
+  answeredDecisions,
+  askDecision,
+  decide,
+  formatAnsweredChoice,
+  isDecided,
+  isOwnerTask,
+  needsDecision,
+  resolveSince,
+} from './decisions.js';
 export type {
   CloseSyncedCardOptions,
   CloseSyncedCardResult,

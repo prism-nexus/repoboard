@@ -10,6 +10,8 @@ import { dirname, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { type ParseArgsConfig, parseArgs } from 'node:util';
 import {
+  type AnsweredDecisionRow,
+  answeredDecisions,
   type BoardConfig,
   blockedReason,
   type Card,
@@ -24,6 +26,7 @@ import {
   defaultBoardConfig,
   filterLogBlocks,
   findSeatLine,
+  formatAnsweredChoice,
   formatCostTable,
   formatDetectReport,
   formatLogBlock,
@@ -43,6 +46,7 @@ import {
   renderSeatList,
   renderState,
   resolveOlderThan,
+  resolveSince,
   resolveTimeSpec,
   SECTION_PLACEHOLDER,
   type Sibling,
@@ -237,6 +241,16 @@ Usage:
                                         "in-flight:" or "owes:" line (never hand-type OWNER QUEUE
                                         into either field — it is generated, see \`repoboard
                                         check\`'s seat-owner-queue-drift)
+  repoboard decisions [--since <ISO|HH:MMZ>] [--all] [--json]
+                                        answered decisions a seat has not yet acknowledged — the
+                                        owner can answer on another surface (the web) and nothing
+                                        else here changes; table DECIDED BY CARD CHOSEN ACK
+                                        QUESTION. Default: unacknowledged only; --all also shows
+                                        acknowledged ones; --since filters on decidedAt (HH:MMZ =
+                                        that UTC time today). "acknowledged" means someone OTHER
+                                        than the decider has written a \`## Log\` or \`## Notes\`
+                                        line on the card since it was decided — e.g.
+                                        \`repoboard card note <id> "ack" --as you\`
   repoboard check [--json] [--strict]  exit 0 "ok" / 1 with one line per finding: stale-state
                                         (also reads board.yml's logDir, P8.6 — an extra daily-log
                                         directory alongside .repoboard/log/, read-only),
@@ -1734,6 +1748,60 @@ async function cmdSeat(args: string[], io: CliIO): Promise<number> {
   return 0;
 }
 
+/** RCB-129: `repoboard decisions`' table — `DECIDED BY CARD CHOSEN ACK QUESTION`, same fixed-width
+ * helper `formatTable`/`formatLeaseTable`/`formatStepsTable` use. `formatAnsweredChoice` (core) is
+ * the ONE CHOSEN-cell formatter — the seat bundle's "Answered, not acknowledged" block renders the
+ * same text for the same row. */
+export function formatDecisionsTable(rows: AnsweredDecisionRow[]): string {
+  const header = ['DECIDED', 'BY', 'CARD', 'CHOSEN', 'ACK', 'QUESTION'];
+  const body = rows.map((r) => [
+    r.decidedAt,
+    r.decidedBy ?? '-',
+    r.id,
+    formatAnsweredChoice(r),
+    r.acknowledged ? 'yes' : 'no',
+    r.question,
+  ]);
+  return renderFixedWidthTable(header, body);
+}
+
+/**
+ * RCB-129 (observed on fpj: the owner answers a decision on the web and nothing a seat reads
+ * changes — the card just leaves the OWNER QUEUE). Default: unacknowledged rows only; `--all`
+ * also shows already-acknowledged ones; `--since` filters on `decidedAt` (`resolveSince`: an
+ * ISO-8601 datetime, or `HH:MMZ` for that UTC time today).
+ */
+async function cmdDecisions(args: string[], io: CliIO): Promise<number> {
+  const { values } = parse('decisions', args, {
+    since: { type: 'string' },
+    all: { type: 'boolean', default: false },
+    json: { type: 'boolean', default: false },
+  });
+  const root = await requireRoot(io);
+  const store = await openStore(root, { watch: false, now: io.now });
+  let since: string | undefined;
+  if (values.since !== undefined) {
+    const now = io.now?.() ?? new Date();
+    const r = resolveSince(values.since, now);
+    if (!r.ok) throw new UserError(r.error);
+    since = r.iso;
+  }
+  const all = answeredDecisions(store.list(), { since });
+  const rows = values.all ? all : all.filter((r) => !r.acknowledged);
+  if (values.json) {
+    io.stdout.write(`${formatRows(rows)}\n`);
+    return 0;
+  }
+  if (rows.length === 0) {
+    io.stdout.write(
+      `${values.all ? '(no answered decisions)' : '(no answered decisions awaiting acknowledgement)'}\n`,
+    );
+    return 0;
+  }
+  io.stdout.write(`${formatDecisionsTable(rows)}\n`);
+  return 0;
+}
+
 async function cmdCheck(args: string[], io: CliIO): Promise<number> {
   const { values } = parse('check', args, {
     json: { type: 'boolean', default: false },
@@ -2410,6 +2478,7 @@ export async function run(argv: string[], io: CliIO): Promise<number> {
       return await cmdLogAppend(argv.slice(1), io);
     }
     if (cmd === 'seat') return await cmdSeat(argv.slice(1), io);
+    if (cmd === 'decisions') return await cmdDecisions(argv.slice(1), io);
     if (cmd === 'check') return await cmdCheck(argv.slice(1), io);
     if (cmd === 'gate') return await cmdGate(sub, rest, io);
     if (cmd === 'local') return await cmdLocal(sub, rest, io);

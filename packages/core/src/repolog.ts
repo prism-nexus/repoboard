@@ -5,6 +5,8 @@
  * append-only text log) for the whole repo's daily record, one file per day.
  */
 
+import { resolveSince } from './decisions.js';
+
 /** `# Log — YYYY-MM-DD`, line 1 of a freshly created daily log file. */
 export function dailyLogHeader(date: string): string {
   return `# Log — ${date}`;
@@ -157,26 +159,6 @@ export interface LogFilterOptions {
 
 export type LogFilterResult = { ok: true; blocks: LogBlock[] } | { ok: false; error: string };
 
-const SHORT_TIME = /^(\d{2}):(\d{2})Z$/;
-
-/**
- * RCB-132: resolves `--since`'s raw string against `day` (`YYYY-MM-DD`, UTC) — a full ISO-8601
- * datetime is taken as given; `HH:MMZ` (e.g. `14:05Z`) means that UTC time on `day`. Pure: `day`
- * is the caller's already-resolved day (`log show`'s `--date`, defaulting to today), never
- * `Date.now()` here.
- */
-function resolveSince(
-  spec: string,
-  day: string,
-): { ok: true; iso: string } | { ok: false; error: string } {
-  const short = SHORT_TIME.exec(spec);
-  const iso = short ? `${day}T${short[1]}:${short[2]}:00Z` : spec;
-  if (Number.isNaN(Date.parse(iso))) {
-    return { ok: false, error: `"${spec}" is not a full ISO-8601 datetime or HH:MMZ` };
-  }
-  return { ok: true, iso };
-}
-
 /**
  * RCB-132: the ONE filter `log show --seat/--since/--tail` and MCP `get_log`'s matching args
  * share — CLI and MCP call this, never their own copy. Fixed order — seat, then since, then
@@ -199,7 +181,9 @@ export function filterLogBlocks(
     result = result.filter((b) => b.seat === wanted);
   }
   if (opts.since !== undefined) {
-    const since = resolveSince(opts.since, day);
+    // `--since` is resolved by decisions.ts's `resolveSince` — the one HH:MMZ-or-ISO rule
+    // `repoboard decisions --since` also uses; `HH:MMZ` means that UTC time on the log's `day`.
+    const since = resolveSince(opts.since, new Date(`${day}T00:00:00Z`));
     if (!since.ok) return since;
     const sinceMs = Date.parse(since.iso);
     result = result.filter((b) => {

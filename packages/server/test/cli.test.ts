@@ -3,9 +3,23 @@ import { existsSync } from 'node:fs';
 import { mkdir, readdir, readFile, rm, utimes, writeFile } from 'node:fs/promises';
 import { basename, dirname, join } from 'node:path';
 import { promisify } from 'node:util';
-import { type Card, defaultBoardConfig, parseBoard, serializeBoard, toIso } from '@repoboard/core';
+import {
+  type AnsweredDecisionRow,
+  type Card,
+  defaultBoardConfig,
+  parseBoard,
+  serializeBoard,
+  toIso,
+} from '@repoboard/core';
 import { afterEach, describe, expect, it } from 'vitest';
-import { findRoot, formatCrash, formatStepsTable, formatTable, run } from '../src/cli.js';
+import {
+  findRoot,
+  formatCrash,
+  formatDecisionsTable,
+  formatStepsTable,
+  formatTable,
+  run,
+} from '../src/cli.js';
 import { cardText, makeTempDir, makeTempRepoboard, makeTempRepoNoBoard, NOW } from './helpers.js';
 
 const execFileAsync = promisify(execFile);
@@ -2857,6 +2871,7 @@ describe('repoboard seat', () => {
     // authorized — left stale it would fail this test for a reason unrelated to the brief).
     expect(Object.keys(parsed).sort()).toEqual(
       [
+        'answeredNotAck',
         'coordinatorBlock',
         'inFlight',
         'name',
@@ -3335,6 +3350,219 @@ describe('repoboard seat --up/--down (RCB-58)', () => {
       expect(res.code).toBe(1);
       expect(res.err).toMatch(/not valid with list/);
     });
+  });
+});
+
+describe('repoboard decisions (RCB-129)', () => {
+  async function repoboardAt(cwd: string, now: Date, ...argv: string[]) {
+    const stdout = new Sink();
+    const stderr = new Sink();
+    const code = await run(argv, {
+      cwd,
+      stdout,
+      stderr,
+      env: { REPOBOARD_ACTOR: 'test-actor' },
+      now: () => now,
+    });
+    return { code, out: stdout.text, err: stderr.text };
+  }
+
+  /** A card whose decision is already answered — hand-written frontmatter, not `card ask`/`card
+   *  decide`, so `decidedAt`/`decidedBy` and the body's `## Log`/`## Notes` are exact. */
+  function decidedCardText(
+    id: string,
+    opts: { decidedAt: string; decidedBy: string; body?: string },
+  ): string {
+    return (
+      '---\n' +
+      `id: ${id}\n` +
+      'title: "Ship it?"\n' +
+      'status: todo\n' +
+      'created: 2026-09-24T18:00:00Z\n' +
+      'updated: 2026-09-24T18:00:00Z\n' +
+      'decision:\n' +
+      '  question: "Ship it?"\n' +
+      '  options:\n' +
+      '    - letter: A\n' +
+      '      text: "yes"\n' +
+      '  askedBy: claude/coordinator\n' +
+      '  askedAt: 2026-09-24T18:00:00Z\n' +
+      '  returnTo: null\n' +
+      '  chosen: A\n' +
+      '  words: null\n' +
+      `  decidedBy: ${opts.decidedBy}\n` +
+      `  decidedAt: ${opts.decidedAt}\n` +
+      '---\n' +
+      (opts.body ?? '\nBody.\n')
+    );
+  }
+
+  it('an unacknowledged answered decision shows in the default table, ACK no', async () => {
+    const root = await freshRepo({
+      'RB-1.md': decidedCardText('RB-1', {
+        decidedAt: '2026-09-24T18:19:51Z',
+        decidedBy: 'owner',
+      }),
+    });
+    const res = await repoboard(root, 'decisions');
+    expect(res.code).toBe(0);
+    expect(res.out).toContain('DECIDED');
+    expect(res.out).toContain('CARD');
+    expect(res.out).toContain('CHOSEN');
+    expect(res.out).toContain('ACK');
+    expect(res.out).toContain('QUESTION');
+    expect(res.out).toContain('RB-1');
+    expect(res.out).toContain('A: yes');
+    expect(res.out).toContain('owner');
+    const row = res.out.split('\n').find((l) => l.startsWith('2026-09-24T18:19:51Z'));
+    expect(row).toBeDefined();
+    expect(row).toMatch(/\bno\b/);
+  });
+
+  it('acknowledged via `card note … "ack"` drops out of the default (unacknowledged) view', async () => {
+    const root = await freshRepo({
+      'RB-1.md': decidedCardText('RB-1', {
+        decidedAt: '2026-09-24T18:19:51Z',
+        decidedBy: 'owner',
+      }),
+    });
+    const noted = await repoboardAt(
+      root,
+      new Date('2026-09-24T18:26:00Z'),
+      'card',
+      'note',
+      'RB-1',
+      'ack',
+      '--as',
+      'builder',
+    );
+    expect(noted.code).toBe(0);
+    const unacked = await repoboard(root, 'decisions');
+    expect(unacked.out).toBe('(no answered decisions awaiting acknowledgement)\n');
+    const all = await repoboard(root, 'decisions', '--all');
+    expect(all.out).toContain('RB-1');
+    expect(all.out).toMatch(/\byes\b/);
+  });
+
+  it('no cards at all: the unacknowledged-empty and --all-empty messages differ', async () => {
+    const root = await freshRepo({});
+    const unacked = await repoboard(root, 'decisions');
+    expect(unacked.out).toBe('(no answered decisions awaiting acknowledgement)\n');
+    const all = await repoboard(root, 'decisions', '--all');
+    expect(all.out).toBe('(no answered decisions)\n');
+  });
+
+  it('--json prints the row shape, one compact array', async () => {
+    const root = await freshRepo({
+      'RB-1.md': decidedCardText('RB-1', {
+        decidedAt: '2026-09-24T18:19:51Z',
+        decidedBy: 'owner',
+      }),
+    });
+    const res = await repoboard(root, 'decisions', '--json');
+    expect(res.code).toBe(0);
+    const rows = JSON.parse(res.out);
+    expect(rows).toEqual([
+      {
+        id: 'RB-1',
+        title: 'Ship it?',
+        assignee: null,
+        question: 'Ship it?',
+        chosen: 'A',
+        chosenText: 'yes',
+        words: null,
+        decidedAt: '2026-09-24T18:19:51Z',
+        decidedBy: 'owner',
+        acknowledged: false,
+      },
+    ]);
+  });
+
+  it('--since HH:MMZ keeps only rows decided at or after that UTC time today', async () => {
+    const root = await freshRepo({
+      'RB-1.md': decidedCardText('RB-1', {
+        decidedAt: '2026-09-24T10:00:00Z',
+        decidedBy: 'owner',
+      }),
+      'RB-2.md': decidedCardText('RB-2', {
+        decidedAt: '2026-09-24T20:00:00Z',
+        decidedBy: 'owner',
+      }),
+    });
+    const res = await repoboardAt(
+      root,
+      new Date('2026-09-24T21:00:00Z'),
+      'decisions',
+      '--since',
+      '18:00Z',
+    );
+    expect(res.out).toContain('RB-2');
+    expect(res.out).not.toContain('RB-1');
+  });
+
+  it('--since with an unparseable spec is a usage error', async () => {
+    const root = await freshRepo({});
+    const res = await repoboard(root, 'decisions', '--since', 'not a time');
+    expect(res.code).toBe(1);
+    expect(res.err).toMatch(/is not a full ISO-8601 datetime or HH:MMZ/);
+  });
+});
+
+describe('formatDecisionsTable (RCB-129)', () => {
+  it('DECIDED BY CARD CHOSEN ACK QUESTION, one row per answered decision', () => {
+    const rows: AnsweredDecisionRow[] = [
+      {
+        id: 'RB-1',
+        title: 't',
+        assignee: null,
+        question: 'Ship it?',
+        chosen: 'A',
+        chosenText: 'yes',
+        words: null,
+        decidedAt: '2026-09-24T18:19:51Z',
+        decidedBy: 'owner',
+        acknowledged: false,
+      },
+    ];
+    const lines = formatDecisionsTable(rows)
+      .split('\n')
+      .map((l) => l.trim().split(/\s{2,}/));
+    expect(lines[0]).toEqual(['DECIDED', 'BY', 'CARD', 'CHOSEN', 'ACK', 'QUESTION']);
+    expect(lines[1]).toEqual(['2026-09-24T18:19:51Z', 'owner', 'RB-1', 'A: yes', 'no', 'Ship it?']);
+  });
+
+  it('a words-only answer is quoted; neither chosen nor words prints "-"', () => {
+    const rows: AnsweredDecisionRow[] = [
+      {
+        id: 'RB-1',
+        title: 't',
+        assignee: null,
+        question: 'q1',
+        chosen: null,
+        chosenText: null,
+        words: 'go ahead',
+        decidedAt: '2026-09-24T18:00:00Z',
+        decidedBy: 'owner',
+        acknowledged: true,
+      },
+      {
+        id: 'RB-2',
+        title: 't',
+        assignee: null,
+        question: 'q2',
+        chosen: null,
+        chosenText: null,
+        words: null,
+        decidedAt: '2026-09-24T19:00:00Z',
+        decidedBy: 'owner',
+        acknowledged: false,
+      },
+    ];
+    const lines = formatDecisionsTable(rows)
+      .split('\n')
+      .map((l) => l.trim().split(/\s{2,}/));
+    expect(lines[1]).toEqual(['2026-09-24T18:00:00Z', 'owner', 'RB-1', '"go ahead"', 'yes', 'q1']);
+    expect(lines[2]).toEqual(['2026-09-24T19:00:00Z', 'owner', 'RB-2', '-', 'no', 'q2']);
   });
 });
 

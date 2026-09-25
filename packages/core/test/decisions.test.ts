@@ -6,7 +6,16 @@
 import { describe, expect, it } from 'vitest';
 import { defaultBoardConfig } from '../src/board.js';
 import { parseCard, serializeCard } from '../src/card.js';
-import { askDecision, decide, isDecided, isOwnerTask, needsDecision } from '../src/decisions.js';
+import {
+  answeredDecisions,
+  askDecision,
+  decide,
+  formatAnsweredChoice,
+  isDecided,
+  isOwnerTask,
+  needsDecision,
+  resolveSince,
+} from '../src/decisions.js';
 import { ownerQueueLine } from '../src/state.js';
 import type { BoardConfig, Card, Decision } from '../src/types.js';
 import { NOW, sampleCard } from './helpers.js';
@@ -824,5 +833,246 @@ describe('round-trip and K1 quoting on decision fields', () => {
     expect(reparsed.decision?.decidedAt).toBeNull();
     expect(isDecided(reparsed)).toBe(true);
     expect(needsDecision(reparsed)).toBe(false);
+  });
+});
+
+/** A fully answered decision on `card` — `askDecision` then `decide`, no board config (badge
+ * only, status untouched) — so every test below controls exactly the log/notes bullets on top of
+ * it, rather than depending on `moveCard`'s own log lines. */
+function answeredCard(
+  card: Card,
+  opts: { question?: string; letter?: string; words?: string; decidedBy: string; decidedAt: Date },
+): Card {
+  const asked = askDecision(card, {
+    question: opts.question ?? 'Ship it?',
+    options: [
+      { letter: 'A', text: 'yes' },
+      { letter: 'B', text: 'no' },
+    ],
+    actor: 'claude/coordinator',
+    now: NOW,
+  });
+  if (!asked.ok) throw new Error(asked.error);
+  const decided = decide(asked.card, {
+    letter: opts.letter,
+    words: opts.words,
+    actor: opts.decidedBy,
+    now: opts.decidedAt,
+  });
+  if (!decided.ok) throw new Error(decided.error);
+  return decided.card;
+}
+
+describe('answeredDecisions (RCB-129)', () => {
+  const decidedAt = new Date('2026-09-24T18:19:51Z');
+
+  it('an answered card with nothing after decidedAt is unacknowledged', () => {
+    const card = answeredCard(sampleCard({ id: 'RB-1', body: 'desc\n' }), {
+      letter: 'A',
+      decidedBy: 'owner',
+      decidedAt,
+    });
+    const [row] = answeredDecisions([card]);
+    expect(row).toMatchObject({
+      id: 'RB-1',
+      chosen: 'A',
+      chosenText: 'yes',
+      words: null,
+      decidedAt: '2026-09-24T18:19:51Z',
+      decidedBy: 'owner',
+      acknowledged: false,
+    });
+  });
+
+  it('a ## Log line strictly after decidedAt by another actor acknowledges it', () => {
+    let card = answeredCard(sampleCard({ id: 'RB-1', body: 'desc\n' }), {
+      letter: 'A',
+      decidedBy: 'owner',
+      decidedAt,
+    });
+    card = {
+      ...card,
+      body: `${card.body}- 2026-09-24T18:26:00Z builder — moved decide → doing\n`,
+    };
+    const [row] = answeredDecisions([card]);
+    expect(row?.acknowledged).toBe(true);
+  });
+
+  it('a ## Notes line strictly after decidedAt by another actor also acknowledges it (card note)', () => {
+    let card = answeredCard(sampleCard({ id: 'RB-1', body: 'desc\n' }), {
+      letter: 'A',
+      decidedBy: 'owner',
+      decidedAt,
+    });
+    // Same shape `appendNoteLine`/`card note` writes: a `## Notes` bullet, not `## Log`.
+    card = {
+      ...card,
+      body: card.body.replace('## Log', '## Notes\n- 2026-09-24T18:26:00Z builder — ack\n\n## Log'),
+    };
+    const [row] = answeredDecisions([card]);
+    expect(row?.acknowledged).toBe(true);
+  });
+
+  it('a line at the SAME ts as decidedAt does not acknowledge (strictly later only)', () => {
+    let card = answeredCard(sampleCard({ id: 'RB-1', body: 'desc\n' }), {
+      letter: 'A',
+      decidedBy: 'owner',
+      decidedAt,
+    });
+    card = {
+      ...card,
+      body: `${card.body}- 2026-09-24T18:19:51Z builder — same instant\n`,
+    };
+    const [row] = answeredDecisions([card]);
+    expect(row?.acknowledged).toBe(false);
+  });
+
+  it('a line by the SAME actor as decidedBy does not acknowledge, even later', () => {
+    let card = answeredCard(sampleCard({ id: 'RB-1', body: 'desc\n' }), {
+      letter: 'A',
+      decidedBy: 'owner',
+      decidedAt,
+    });
+    card = {
+      ...card,
+      body: `${card.body}- 2026-09-24T19:00:00Z owner — talking to myself\n`,
+    };
+    const [row] = answeredDecisions([card]);
+    expect(row?.acknowledged).toBe(false);
+  });
+
+  it('a words-only answer with no options carries chosen: null, chosenText: null', () => {
+    const card = answeredCard(sampleCard({ id: 'RB-1', body: 'desc\n' }), {
+      words: 'do it',
+      decidedBy: 'owner',
+      decidedAt,
+    });
+    const [row] = answeredDecisions([card]);
+    expect(row).toMatchObject({ chosen: null, chosenText: null, words: 'do it' });
+  });
+
+  it('an open (unanswered) decision is excluded entirely', () => {
+    const card = askDecision(sampleCard({ id: 'RB-1' }), {
+      question: 'open?',
+      actor: 'claude/coordinator',
+      now: NOW,
+    });
+    if (!card.ok) throw new Error(card.error);
+    expect(answeredDecisions([card.card])).toEqual([]);
+  });
+
+  it('a hand-edited chosen: with no decidedAt stamp is excluded — no answer TIME to report', () => {
+    const asked = askDecision(sampleCard({ id: 'RB-1' }), {
+      question: 'q',
+      actor: 'claude/coordinator',
+      now: NOW,
+    });
+    if (!asked.ok) throw new Error(asked.error);
+    const handEdited: Card = {
+      ...asked.card,
+      decision: { ...(asked.card.decision as Decision), chosen: 'A' },
+    };
+    expect(isDecided(handEdited)).toBe(true);
+    expect(answeredDecisions([handEdited])).toEqual([]);
+  });
+
+  it('newest decidedAt first, across cards', () => {
+    const older = answeredCard(sampleCard({ id: 'RB-1', body: 'desc\n' }), {
+      letter: 'A',
+      decidedBy: 'owner',
+      decidedAt: new Date('2026-09-24T10:00:00Z'),
+    });
+    const newer = answeredCard(sampleCard({ id: 'RB-2', body: 'desc\n' }), {
+      letter: 'B',
+      decidedBy: 'owner',
+      decidedAt: new Date('2026-09-24T20:00:00Z'),
+    });
+    const rows = answeredDecisions([older, newer]);
+    expect(rows.map((r) => r.id)).toEqual(['RB-2', 'RB-1']);
+  });
+
+  it('since drops rows decided before it, keeps rows decided at or after it', () => {
+    const card = answeredCard(sampleCard({ id: 'RB-1', body: 'desc\n' }), {
+      letter: 'A',
+      decidedBy: 'owner',
+      decidedAt,
+    });
+    expect(answeredDecisions([card], { since: '2026-09-24T18:19:52Z' })).toEqual([]);
+    expect(answeredDecisions([card], { since: '2026-09-24T18:19:51Z' })).toHaveLength(1);
+    expect(answeredDecisions([card], { since: '2026-09-24T18:00:00Z' })).toHaveLength(1);
+  });
+});
+
+describe('formatAnsweredChoice', () => {
+  it('renders a lettered answer as "<letter>: <text>"', () => {
+    expect(
+      formatAnsweredChoice({
+        id: 'RB-1',
+        title: 't',
+        assignee: null,
+        question: 'q',
+        chosen: 'A',
+        chosenText: 'yes',
+        words: null,
+        decidedAt: NOW.toISOString(),
+        decidedBy: 'owner',
+        acknowledged: false,
+      }),
+    ).toBe('A: yes');
+  });
+
+  it('renders a words-only answer quoted', () => {
+    expect(
+      formatAnsweredChoice({
+        id: 'RB-1',
+        title: 't',
+        assignee: null,
+        question: 'q',
+        chosen: null,
+        chosenText: null,
+        words: 'go ahead',
+        decidedAt: NOW.toISOString(),
+        decidedBy: 'owner',
+        acknowledged: false,
+      }),
+    ).toBe('"go ahead"');
+  });
+
+  it('renders neither chosen nor words as "-"', () => {
+    expect(
+      formatAnsweredChoice({
+        id: 'RB-1',
+        title: 't',
+        assignee: null,
+        question: 'q',
+        chosen: null,
+        chosenText: null,
+        words: null,
+        decidedAt: NOW.toISOString(),
+        decidedBy: 'owner',
+        acknowledged: false,
+      }),
+    ).toBe('-');
+  });
+});
+
+describe('resolveSince', () => {
+  const now = new Date('2026-09-24T20:00:00Z');
+
+  it('HH:MMZ resolves against now’s own UTC date', () => {
+    const r = resolveSince('18:19Z', now);
+    expect(r).toEqual({ ok: true, iso: '2026-09-24T18:19:00Z' });
+  });
+
+  it('a full ISO-8601 datetime passes through, normalized', () => {
+    const r = resolveSince('2026-09-20T00:00:00.000Z', now);
+    expect(r).toEqual({ ok: true, iso: '2026-09-20T00:00:00Z' });
+  });
+
+  it('garbage is refused, naming what was rejected', () => {
+    const r = resolveSince('not a time', now);
+    expect(r.ok).toBe(false);
+    if (r.ok) return;
+    expect(r.error).toContain('not a time');
   });
 });

@@ -675,6 +675,7 @@ describe('renderSeatBundle: placeholders for every missing part', () => {
       nextCardReason: null,
       nextCardStep: null,
       openDecisions: [],
+      answeredNotAck: [],
       nextCardEmpty: null,
       rig: null,
       inFlight: null,
@@ -698,6 +699,7 @@ describe('renderSeatBundle: placeholders for every missing part', () => {
     expect(rendered).toContain('## Next card');
     expect(rendered).toContain('(no todo card)');
     expect(rendered).toContain('## Open decisions');
+    expect(rendered).toContain('## Answered, not acknowledged');
     expect(rendered).toContain('(none)');
   });
 
@@ -711,6 +713,7 @@ describe('renderSeatBundle: placeholders for every missing part', () => {
       nextCardReason: 'first-todo',
       nextCardStep: null,
       openDecisions: [],
+      answeredNotAck: [],
       nextCardEmpty: null,
       rig: null,
       inFlight: null,
@@ -773,6 +776,7 @@ describe('renderSeatBundle: a solo board drops the placeholder sections (RCB-140
       nextCardReason: null,
       nextCardStep: null,
       openDecisions: [],
+      answeredNotAck: [],
       nextCardEmpty: null,
       rig: null,
       inFlight: null,
@@ -797,6 +801,7 @@ describe('renderSeatBundle: a solo board drops the placeholder sections (RCB-140
     expect(rendered).toContain('## Next card');
     expect(rendered).toContain('(no todo card)');
     expect(rendered).toContain('## Open decisions');
+    expect(rendered).toContain('## Answered, not acknowledged');
     expect(rendered).toContain('(none)');
   });
 
@@ -818,6 +823,7 @@ describe('renderSeatBundle: a solo board drops the placeholder sections (RCB-140
       nextCardReason: null,
       nextCardStep: null,
       openDecisions: [],
+      answeredNotAck: [],
       nextCardEmpty: null,
       rig: null,
       inFlight: null,
@@ -1360,5 +1366,88 @@ describe('systems line (RCB-97)', () => {
     });
     const rendered = renderSeatBundle(bundle, NOW);
     expect(rendered).not.toContain('Systems:');
+  });
+});
+
+/** A card whose decision has already been answered, `decision` built directly (not via
+ * `askDecision`/`decide`) so each test controls `decidedAt`/`decidedBy` and the body's
+ * `## Log`/`## Notes` bullets exactly. */
+function answeredCard(
+  id: string,
+  opts: { decidedBy: string; decidedAt: string; chosen?: string | null; body?: string },
+): Card {
+  return card({
+    id,
+    body: opts.body ?? '',
+    decision: {
+      question: 'Ship it?',
+      options: [{ letter: 'A', text: 'yes' }],
+      askedBy: 'claude/coordinator',
+      askedAt: '2026-09-24T18:00:00Z',
+      returnTo: null,
+      chosen: opts.chosen ?? 'A',
+      words: null,
+      decidedBy: opts.decidedBy,
+      decidedAt: opts.decidedAt,
+    },
+  });
+}
+
+describe('seatBundle: answeredNotAck (RCB-129)', () => {
+  it('an answered, unacknowledged decision appears in answeredNotAck and the render block', () => {
+    const cards = [
+      answeredCard('RCB-1', { decidedBy: 'owner', decidedAt: '2026-09-24T18:19:51Z' }),
+    ];
+    const bundle = seatBundle({
+      name: 'builder',
+      now: NOW,
+      seatsSection: null,
+      ownBlock: null,
+      coordinatorBlock: null,
+      cards,
+    });
+    expect(bundle.answeredNotAck).toHaveLength(1);
+    expect(bundle.answeredNotAck[0]).toMatchObject({ id: 'RCB-1', acknowledged: false });
+    const rendered = renderSeatBundle(bundle, NOW);
+    expect(rendered).toContain('## Answered, not acknowledged');
+    expect(rendered).toContain('RCB-1 · Ship it? → A: yes (decided 2026-09-24T18:19:51Z by owner)');
+  });
+
+  it('a ## Notes line after decidedAt by another actor (card note) acknowledges it — drops out', () => {
+    const cards = [
+      answeredCard('RCB-1', {
+        decidedBy: 'owner',
+        decidedAt: '2026-09-24T18:19:51Z',
+        body: '\n## Notes\n- 2026-09-24T18:26:00Z builder — ack\n',
+      }),
+    ];
+    const bundle = seatBundle({
+      name: 'builder',
+      now: NOW,
+      seatsSection: null,
+      ownBlock: null,
+      coordinatorBlock: null,
+      cards,
+    });
+    expect(bundle.answeredNotAck).toEqual([]);
+    const rendered = renderSeatBundle(bundle, NOW);
+    expect(rendered).toContain('## Answered, not acknowledged');
+    expect(rendered).toContain('(none)');
+  });
+
+  it('no answered decisions at all: the block prints (none)', () => {
+    const bundle = seatBundle({
+      name: 'builder',
+      now: NOW,
+      seatsSection: null,
+      ownBlock: null,
+      coordinatorBlock: null,
+      cards: [],
+    });
+    expect(bundle.answeredNotAck).toEqual([]);
+    const rendered = renderSeatBundle(bundle, NOW);
+    const idx = rendered.indexOf('## Answered, not acknowledged');
+    expect(idx).toBeGreaterThanOrEqual(0);
+    expect(rendered.slice(idx)).toContain('(none)');
   });
 });

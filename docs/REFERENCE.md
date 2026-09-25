@@ -93,6 +93,37 @@ so nothing can bypass the log line that makes a decision auditable. `GET /api/st
 `ownerQueue` items carry `kind: "task"` only for a task, so the web can render it without
 re-deriving.
 
+### Answered, not acknowledged (RCB-129)
+
+Observed on fpj, 2026-09-24: the owner answers FPJ-19 on the web at 18:19:51Z (`decide`, core
+`decisions.ts` — sets `decision.decidedAt`/`decidedBy`/`chosen`/`words`). Nothing a seat reads
+changed: no log line, no STATE change; the card only left the OWNER QUEUE. The coordinator noticed
+7 minutes later from `git status`.
+
+`answeredDecisions(cards, {since?})` (core `decisions.ts`) is the one pure function every surface
+below calls: every card whose decision `isDecided` (locked decision 1), newest `decidedAt` first —
+`{id, title, assignee, question, chosen, chosenText, words, decidedAt, decidedBy, acknowledged}`.
+`chosenText` is `chosen`'s option TEXT. A card decided by a hand edit that set `chosen`/`words` but
+never stamped `decidedAt` is excluded — there is no answer TIME to report or sort by, and CLAUDE.md
+rules out inventing one.
+
+**`acknowledged`** is true once someone OTHER than `decidedBy` has written a `- <ts> <actor> —
+<text>` bullet (§6's grammar) under the card's `## Log` OR `## Notes` **strictly after**
+`decidedAt` — any touch counts, not a specific word: an ordinary `append_log`/move and `repoboard
+card note <id> "ack" --as you` both clear it, whichever a seat reaches for first. `## Decision` is
+not scanned — `ask`/`decide` append it at the same ts, by the same actor, as the matching `## Log`
+line, so it could only repeat a hit already found there.
+
+| Command | Example |
+|---|---|
+| `repoboard decisions [--since <ISO\|HH:MMZ>] [--all] [--json]` | `repoboard decisions` → table `DECIDED BY CARD CHOSEN ACK QUESTION`, unacknowledged rows only; `--all` also lists acknowledged ones; `--since 18:19Z` (or a full ISO-8601 datetime) filters on `decidedAt`; empty: `(no answered decisions awaiting acknowledgement)`, or `(no answered decisions)` with `--all` |
+
+MCP: `list_decisions(since?, all?)` — same function, same default (unacknowledged only).
+
+`seat <name>`'s bundle (and its rendered text) gains a `## Answered, not acknowledged` block right
+after `## Open decisions` — the same rows, unacknowledged only, `(none)` when empty; the bundle's
+`--json` carries it as `answeredNotAck`.
+
 ### Bytes (O3), measured on a 10-card fixture (6 plain, 4 with an open 3-option decision)
 
 | Surface | Before P8.1 | After, 4/10 cards with a decision |

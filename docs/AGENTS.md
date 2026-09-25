@@ -55,6 +55,7 @@ published). It finds `.repoboard/` by walking up from the current directory.
 | `repoboard state --trim-landings <n> [--archive <path>] [--as a]` | keeps the newest `<n>` LAST LANDINGS entries, archiving the rest to today's log — or, with `--archive <path>` (RCB-132), to `<path>` instead, and no log block at all (docs/REFERENCE.md §3) |
 | `repoboard log --as <seat> [--title t] (<text>\|--stdin)` / `log show [--date d] [--seat s] [--since ts] [--tail n] [--json]` / `log --last <seat>` | `repoboard log --as claude/ops "armed the fires"` — a cold seat guessing at a line count wants `--tail n` (last n blocks) or `--since ts` (blocks at/after `ts`, full ISO or `HH:MMZ`) instead of guessing (docs/REFERENCE.md §3) |
 | `repoboard seat <name> [--json]` | `repoboard seat claude/builder` — the cold-start bundle (docs/REFERENCE.md §3, §6) |
+| `repoboard decisions [--since <ISO\|HH:MMZ>] [--all] [--json]` | `repoboard decisions` — answered decisions a seat has not yet acknowledged (RCB-129, docs/REFERENCE.md §1) |
 | `repoboard check [--json] [--strict]` | `repoboard check` — exit 0 `ok`, or 1 with findings (docs/REFERENCE.md §3) |
 | `repoboard cost [--root <dir>] [--budget <bytes>] [--json]` | `repoboard cost --root /path/to/other/repo` — "cold context" bytes vs budget (docs/REFERENCE.md §4, §6) |
 | `repoboard systems [--json]` | `repoboard systems` — one line per system (docs/REFERENCE.md §7) |
@@ -145,15 +146,17 @@ launched from somewhere else. Tools: `list_cards`, `get_card`, `create_card`, `m
 `update_card`, `append_log`, `add_note` (RCB-70, section 6), `board_summary`, `set_columns`
 (RCB-56, section 2 — the whole-list replace behind `repoboard columns set` / `PATCH /api/board`),
 `ask_owner`, `record_decision`
-(P8.1, docs/REFERENCE.md §1), `take_lease`, `release_lease`, `list_leases`, `add_window`, `check_window`
+(P8.1, docs/REFERENCE.md §1), `list_decisions` (RCB-129: the owner answered elsewhere and nothing
+here changed yet; docs/REFERENCE.md §1), `take_lease`, `release_lease`, `list_leases`, `add_window`, `check_window`
 (P8.2, docs/REFERENCE.md §2),
 `get_state`, `set_state_section`, `append_repo_log`, `check` (P8.3, docs/REFERENCE.md §3),
 `get_log`, `get_seat`, `record_gate`, `get_gate` (RCB-146: MCP parity with `log show`/`log --last`,
 `seat <name>`, `gate record`/`gate show`; the seat read is read only, seat writes stay CLI-only),
 `cost` (P8.4, docs/REFERENCE.md §4), `list_systems`, `get_system` (RCB-97, docs/REFERENCE.md §7),
 `archive_cards`, `sync_issues` (P8.5, docs/REFERENCE.md §5).
-All 29 tools' schema, via client.listTools() summing each tool's own JSON.stringify: **26,155 B**
-(2026-09-25, RCB-146, `repoboard mcp` against a fresh init and against this repo's board, the same bytes; was 22,769 B for 25 tools, 2026-09-24,
+All 30 tools' schema, via client.listTools() summing each tool's own JSON.stringify: 27,567 B
+(2026-09-25, RCB-129 + RCB-132, `repoboard mcp` against a fresh init and against this repo's
+board, the same bytes; 26,155 B for 29 tools, 2026-09-25, RCB-146; 22,769 B for 25 tools, 2026-09-24,
 RCB-137 — CARD_INTRO moved out of tool descriptions into the server instructions alone; 31,301 B,
 2026-09-22, RCB-100; before that 26,401 B for 23 tools, RCB-70).
 Call `list_cards` or `board_summary` first: they
@@ -284,9 +287,12 @@ NO `## Log` line, so the same event is never recorded twice.
 ## 8. Everything else
 
 **Cold-start rule (RCB-47/RCB-48):** a seat coming up runs `repoboard seat <name>` — one command
-prints its SEATS line, its own last log block, the coordinator's, its next todo card and the open
-decisions, in that order. The underlying reads stay available one at a time: `repoboard state`,
-`log --last <seat>`, `card list --status todo`, `card list --needs-decision`.
+prints its SEATS line, its own last log block, the coordinator's, its next todo card, the open
+decisions and (RCB-129) any decisions ANSWERED but not yet acknowledged — the owner can answer on
+another surface (the web) and nothing else here changes; `repoboard card note <id> "ack" --as you`
+(or any `## Log`/`## Notes` line from someone else) clears one. The underlying reads stay
+available one at a time: `repoboard state`, `log --last <seat>`, `card list --status todo`, `card
+list --needs-decision`, `repoboard decisions`.
 
 STATE shape rules (RCB-55 A3 + A5, owner's letter A, 2026-09-18): **LIVE holds slow-changing facts
 only** — ports and what each serves, the remote, the owner lane, the sibling — never a queue or a

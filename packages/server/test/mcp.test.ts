@@ -69,6 +69,7 @@ const CARD_TOOLS = [
   'board_summary',
   'ask_owner',
   'record_decision',
+  'list_decisions',
 ];
 const LEASE_TOOLS = ['take_lease', 'release_lease', 'list_leases', 'add_window', 'check_window'];
 /** P8.3: the four state/log/check tools — same terse-description budget as P8.2's lease tools. */
@@ -713,6 +714,85 @@ describe('repoboard mcp: ask_owner / record_decision (P8.1)', () => {
     const parsed = JSON.parse(textOf(res)) as { card: Card };
     expect(parsed.card.status).toBe('todo');
     expect(parsed.card.decision?.returnTo).toBeNull();
+  });
+});
+
+/** A card whose decision is already answered — hand-written frontmatter (not `ask_owner`/
+ *  `record_decision`), so `decidedAt`/`decidedBy` and the body's `## Log`/`## Notes` are exact,
+ *  independent of the rig's fixed clock. */
+function decidedCardText(
+  id: string,
+  opts: { decidedAt: string; decidedBy: string; body?: string },
+): string {
+  return (
+    '---\n' +
+    `id: ${id}\n` +
+    'title: "Ship it?"\n' +
+    'status: todo\n' +
+    'created: 2026-09-02T18:00:00Z\n' +
+    'updated: 2026-09-02T18:00:00Z\n' +
+    'decision:\n' +
+    '  question: "Ship it?"\n' +
+    '  options:\n' +
+    '    - letter: A\n' +
+    '      text: "yes"\n' +
+    '  askedBy: claude/coordinator\n' +
+    '  askedAt: 2026-09-02T18:00:00Z\n' +
+    '  returnTo: null\n' +
+    '  chosen: A\n' +
+    '  words: null\n' +
+    `  decidedBy: ${opts.decidedBy}\n` +
+    `  decidedAt: ${opts.decidedAt}\n` +
+    '---\n' +
+    (opts.body ?? '\nBody.\n')
+  );
+}
+
+describe('repoboard mcp: list_decisions (RCB-129)', () => {
+  it('an unacknowledged answered decision comes back, acknowledged: false', async () => {
+    const r = await rig({
+      'RB-1.md': decidedCardText('RB-1', { decidedAt: '2026-09-02T18:19:51Z', decidedBy: 'owner' }),
+    });
+    const rows = await r.json<Array<{ id: string; acknowledged: boolean }>>('list_decisions');
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({
+      id: 'RB-1',
+      chosen: 'A',
+      chosenText: 'yes',
+      acknowledged: false,
+    });
+  });
+
+  it('a ## Notes line after decidedAt by another actor acknowledges it — default drops it, all: true keeps it', async () => {
+    const r = await rig({
+      'RB-1.md': decidedCardText('RB-1', {
+        decidedAt: '2026-09-02T18:19:51Z',
+        decidedBy: 'owner',
+        body: '\n## Notes\n- 2026-09-02T18:26:00Z builder — ack\n',
+      }),
+    });
+    const rows = await r.json<Array<{ id: string }>>('list_decisions');
+    expect(rows).toEqual([]);
+    const all = await r.json<Array<{ id: string; acknowledged: boolean }>>('list_decisions', {
+      all: true,
+    });
+    expect(all).toEqual([expect.objectContaining({ id: 'RB-1', acknowledged: true })]);
+  });
+
+  it('since (HH:MMZ against the rig clock’s own UTC date) filters on decidedAt', async () => {
+    const r = await rig({
+      'RB-1.md': decidedCardText('RB-1', { decidedAt: '2026-09-02T10:00:00Z', decidedBy: 'owner' }),
+      'RB-2.md': decidedCardText('RB-2', { decidedAt: '2026-09-02T20:00:00Z', decidedBy: 'owner' }),
+    });
+    const rows = await r.json<Array<{ id: string }>>('list_decisions', { since: '18:00Z' });
+    expect(rows.map((row) => row.id)).toEqual(['RB-2']);
+  });
+
+  it('an unparseable since is a tool error naming the field', async () => {
+    const r = await rig({});
+    const res = await r.call('list_decisions', { since: 'not a time' });
+    expect(res.isError).toBe(true);
+    expect(textOf(res)).toMatch(/^since: /);
   });
 });
 

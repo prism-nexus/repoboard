@@ -402,3 +402,144 @@ export function decide(card: Card, opts: DecideOptions): DecideResult {
 
   return { ok: true, card: working, event, warnings };
 }
+
+/**
+ * RCB-129: the ONE grammar `formatLogLine`/`formatNoteLine` (log.ts) write — `- <ts> <actor> —
+ * <message>`. log.ts exports only the writers (no reader), so `hasAckAfter` below reads a bullet's
+ * first line back itself rather than risk a second, drifting regex somewhere else. Continuation
+ * lines (a multi-line note's `\n  ` indent) never carry `ts`/`actor`, so only the first line of
+ * each bullet is checked.
+ */
+const DATED_BULLET_RE = /^- (\S+) (\S+) — /;
+const LOG_HEADING_RE = /^## Log[ \t]*$/m;
+const NOTES_HEADING_RE = /^## Notes[ \t]*$/m;
+const ANY_HEADING_RE = /^#{1,2}[ \t]/m;
+
+/** The text of one `## `-level section of `body` — same heading/end convention `log.ts`'s
+ * `appendSectionLine` writes by — or `''` when `heading` is absent (nothing to scan). */
+function sectionText(body: string, heading: RegExp): string {
+  const found = heading.exec(body);
+  if (!found) return '';
+  const rest = body.slice(found.index + found[0].length);
+  const end = ANY_HEADING_RE.exec(rest);
+  return end ? rest.slice(0, end.index) : rest;
+}
+
+/**
+ * RCB-129: has anyone OTHER than `decidedBy` written a dated bullet — under `## Log` OR `##
+ * Notes` — strictly AFTER `decidedAt`? This is what "acknowledged" means: any touch by another
+ * actor counts, not a specific word, so `card note <id> "ack" --as you` (## Notes) and an ordinary
+ * `append_log`/move (## Log) both count equally — whichever a seat reaches for first. `##
+ * Decision` is not scanned: `askDecision`/`decide` append it at the SAME ts, by the SAME actor, as
+ * the matching `## Log` line, so it could only ever repeat a hit already found there, never add one.
+ */
+function hasAckAfter(body: string, decidedAt: string, decidedBy: string | null): boolean {
+  const text = `${sectionText(body, LOG_HEADING_RE)}\n${sectionText(body, NOTES_HEADING_RE)}`;
+  for (const line of text.split('\n')) {
+    const m = DATED_BULLET_RE.exec(line);
+    if (!m) continue;
+    const ts = m[1] ?? '';
+    const actor = m[2] ?? '';
+    if (actor !== decidedBy && ts > decidedAt) return true;
+  }
+  return false;
+}
+
+/** One row of `answeredDecisions` — a card whose decision has been answered, plus whether anyone
+ * besides the decider has acknowledged it since. */
+export interface AnsweredDecisionRow {
+  id: string;
+  title: string;
+  assignee: string | null;
+  question: string;
+  /** The letter chosen, or `null` (a words-only answer, or a task closed with neither). */
+  chosen: string | null;
+  /** `chosen`'s option TEXT, or `null` when `chosen` is `null` or names no known option. */
+  chosenText: string | null;
+  words: string | null;
+  decidedAt: string;
+  /** `null` only for a hand-edited card whose `decision.decidedBy` was cleared by hand — CLAUDE.md:
+   *  a missing answer is `null`, never a plausible actor name. */
+  decidedBy: string | null;
+  acknowledged: boolean;
+}
+
+/**
+ * RCB-129 (observed on fpj, 2026-09-24: the owner answers FPJ-19 on the web at 18:19:51Z — `decide`
+ * sets `decision.decidedAt`/`decidedBy`/`chosen`/`words` — and nothing a seat reads changes: no log
+ * line, no STATE change; the card only leaves the OWNER QUEUE, and the coordinator noticed 7
+ * minutes later from `git status`). Every card whose decision `isDecided` (locked decision 1),
+ * newest `decidedAt` first.
+ *
+ * A card whose decision was answered by a hand edit that set `chosen`/`words` but never stamped
+ * `decidedAt` is EXCLUDED — there is no answer TIME to report, sort by, or filter `since` against,
+ * and CLAUDE.md's "a missing answer is `null`, never a plausible number" rules out inventing one
+ * (`toIso(now)` at read time would be a fabricated timestamp, not the actual answer time).
+ *
+ * `since`, when given, is an ALREADY-RESOLVED ISO-8601 timestamp (see `resolveSince`, which turns
+ * a raw `--since <ISO|HH:MMZ>` spec into one against a caller-supplied `now`) — rows with
+ * `decidedAt < since` are dropped. Pure, no I/O, no clock of its own.
+ */
+export function answeredDecisions(
+  cards: readonly Card[],
+  opts: { since?: string } = {},
+): AnsweredDecisionRow[] {
+  const since = opts.since;
+  const rows: AnsweredDecisionRow[] = [];
+  for (const card of cards) {
+    const d = card.decision;
+    if (!d || !isDecided(card) || d.decidedAt === null) continue;
+    if (since !== undefined && d.decidedAt < since) continue;
+    const chosenText =
+      d.chosen === null ? null : (d.options.find((o) => o.letter === d.chosen)?.text ?? null);
+    rows.push({
+      id: card.id,
+      title: card.title,
+      assignee: card.assignee ?? null,
+      question: d.question,
+      chosen: d.chosen,
+      chosenText,
+      words: d.words,
+      decidedAt: d.decidedAt,
+      decidedBy: d.decidedBy,
+      acknowledged: hasAckAfter(card.body, d.decidedAt, d.decidedBy),
+    });
+  }
+  return rows.sort((a, b) => (a.decidedAt < b.decidedAt ? 1 : a.decidedAt > b.decidedAt ? -1 : 0));
+}
+
+/** The CHOSEN cell `repoboard decisions`' table and the seat bundle's "Answered, not
+ * acknowledged" block both render one row as — `<letter>: <text>` for a lettered answer, a quoted
+ * words-only answer, or `-` for neither (a task closed bare). One function, so the CLI table and
+ * the seat render can never say something different for the same row. */
+export function formatAnsweredChoice(row: AnsweredDecisionRow): string {
+  if (row.chosen !== null) {
+    return row.chosenText !== null ? `${row.chosen}: ${row.chosenText}` : row.chosen;
+  }
+  if (row.words !== null) return `"${row.words}"`;
+  return '-';
+}
+
+const SINCE_TIME_RE = /^(\d{2}):(\d{2})Z$/;
+
+export type ResolveSinceResult = { ok: true; iso: string } | { ok: false; error: string };
+
+/**
+ * RCB-129: `repoboard decisions --since <ISO|HH:MMZ>` / `list_decisions(since)`. `HH:MMZ` means
+ * that UTC time on `now`'s own UTC date — not, on its own, a parseable `Date` the way a full ISO
+ * string is — everything else is tried as ISO-8601 via `Date.parse`. Pure (no `Date.now()`), so
+ * the CLI and MCP resolve their `--since`/`since` the same way against the SAME `now` and never
+ * disagree with each other or with a test.
+ */
+export function resolveSince(spec: string, now: Date): ResolveSinceResult {
+  const m = SINCE_TIME_RE.exec(spec);
+  if (m) {
+    const date = toIso(now).slice(0, 10);
+    return { ok: true, iso: `${date}T${m[1]}:${m[2]}:00Z` };
+  }
+  const parsed = Date.parse(spec);
+  if (Number.isNaN(parsed)) {
+    return { ok: false, error: `"${spec}" is not a full ISO-8601 datetime or HH:MMZ` };
+  }
+  return { ok: true, iso: toIso(new Date(parsed)) };
+}

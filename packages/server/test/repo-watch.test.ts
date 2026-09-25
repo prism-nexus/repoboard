@@ -186,7 +186,15 @@ describe('RCB-125 K16 half 1: one non-blocking rescan on watcher ready closes th
     expect(ctx.repo()?.files.map((f) => f.path)).toContain('gap.txt');
 
     const scanCountAfterReady = ctx.scanCount();
-    await sleep(2500); // longer than the 2000ms debounce; no further change should arrive
-    expect(ctx.scanCount()).toBe(scanCountAfterReady);
-  });
+    // Measured by the seat (8/8 isolated runs, 2026-09-25): after `ready`, macOS FSEvents
+    // replays ONE `change` event for gap.txt — the write `afterInitialScan` made just before the
+    // watcher started — scheduling one further debounced rescan. The bound below is therefore
+    // +1, not +0: this still catches a real rescan loop (which would keep scanning past +1),
+    // while tolerating the single replayed pre-watch event.
+    await sleep(2500); // longer than the 2000ms debounce
+    const settled = ctx.scanCount();
+    expect(settled).toBeLessThanOrEqual(scanCountAfterReady + 1);
+    await sleep(2500); // a second debounce window: quiet must stay quiet — no loop
+    expect(ctx.scanCount()).toBe(settled);
+  }, 12000);
 });

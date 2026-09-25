@@ -187,3 +187,19 @@ describe('npm README (RCB-135)', () => {
     expect(readFileSync(join(REPO_ROOT, 'README.md'), 'utf8')).toBe(rootReadmeBefore);
   });
 });
+
+describe('server bin survives npm publish (RCB-51)', () => {
+  // npm 11.14 `publish` drops a bin whose path starts with `./` from the registry manifest
+  // ("script name dist/cli.js was invalid and removed", measured 2026-09-25). The tarball keeps
+  // it, so pack-smoke still passes, but a registry install gets no `repoboard` command.
+  it('names every bin by a bare relative path', () => {
+    const server = JSON.parse(
+      readFileSync(join(REPO_ROOT, 'packages', 'server', 'package.json'), 'utf8'),
+    ) as { bin?: Record<string, string> };
+    const bins = Object.entries(server.bin ?? {});
+    expect(bins).toEqual([['repoboard', 'dist/cli.js']]);
+    for (const [, path] of bins) {
+      expect(path).not.toMatch(/^(\.\/|\/|\.\.)/);
+    }
+  });
+});

@@ -29,7 +29,7 @@
     "node": ">=20"
   },
   "bin": {
-    "repoboard": "./dist/cli.js"
+    "repoboard": "dist/cli.js"
   },
   "main": "./dist/index.js",
   "exports": {

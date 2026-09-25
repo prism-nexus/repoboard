@@ -3,6 +3,7 @@ id: RCB-51
 title: "K5 publish `repoboard` to npm — OWNER WORK first: npm account + `repoboard` org, 2FA on, placeholder 0.0.1 to claim the name; then the builder publishes the CLI as unscoped `repoboard` and core/server under @repoboard"
 status: todo
 priority: high
+gate: RCB-153
 decision:
   question: npm account + `repoboard` org, 2FA on, placeholder 0.0.1 published to claim the name; then tell the builder (K5 publishes the CLI as unscoped `repoboard`, core/server under @repoboard)
   kind: task
@@ -15,7 +16,7 @@ decision:
   decidedBy: coordinator
   decidedAt: 2026-09-24T20:55:45Z
 created: 2026-09-18T19:52:32Z
-updated: 2026-09-25T19:35:31Z
+updated: 2026-09-25T20:17:51Z
 ---
 ## Decision
 - 2026-09-24T20:55:45Z coordinator — done — "account and org created on npm so once this batch finishes we are set to release"
@@ -25,6 +26,7 @@ updated: 2026-09-25T19:35:31Z
 - 2026-09-24T20:56:56Z repoboard builder — repoboard builder 20:5xZ 09-24: owner words via the coordinator's relay (heard 20:5xZ, 1:5x pm Pacific): "I have not setup the 2fa yet". Account + org exist; 2FA is NOT set up — the owner's step before the publish; the builder raises it in its terminal confirm at publish time (check npm whoami and the org's publishing setting then).
 - 2026-09-24T21:05:48Z repoboard builder — repoboard builder 21:1xZ 09-24: owner words via the coordinator's relay (fpj OWNER-DECISIONS f1965613): "2fa is enabled on my account now". RCB-51 fully answered: account, org, 2FA. Placeholder 0.0.1 moot — 0.2.0 ships at batch-done after the builder's terminal confirm with the owner.
 - 2026-09-25T19:35:31Z builder — repoboard builder 19:4xZ 09-25: owner decision in the builder terminal: publish UNSCOPED `repoboard` (O1 unchanged). Considered and rejected: @repoboard/cli scoped (npx friction; leaves the unscoped name open to squatting) and scoped+unscoped-alias (two publishes, bin clash, cli.ts main-module guard blocks a thin import wrapper). The @repoboard scope stays org-owned for future packages. npm whoami = prism-nexus (login completed after the reboot).
+- 2026-09-25T20:17:51Z builder — repoboard builder 20:2xZ 09-25: owner in the builder terminal: 'lets not do multiple launches lets get rcb-153 done verified and then I will create the publish token and we can publish'. Order flipped: RCB-51 now gated on RCB-153 (was the reverse). Publish-ready state at 9afc33c (gate 1591|4|0, dry run clean, shasum 28f2fdf0) is superseded by whatever RCB-153 lands; re-gate + re-pack at publish time. Owner will create a publish token (granular access token) instead of an OTP.
 
 ## Log
 - 2026-09-18T19:52:32Z coordinator — moved todo → decide
@@ -33,3 +35,4 @@ updated: 2026-09-25T19:35:31Z
 - 2026-09-18T20:55:35Z coordinator — owner task: npm account + `repoboard` org, 2FA on, placeholder 0.0.1 published to claim the name; then tell the builder (K5 publishes the CLI as unscoped `repoboard`, core/server under @repoboard)
 - 2026-09-24T20:55:45Z coordinator — done — "account and org created on npm so once this batch finishes we are set to release" → todo (default; asked in-column)
 - 2026-09-24T20:55:45Z coordinator — moved decide → todo
+- 2026-09-25T20:17:51Z builder — updated gate

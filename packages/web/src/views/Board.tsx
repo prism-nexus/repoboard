@@ -11,6 +11,7 @@ import {
 } from '@dnd-kit/core';
 import { sortableKeyboardCoordinates } from '@dnd-kit/sortable';
 import {
+  type BoardConfig,
   type Card,
   type Column as ColumnConfig,
   findColumn,
@@ -20,7 +21,7 @@ import {
   stepsOf,
   WIP_COUNTS_PARENTS,
 } from '@repoboard/core';
-import { Fragment, useCallback, useMemo, useState } from 'react';
+import { Fragment, useCallback, useMemo, useRef, useState } from 'react';
 import { BoardTools } from '../components/BoardTools.jsx';
 import { CardItem } from '../components/CardItem.jsx';
 import { Column } from '../components/Column.jsx';
@@ -28,6 +29,7 @@ import { ColumnEditor } from '../components/ColumnEditor.jsx';
 import { Confetti } from '../components/Confetti.jsx';
 import { StatePanel } from '../components/StatePanel.jsx';
 import { TipStrip } from '../components/TipStrip.jsx';
+import { type Row, VirtualRows } from '../components/VirtualRows.jsx';
 import { useArrivals, useBoardState, useNow, useStore } from '../hooks.js';
 import {
   type ColumnCards,
@@ -78,6 +80,89 @@ function laneStepClass(
  * re-rendering every memoized `CardItem` through `useSortable` on a select. */
 const POINTER_SENSOR_OPTIONS = { activationConstraint: { distance: 4 } };
 const KEYBOARD_SENSOR_OPTIONS = { coordinateGetter: sortableKeyboardCoordinates };
+
+/**
+ * RCB-151 step 3: a column virtualizes only above this many cards. The count is the column's
+ * UNFILTERED card count (`unfilteredCountByStatus` below, built from the full `cards`, not
+ * `shown`/`laneColumns`) so toggling a size filter or a search query never switches a column
+ * between the plain and the virtualized path. At or below this, a column's JSX is byte-for-byte
+ * what it was before this card. *** Control: set this to `Infinity` and board-virtual.test.tsx's
+ * (a) and (d) must fail — no column ever virtualizes, so more than 60 cards mount. ***
+ */
+export const VIRTUALIZE_AT = 150;
+
+/** RCB-151 step 3: a column flattened to DOM order, `VirtualRows`' `Row` shape — one lane head
+ * (only when the lane has a parent, matching the plain path's `parentId ? … : null`) followed by
+ * its cards. Both the plain and the virtualized path read the same `col.lanes`, so a column's
+ * order does not change with the mode it renders in. */
+function flattenRows(lanes: Lane[]): Row[] {
+  const rows: Row[] = [];
+  for (const lane of lanes) {
+    const parentId = laneParentId(lane);
+    if (parentId) rows.push({ kind: 'lane', key: `lane-${parentId}`, lane });
+    for (const card of lane.cards) rows.push({ kind: 'card', key: card.id, card });
+  }
+  return rows;
+}
+
+/**
+ * RCB-151 step 3: the lane head, pulled out of the JSX so the plain and the virtualized column
+ * path render it identically — pulling it out alone changes no DOM (`board-memo`/`dnd`/etc. stay
+ * byte-identical).
+ */
+function LaneHead({
+  parentId,
+  lane,
+  cards,
+  config,
+  columnId,
+  isDoneColumn,
+  onOpen,
+}: {
+  parentId: string;
+  lane: Lane;
+  cards: Card[];
+  config: BoardConfig;
+  columnId: string;
+  isDoneColumn: (status: string) => boolean;
+  onOpen: (id: string) => void;
+}) {
+  const parentRollup = lane.parent ? rollup(lane.parent, cards, config) : null;
+  return (
+    <div className="lane__head" data-testid={`lane-${parentId}`}>
+      <button
+        type="button"
+        className="lane__open"
+        onClick={() => onOpen(parentId)}
+        title={`Open ${parentId}`}
+      >
+        {parentId}
+      </button>
+      <span className="lane__title">{lane.parent ? lane.parent.title : '(no such card)'}</span>
+      {parentRollup ? (
+        <span className="lane__rollup">
+          {parentRollup.done}/{parentRollup.total} done
+          {parentRollup.blockedOn ? ` · blocked on ${gateChipText(parentRollup.blockedOn)}` : ''}
+        </span>
+      ) : null}
+      {lane.parent ? (
+        <div className="lane__chain" data-testid={`lane-chain-${parentId}`}>
+          {stepsOf(lane.parent.id, cards).map((step, i) => (
+            <Fragment key={step.id}>
+              {i > 0 ? <span className="lane__chain-arrow">→</span> : null}
+              <span
+                className={laneStepClass(step, columnId, isDoneColumn)}
+                title={`${step.id} · ${step.status}`}
+              >
+                {step.phase ?? step.id}
+              </span>
+            </Fragment>
+          ))}
+        </div>
+      ) : null}
+    </div>
+  );
+}
 
 /** Where a drop lands: a column id, or the column of the card it was dropped on. */
 export function resolveDropStatus(
@@ -196,7 +281,38 @@ export function Board() {
     for (const c of cards) if (c.parent !== undefined) ids.add(c.parent);
     return ids;
   }, [cards]);
+  // RCB-151 step 3: each status's count over the FULL `cards` — what `VIRTUALIZE_AT` compares
+  // against, so a size filter or a search query (which only ever shrink `shown`) never flips a
+  // column between the plain and the virtualized path.
+  const unfilteredCountByStatus = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const c of cards) counts.set(c.status, (counts.get(c.status) ?? 0) + 1);
+    return counts;
+  }, [cards]);
+  // RCB-84: `.board` is the one shared scroller; `VirtualRows` reads a virtualized column's
+  // position against it (never against the column itself).
+  const boardRef = useRef<HTMLDivElement>(null);
   const [dragging, setDragging] = useState<Card | null>(null);
+  const activeId = dragging?.id ?? null;
+
+  // RCB-151 step 3: a card row's estimated height before it has actually been measured — RCB-139
+  // clamps a title to 3 lines; `hasMeta` mirrors `CardItem`'s own condition for rendering a
+  // `card__meta` row at all, so the estimate and the real DOM agree on when that row exists.
+  const estimateCardHeight = useCallback(
+    (card: Card): number => {
+      const lines = Math.min(3, Math.ceil(card.title.length / 32));
+      const phase = phaseById.get(card.id) ?? null;
+      const hasMeta = Boolean(
+        card.size || card.labels?.length || card.files?.length || card.refs?.length || phase,
+      );
+      return 40 + 17 * lines + (hasMeta ? 22 : 0);
+    },
+    [phaseById],
+  );
+  const estimateRow = useCallback(
+    (row: Row): number => (row.kind === 'lane' ? 56 : estimateCardHeight(row.card)),
+    [estimateCardHeight],
+  );
 
   const columnIndex = useCallback((s: string) => columns.findIndex((c) => c.id === s), [columns]);
   const isActiveColumn = useCallback(
@@ -287,76 +403,93 @@ export function Board() {
         onDragEnd={onDragEnd}
         onDragCancel={() => setDragging(null)}
       >
-        <div className={`board ${selectedId ? 'board--drawer' : ''}`} data-testid="board">
-          {laneColumns.map((col) => (
-            <Column
-              key={col.id}
-              column={col}
-              wipCount={wipCountFor(col.cards, parentIds)}
-              onArchive={col.done ? archiveDone : undefined}
-            >
-              {col.lanes.map((lane) => {
-                const parentId = laneParentId(lane);
-                const parentRollup = lane.parent ? rollup(lane.parent, cards, config) : null;
-                return (
-                  <Fragment key={parentId ?? `${col.id}-noparent`}>
-                    {parentId ? (
-                      <div className="lane__head" data-testid={`lane-${parentId}`}>
-                        <button
-                          type="button"
-                          className="lane__open"
-                          onClick={() => open(parentId)}
-                          title={`Open ${parentId}`}
-                        >
-                          {parentId}
-                        </button>
-                        <span className="lane__title">
-                          {lane.parent ? lane.parent.title : '(no such card)'}
-                        </span>
-                        {parentRollup ? (
-                          <span className="lane__rollup">
-                            {parentRollup.done}/{parentRollup.total} done
-                            {parentRollup.blockedOn
-                              ? ` · blocked on ${gateChipText(parentRollup.blockedOn)}`
-                              : ''}
-                          </span>
+        <div
+          ref={boardRef}
+          className={`board ${selectedId ? 'board--drawer' : ''}`}
+          data-testid="board"
+        >
+          {laneColumns.map((col) => {
+            // RCB-151 step 3: the UNFILTERED count for THIS status — a size filter or a search
+            // query only ever shrinks `col.cards`, so deciding on that instead could flip a
+            // column between modes as the owner types. `> VIRTUALIZE_AT` is `Board.tsx`'s only
+            // place that reads `unfilteredCountByStatus`.
+            const virtualize = (unfilteredCountByStatus.get(col.id) ?? 0) > VIRTUALIZE_AT;
+            return (
+              <Column
+                key={col.id}
+                column={col}
+                wipCount={wipCountFor(col.cards, parentIds)}
+                onArchive={col.done ? archiveDone : undefined}
+              >
+                {virtualize ? (
+                  <VirtualRows
+                    rows={flattenRows(col.lanes)}
+                    scrollRef={boardRef}
+                    activeId={activeId}
+                    estimate={estimateRow}
+                    renderRow={(row) =>
+                      row.kind === 'lane' ? (
+                        <LaneHead
+                          parentId={laneParentId(row.lane) ?? ''}
+                          lane={row.lane}
+                          cards={cards}
+                          config={config}
+                          columnId={col.id}
+                          isDoneColumn={isDoneColumn}
+                          onOpen={open}
+                        />
+                      ) : (
+                        <CardItem
+                          card={row.card}
+                          active={isActive(row.card, config, nowDate)}
+                          arrival={arrivals.byId.get(row.card.id)}
+                          fun={fun}
+                          onOpen={open}
+                          pinned={pinned.includes(row.card.id)}
+                          onPin={pin}
+                          onHover={hover}
+                          phase={phaseById.get(row.card.id) ?? null}
+                        />
+                      )
+                    }
+                  />
+                ) : (
+                  col.lanes.map((lane) => {
+                    const parentId = laneParentId(lane);
+                    return (
+                      <Fragment key={parentId ?? `${col.id}-noparent`}>
+                        {parentId ? (
+                          <LaneHead
+                            parentId={parentId}
+                            lane={lane}
+                            cards={cards}
+                            config={config}
+                            columnId={col.id}
+                            isDoneColumn={isDoneColumn}
+                            onOpen={open}
+                          />
                         ) : null}
-                        {lane.parent ? (
-                          <div className="lane__chain" data-testid={`lane-chain-${parentId}`}>
-                            {stepsOf(lane.parent.id, cards).map((step, i) => (
-                              <Fragment key={step.id}>
-                                {i > 0 ? <span className="lane__chain-arrow">→</span> : null}
-                                <span
-                                  className={laneStepClass(step, col.id, isDoneColumn)}
-                                  title={`${step.id} · ${step.status}`}
-                                >
-                                  {step.phase ?? step.id}
-                                </span>
-                              </Fragment>
-                            ))}
-                          </div>
-                        ) : null}
-                      </div>
-                    ) : null}
-                    {lane.cards.map((card) => (
-                      <CardItem
-                        key={card.id}
-                        card={card}
-                        active={isActive(card, config, nowDate)}
-                        arrival={arrivals.byId.get(card.id)}
-                        fun={fun}
-                        onOpen={open}
-                        pinned={pinned.includes(card.id)}
-                        onPin={pin}
-                        onHover={hover}
-                        phase={phaseById.get(card.id) ?? null}
-                      />
-                    ))}
-                  </Fragment>
-                );
-              })}
-            </Column>
-          ))}
+                        {lane.cards.map((card) => (
+                          <CardItem
+                            key={card.id}
+                            card={card}
+                            active={isActive(card, config, nowDate)}
+                            arrival={arrivals.byId.get(card.id)}
+                            fun={fun}
+                            onOpen={open}
+                            pinned={pinned.includes(card.id)}
+                            onPin={pin}
+                            onHover={hover}
+                            phase={phaseById.get(card.id) ?? null}
+                          />
+                        ))}
+                      </Fragment>
+                    );
+                  })
+                )}
+              </Column>
+            );
+          })}
         </div>
         <DragOverlay dropAnimation={fun ? undefined : null}>
           {dragging ? (

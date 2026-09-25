@@ -651,6 +651,17 @@ button {
   text-align: center;
   padding: 24px 0;
 }
+/* RCB-151 step 3: a virtualized column (above VIRTUALIZE_AT cards, Board.tsx) positions its rows
+   absolutely against this box instead of `.column__cards`' flex `gap` — `VirtualRows.tsx` sets
+   each row's `top`/the box's `height` inline; only the fixed part of the rule lives here. */
+.virtual-rows {
+  position: relative;
+}
+.virtual-row {
+  position: absolute;
+  left: 0;
+  right: 0;
+}
 
 /* ---- card ---- */
 .card {

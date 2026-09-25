@@ -5,9 +5,7 @@ All notable changes to this project are documented in this file. The format is b
 
 ## [Unreleased]
 
-- `runCli` is no longer exported from the package entry.
-
-## [0.2.0] — 2026-09-24
+## [0.2.0] — 2026-09-25
 
 ### Highlights
 
@@ -43,10 +41,43 @@ What changed since 0.1.0, card ids in parentheses point at `.repoboard/cards/<id
   (RCB-91); `check` reports a future-stamp and no longer flags a STATE stamp equal to the newest
   log header second (RCB-90; RCB-122 closes K13), and warns on card files git does not track,
   naming each id and its creator (RCB-119); local `init` keeps a tracked STATE.md/log in place
-  (RCB-93); `seat` says why Next card is empty (RCB-118).
+  (RCB-93); `seat` says why Next card is empty (RCB-118); `leases.yml` and `STATE.md` writes
+  serialize under one cross-process lock, an O_EXCL steal once the holder is dead or the lock is
+  older than 30 s (RCB-133); a log block from an UP seat restamps STATE.md, so `check` stays
+  green mid-session (RCB-127); `local init --remote none` acks a local layer with no backup and
+  `check`'s local-no-remote goes quiet (RCB-128); `repoboard decisions` / MCP `list_decisions` —
+  answered, not acknowledged (RCB-129); `check` flags a hand-typed OWNER QUEUE that drifts from
+  the generated one (RCB-130); live leases surfaced in `seat <name>`, `state` and `check`
+  (RCB-131); `log show --since/--tail`, `state --trim-landings --archive <path>` (RCB-132);
+  `seat` prints one line instead of six empty sections on a solo board (RCB-140); `--json` on
+  `card show`, `log show` and `state` (RCB-144).
+- **MCP parity.** `CARD_INTRO` lives once, in the server instructions, instead of spliced into
+  every tool description — the schema drops 31,301 → 22,769 B across 25 tools (RCB-137); four
+  tools mirror their CLI counterparts — `get_log`, `get_seat`, `record_gate`, `get_gate` — and
+  `list_cards` gains `size`/`parent`/`unblocked` (RCB-146); 29 tools, 26,155 B measured over stdio at
+  RCB-146; `list_decisions` makes 30 (RCB-129); MCP now speaks
+  stdio JSON-RPC without `@modelcontextprotocol/sdk` at runtime, 98 → 5 production transitive
+  packages (RCB-152).
+- **The board UI.** `serve` fires one non-blocking rescan on the watcher's `ready`, closing the
+  scan/watch gap where a file created before the first watch went unseen (RCB-125 closes K16); a
+  dead server on load shows "can't reach the server" after 5 s (RCB-138); card titles clamp to 3
+  lines, full title on hover (RCB-139); log timeline blocks render markdown, parsed only when
+  opened (RCB-143); a text search box filters the board by title, id and label (RCB-147); a
+  one-time dismissible tip strip shows on a board with at most 1 card (RCB-149); memoized cards
+  and linear per-render work cut drawer-open latency 277 → 27 ms at 500 cards, and a column above
+  150 cards virtualizes — sort 191 → 44 ms, DOM 4,098 → 193 nodes at N=500 (RCB-151 closes
+  RCB-148); web test coverage added for the reconnect layer and wire protocol (RCB-150).
 - **npm packaging.** The package page ships README and LICENSE, repo links, no source maps, no
   tracker ids in `--help` (RCB-121); CI green on `main` — suite on Node 22/24, pack-smoke on
-  20/22/24 (RCB-120).
+  20/22/24 (RCB-120); per-command `--help`, parse errors with a usage block, a one-line crash,
+  and a 7-line quickstart replacing a 212-line one (RCB-134); the npm README strips
+  `<!-- npm:omit -->` regions and turns 13 prose doc pointers into GitHub links (RCB-135); `init`
+  names its sibling verbs, the dead "Build once, then" line is gone (RCB-136); the library entry
+  stops re-exporting `runCli`, so `dist/index.js` no longer bundles the CLI — 395,379 → 260,438 B,
+  the packed tarball 366.0 → 339.7 kB (RCB-141); README measures the MCP SDK's install weight —
+  98 production packages, 93 reachable only through `@modelcontextprotocol/sdk` (RCB-142); a
+  build-time src digest clears the dist-stale false alarm after a checkout that rewrites src/
+  with unchanged bytes (RCB-145).
 - `@repoboard/core` is internal: not published, bundled into `repoboard`.
 
 ## [0.1.0] — 2026-09-18

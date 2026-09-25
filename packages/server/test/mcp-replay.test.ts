@@ -6,8 +6,9 @@
  * `Client` against this same server for the ordinary tool-by-tool coverage).
  *
  * This is a CONTROL, not just a snapshot: each golden response encodes a specific piece of
- * behaviour — initialize's protocol-version fallback, `tools/list`'s 29-tool shape, the exact
- * `MCP error -32602: …` text for an unknown tool and for bad `move_card` args, `-32601 Method not
+ * behaviour — initialize's protocol-version fallback, `tools/list`'s 30-tool shape (id 3 alone
+ * re-recorded from this server at RCB-129/131/132: a tool added, four descriptions changed), the
+ * exact `MCP error -32602: …` text for an unknown tool and for bad `move_card` args, `-32601 Method not
  * found` for everything this server does not implement, and silence for every notification and the
  * one malformed line. Changing an error string in `mcp-rpc.ts` desyncs it from the recording and
  * fails this test (see the report on RCB-152's card for the perturbation actually run).

@@ -24,7 +24,7 @@ import {
 } from '../src/seat.js';
 import { SECTION_PLACEHOLDER } from '../src/state.js';
 import type { SystemsSummary } from '../src/systems-surface.js';
-import type { Card } from '../src/types.js';
+import type { Card, LeasesDoc } from '../src/types.js';
 
 const NOW = new Date('2026-09-18T21:00:00Z');
 
@@ -681,6 +681,7 @@ describe('renderSeatBundle: placeholders for every missing part', () => {
       inFlight: null,
       owes: null,
       systems: null,
+      leases: [],
       solo: false,
     };
     const rendered = renderSeatBundle(bundle, NOW);
@@ -719,6 +720,7 @@ describe('renderSeatBundle: placeholders for every missing part', () => {
       inFlight: null,
       owes: null,
       systems: null,
+      leases: [],
       solo: false,
     };
     const rendered = renderSeatBundle(bundle, NOW);
@@ -782,6 +784,7 @@ describe('renderSeatBundle: a solo board drops the placeholder sections (RCB-140
       inFlight: null,
       owes: null,
       systems: null,
+      leases: [],
       solo: true,
     };
     const rendered = renderSeatBundle(bundle, NOW);
@@ -829,6 +832,7 @@ describe('renderSeatBundle: a solo board drops the placeholder sections (RCB-140
       inFlight: null,
       owes: null,
       systems: null,
+      leases: [],
       solo: true,
     };
     const rendered = renderSeatBundle(bundle, NOW);
@@ -1449,5 +1453,145 @@ describe('seatBundle: answeredNotAck (RCB-129)', () => {
     const idx = rendered.indexOf('## Answered, not acknowledged');
     expect(idx).toBeGreaterThanOrEqual(0);
     expect(rendered.slice(idx)).toContain('(none)');
+  });
+});
+
+describe('leases surfaced in seat <name> (RCB-131)', () => {
+  function leasesDoc(...leases: LeasesDoc['leases']): LeasesDoc {
+    return { leases, windows: [] };
+  }
+
+  it('seatBundle carries only LIVE leases through — a stale one is excluded', () => {
+    const bundle = seatBundle({
+      name: 'builder',
+      now: NOW,
+      seatsSection: null,
+      ownBlock: null,
+      coordinatorBlock: null,
+      cards: [],
+      leases: leasesDoc(
+        { resource: 'vitest-lock', holder: 'claude/ops', since: '2026-09-18T20:00:00Z' },
+        {
+          resource: 'dev-server',
+          holder: 'claude/builder',
+          since: '2026-09-18T10:00:00Z',
+          until: '2026-09-18T11:00:00Z', // stale: before NOW (21:00Z)
+        },
+      ),
+    });
+    expect(bundle.leases).toEqual([
+      { resource: 'vitest-lock', holder: 'claude/ops', since: '2026-09-18T20:00:00Z' },
+    ]);
+  });
+
+  it('defaults to [] when input.leases is absent — no live leases, not a throw', () => {
+    const bundle = seatBundle({
+      name: 'builder',
+      now: NOW,
+      seatsSection: null,
+      ownBlock: null,
+      coordinatorBlock: null,
+      cards: [],
+    });
+    expect(bundle.leases).toEqual([]);
+  });
+
+  it('renders "## Leases" right after "## SEATS line", before "## Rig", one line per live lease', () => {
+    const bundle = seatBundle({
+      name: 'builder',
+      now: NOW,
+      seatsSection: SEATS, // RCB-140: non-solo, so every section renders
+      ownBlock: null,
+      coordinatorBlock: null,
+      cards: [],
+      rig: '# RIG — laptop',
+      leases: leasesDoc({
+        resource: 'vitest-lock',
+        holder: 'claude/ops',
+        since: '2026-09-18T20:00:00Z',
+        until: '2026-09-18T21:30:00Z',
+        note: 'running the suite',
+      }),
+    });
+    const rendered = renderSeatBundle(bundle, NOW);
+    const seatsIdx = rendered.indexOf('## SEATS line');
+    const leasesIdx = rendered.indexOf('## Leases');
+    const rigIdx = rendered.indexOf('## Rig');
+    expect(seatsIdx).toBeGreaterThanOrEqual(0);
+    expect(leasesIdx).toBeGreaterThan(seatsIdx);
+    expect(rigIdx).toBeGreaterThan(leasesIdx);
+    expect(rendered).toContain(
+      'vitest-lock · claude/ops · since 20:00Z · until 21:30Z · "running the suite"',
+    );
+  });
+
+  it('suffixes " (yours)" when the lease holder matches the seat name, case-insensitive/trimmed', () => {
+    const bundle = seatBundle({
+      name: ' Builder ',
+      now: NOW,
+      seatsSection: SEATS,
+      ownBlock: null,
+      coordinatorBlock: null,
+      cards: [],
+      leases: leasesDoc(
+        { resource: 'dev-server', holder: 'builder', since: '2026-09-18T20:00:00Z' },
+        { resource: 'lane-a', holder: 'claude/ops', since: '2026-09-18T20:00:00Z' },
+      ),
+    });
+    const rendered = renderSeatBundle(bundle, NOW);
+    expect(rendered).toContain('dev-server · builder · since 20:00Z · until — (yours)');
+    expect(rendered).toContain('lane-a · claude/ops · since 20:00Z · until —');
+    expect(rendered).not.toContain('lane-a · claude/ops · since 20:00Z · until — (yours)');
+  });
+
+  it(
+    'no live leases: "(no live leases)", never an empty section — the control: reverting this ' +
+      'line to `renderLeaseLines(b.leases, now)` with an unfiltered stale lease must fail',
+    () => {
+      const bundle = seatBundle({
+        name: 'builder',
+        now: NOW,
+        seatsSection: SEATS,
+        ownBlock: null,
+        coordinatorBlock: null,
+        cards: [],
+      });
+      const rendered = renderSeatBundle(bundle, NOW);
+      expect(rendered).toContain('## Leases\n(no live leases)');
+    },
+  );
+
+  it('solo board with no live leases: the "## Leases" section is dropped, like the other placeholders (RCB-140)', () => {
+    const bundle = seatBundle({
+      name: 'builder',
+      now: NOW,
+      seatsSection: null,
+      ownBlock: null,
+      coordinatorBlock: null,
+      cards: [],
+    });
+    expect(bundle.solo).toBe(true);
+    const rendered = renderSeatBundle(bundle, NOW);
+    expect(rendered).not.toContain('## Leases');
+  });
+
+  it('solo board WITH a live lease: the "## Leases" section still prints (mirrors ownBlock/rig)', () => {
+    const bundle = seatBundle({
+      name: 'builder',
+      now: NOW,
+      seatsSection: null,
+      ownBlock: null,
+      coordinatorBlock: null,
+      cards: [],
+      leases: leasesDoc({
+        resource: 'dev-server',
+        holder: 'claude/ops',
+        since: '2026-09-18T20:00:00Z',
+      }),
+    });
+    expect(bundle.solo).toBe(true);
+    const rendered = renderSeatBundle(bundle, NOW);
+    expect(rendered).toContain('## Leases');
+    expect(rendered).toContain('dev-server · claude/ops · since 20:00Z · until —');
   });
 });

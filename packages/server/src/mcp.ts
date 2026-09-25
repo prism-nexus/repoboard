@@ -17,6 +17,8 @@ import {
   filterLogBlocks,
   isStale,
   type Lease,
+  type LeasesDoc,
+  liveLeases,
   needsDecision,
   renderState,
   resolveOlderThan,
@@ -146,6 +148,16 @@ export function toLeaseRow(l: Lease, now: Date): LeaseRow {
     state: isStale(l, now) ? 'stale' : 'live',
     note: l.note ?? null,
   };
+}
+
+/**
+ * RCB-131: `state --json`'s and `get_state`'s `leases` field share this ONE function — live
+ * leases only (`liveLeases`), each shaped by `toLeaseRow` (same row shape `lease list --json`/
+ * `list_leases` already use) — so the CLI and MCP can never disagree about which leases are
+ * "live" or how a row looks.
+ */
+export function liveLeaseRows(doc: LeasesDoc, now: Date): LeaseRow[] {
+  return liveLeases(doc, now).map((l) => toLeaseRow(l, now));
 }
 
 export interface WindowRow {
@@ -774,24 +786,41 @@ export function createMcpServer(opts: McpServerOptions): McpServer {
       title: 'Get STATE.md, rendered',
       description:
         "The repo's one-page STATE.md: {stamp, actor, sections: {live, lastLandings, seats}, " +
-        'ownerQueue: [{id, question, options}], text}. OWNER QUEUE is generated fresh from cards ' +
-        'that need a decision — never trust stale text from a prior read.',
+        'ownerQueue: [{id, question, options}], leases: [{resource, holder, since, until, state, ' +
+        'note}], text}. OWNER QUEUE and LEASES (RCB-131: live leases only, in `text` too, right ' +
+        'after OWNER QUEUE — never stored on disk) are both generated fresh from current data — ' +
+        'never trust stale text from a prior read.',
       annotations: { readOnlyHint: true },
     },
     () => {
       const doc = store.state();
-      if (!doc) return ok({ stamp: null, actor: null, sections: null, ownerQueue: [], text: null });
+      if (!doc) {
+        return ok({
+          stamp: null,
+          actor: null,
+          sections: null,
+          ownerQueue: [],
+          leases: [],
+          text: null,
+        });
+      }
       const all = store.list();
       const openCards = all.filter((c) => needsDecision(c));
-      const text = renderState(doc.sections, openCards, {
-        now: new Date(Date.parse(doc.stamp)),
-        actor: doc.actor,
-      });
+      const leasesDoc = store.leases();
+      const nowDate = now();
+      const text = renderState(
+        doc.sections,
+        openCards,
+        { now: new Date(Date.parse(doc.stamp)), actor: doc.actor },
+        leasesDoc,
+        nowDate,
+      );
       return ok({
         stamp: doc.stamp,
         actor: doc.actor,
         sections: doc.sections,
         ownerQueue: ownerQueue(all),
+        leases: liveLeaseRows(leasesDoc, nowDate),
         text,
       });
     },
@@ -886,8 +915,9 @@ export function createMcpServer(opts: McpServerOptions): McpServer {
     {
       title: "Get one seat's cold-start bundle",
       description:
-        'The cold-start bundle `seat <name> --json` prints: its SEATS line, its last log ' +
-        "block, the coordinator's, its next todo card and the open decisions. Read only — " +
+        'The cold-start bundle `seat <name> --json` prints: its SEATS line, its live leases ' +
+        '(RCB-131: `isStale` false, `(yours)` marks its own), its last log block, the ' +
+        "coordinator's, its next todo card and the open decisions. Read only — " +
         '--up/--down/--update stay CLI-only.',
       inputSchema: {
         name: z.string().min(1).describe('Seat name, e.g. claude/web-agent.'),
@@ -953,8 +983,9 @@ export function createMcpServer(opts: McpServerOptions): McpServer {
       description:
         'Call before starting and before stopping (locked practice). Returns {findings, ' +
         'exitCode}: stale-state, active-without-lease (warning, strict-only), stale-lease, ' +
-        'needs-ask (warning, strict-only — no open ask), cost-over-budget, systems-invalid ' +
-        '(error), systems-stale (warning), needs-decision (info). Empty findings means ok.',
+        'live-lease (info), needs-ask (warning, ' +
+        'strict-only — no open ask), cost-over-budget, systems-invalid (error), systems-stale ' +
+        '(warning), needs-decision (info). Empty findings means ok.',
       inputSchema: {
         strict: z.boolean().optional().describe('Also block on warning-grade findings.'),
       },

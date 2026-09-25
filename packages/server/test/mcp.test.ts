@@ -907,7 +907,14 @@ describe('repoboard mcp: get_state / set_state_section / append_repo_log / check
   it('get_state before any STATE.md exists: nulls, not a crash', async () => {
     const r = await rig();
     const state = await r.json<{ stamp: null; text: null; ownerQueue: unknown[] }>('get_state');
-    expect(state).toEqual({ stamp: null, actor: null, sections: null, ownerQueue: [], text: null });
+    expect(state).toEqual({
+      stamp: null,
+      actor: null,
+      sections: null,
+      ownerQueue: [],
+      leases: [],
+      text: null,
+    });
   });
 
   it('set_state_section scaffolds then restamps; get_state renders it with generated OWNER QUEUE', async () => {

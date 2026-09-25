@@ -1038,6 +1038,8 @@ export class CardStore extends EventEmitter<StoreEvents> {
       // itself renders the "no systems.yml yet" line when both args are the absent-file shape,
       // which is exactly `this.systemsDoc`/`this.systemsErrors` when there is no file.
       systems: systemsSummary(this.systemsDoc, this.systemsErrors),
+      // RCB-131: `.repoboard/leases.yml`'s doc — `seatBundleCore` keeps only the live ones.
+      leases: this.leasesDoc,
     });
   }
 

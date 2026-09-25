@@ -2339,6 +2339,91 @@ describe('repoboard state --trim-landings (RCB-92)', () => {
     expect(res.code).toBe(1);
     expect(res.err).toMatch(/non-negative integer/);
   });
+
+  describe('LEASES section, generated, display-only (RCB-131)', () => {
+    it('a live lease shows in "## LEASES" right after "## OWNER QUEUE", never on disk', async () => {
+      const root = await freshRepo({});
+      await repoboard(root, 'init', '--practices');
+      const take = await repoboard(
+        root,
+        'lease',
+        'take',
+        'vitest-lock',
+        '--as',
+        'claude/ops',
+        '--until',
+        '+10m',
+        '--note',
+        'running the suite',
+      );
+      expect(take.code).toBe(0);
+
+      const printed = await repoboard(root, 'state');
+      expect(printed.code).toBe(0);
+      expect(printed.out).toContain('## LEASES');
+      // NOW (test fixture clock) is 2026-09-02T22:41:10Z, +10m stays the same UTC calendar day —
+      // both since/until render as HH:MMZ, not a bare date.
+      expect(printed.out).toContain(
+        'vitest-lock · claude/ops · since 22:41Z · until 22:51Z · "running the suite"',
+      );
+      const ownerIdx = printed.out.indexOf('## OWNER QUEUE');
+      const leasesIdx = printed.out.indexOf('## LEASES');
+      const seatsIdx = printed.out.indexOf('## SEATS');
+      expect(ownerIdx).toBeGreaterThanOrEqual(0);
+      expect(leasesIdx).toBeGreaterThan(ownerIdx);
+      expect(seatsIdx).toBeGreaterThan(leasesIdx);
+
+      // The control: STATE.md on disk NEVER gets a LEASES heading — a `state --set-section`
+      // write is a fresh, independent read of the CURRENT on-disk file, not of the text this
+      // test just printed, so this also proves the write path (`setStateSection`, `renderStateFile`)
+      // never picks up leasesBody. Reverting `renderStateFile` to pass a `leasesBody` (the bug
+      // this control is written to catch) must turn this failing.
+      await repoboard(root, 'state', '--set-section', 'LIVE', 'Tree is dev.', '--as', 'claude/ops');
+      const onDisk = await readFile(join(root, '.repoboard', 'STATE.md'), 'utf8');
+      expect(onDisk).not.toContain('## LEASES');
+      expect(onDisk).not.toContain('vitest-lock');
+    });
+
+    it('no leases at all: "(no live leases)", never an empty section', async () => {
+      const root = await freshRepo({});
+      await repoboard(root, 'init', '--practices');
+      const printed = await repoboard(root, 'state');
+      expect(printed.out).toContain('## LEASES\n\n(no live leases)');
+    });
+
+    it('a STALE lease is excluded — only the live one shows', async () => {
+      const root = await freshRepo({});
+      await repoboard(root, 'init', '--practices');
+      await repoboard(
+        root,
+        'lease',
+        'take',
+        'already-expired',
+        '--as',
+        'claude/ops',
+        '--until',
+        '2020-01-01T00:00:00Z',
+      );
+      await repoboard(root, 'lease', 'take', 'still-live', '--as', 'claude/ops');
+      const printed = await repoboard(root, 'state');
+      expect(printed.out).toContain('still-live · claude/ops');
+      expect(printed.out).not.toContain('already-expired');
+    });
+
+    it('--json gains a `leases` array of live leases, same rows as `lease list --json`', async () => {
+      const root = await freshRepo({});
+      await repoboard(root, 'init', '--practices');
+      await repoboard(root, 'lease', 'take', 'vitest-lock', '--as', 'claude/ops');
+      const res = await repoboard(root, 'state', '--json');
+      expect(res.code).toBe(0);
+      const parsed = JSON.parse(res.out) as {
+        leases: Array<{ resource: string; holder: string; state: string }>;
+      };
+      expect(parsed.leases).toEqual([
+        expect.objectContaining({ resource: 'vitest-lock', holder: 'claude/ops', state: 'live' }),
+      ]);
+    });
+  });
 });
 
 describe('repoboard state --trim-landings --archive (RCB-132)', () => {
@@ -2869,11 +2954,13 @@ describe('repoboard seat', () => {
     // RCB-118: SeatBundle gained nextCardEmpty — updated here too, same reason (not itself an
     // on-disk assertion, but a direct, mechanical consequence of the seat.ts change this brief
     // authorized — left stale it would fail this test for a reason unrelated to the brief).
+    // RCB-131: SeatBundle gained leases — same reason.
     expect(Object.keys(parsed).sort()).toEqual(
       [
         'answeredNotAck',
         'coordinatorBlock',
         'inFlight',
+        'leases',
         'name',
         'nextCard',
         'nextCardEmpty',

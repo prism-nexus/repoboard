@@ -72,6 +72,7 @@ import { hasLocal, localInit, localStatus, localSync, scaffoldIfAbsent } from '.
 import {
   formatRows,
   type LeaseRow,
+  liveLeaseRows,
   serveMcp,
   toLeaseRow,
   toRow,
@@ -190,11 +191,12 @@ Usage:
                                         exit 0 "clear <resource>" when nothing blocks it; exit 1
                                         naming what does (a window, a live lease, or both) — this is
                                         what a lock shim calls
-  repoboard state [--json]                      print the rendered STATE.md (OWNER QUEUE generated
-                                        fresh from cards that need a decision); --json prints
-                                        {stamp, actor, sections, ownerQueue} (read path only —
-                                        refused with --set-section/--trim-landings); no STATE.md:
-                                        null
+  repoboard state [--json]                      print the rendered STATE.md (OWNER QUEUE and, right
+                                        after it, LEASES — RCB-131: live leases only — both
+                                        generated fresh, never stored on disk); --json prints
+                                        {stamp, actor, sections, ownerQueue, leases} (read path
+                                        only — refused with --set-section/--trim-landings); no
+                                        STATE.md: null
   repoboard state --set-section LIVE|LAST-LANDINGS|SEATS (<text> | --stdin) [--as a]
                                         replace one section's body and restamp
   repoboard state --trim-landings <n> [--archive <path>] [--as a]
@@ -223,8 +225,11 @@ Usage:
   repoboard log --last <seat>           print that seat's newest block, searching back across days
                                         (cold-start: your own seat's last block, then the coordinator's)
   repoboard seat <name> | list [--json]  the cold-start bundle for one seat: its SEATS line, its
-                                        last log block, the coordinator's, its next todo card, the
-                                        open decisions, and its in-flight/owes fields — one command
+                                        live leases (RCB-131: "## Leases", right after the SEATS
+                                        line — one lease per line, "(yours)" suffixed when this
+                                        seat holds it, "(no live leases)" when none), its last log
+                                        block, the coordinator's, its next todo card, the open
+                                        decisions, and its in-flight/owes fields — one command
                                         instead of the three-file ritual
   repoboard seat list [--json]         one row per SEATS bullet — NAME STATUS STAMP IN-FLIGHT —
                                         instead of "seat <name>" being parsed as a seat literally
@@ -255,7 +260,9 @@ Usage:
                                         (also reads board.yml's logDir, P8.6 — an extra daily-log
                                         directory alongside .repoboard/log/, read-only),
                                         active-without-lease (warning; blocks only with --strict),
-                                        stale-lease, needs-decision (informational, never fails),
+                                        stale-lease, live-lease (informational, never fails — one
+                                        line per lease currently held, RCB-131),
+                                        needs-decision (informational, never fails),
                                         needs-ask (warning; blocks only with --strict — a card in a
                                         decision: true column with no OPEN ask, never asked or
                                         already decided and moved back), gated-steps
@@ -1438,9 +1445,12 @@ async function cmdState(args: string[], io: CliIO): Promise<number> {
     io.stdout.write('(no .repoboard/STATE.md — run `repoboard init --practices`)\n');
     return 0;
   }
+  const now = io.now?.() ?? new Date();
   if (values.json) {
     // RCB-144/RCB-146: OWNER QUEUE is generated, not stored — same `ownerQueue` (card-query.ts)
     // MCP's get_state calls, reused here as data rather than parsed back out of rendered text.
+    // RCB-131: `leases` is generated the same way, via the SAME `liveLeaseRows` MCP's get_state
+    // calls (mcp.ts), so the two can never disagree about which leases are "live".
     io.stdout.write(
       `${JSON.stringify(
         {
@@ -1448,6 +1458,7 @@ async function cmdState(args: string[], io: CliIO): Promise<number> {
           actor: doc.actor,
           sections: doc.sections,
           ownerQueue: ownerQueue(store.list()),
+          leases: liveLeaseRows(store.leases(), now),
         },
         null,
         2,
@@ -1455,10 +1466,13 @@ async function cmdState(args: string[], io: CliIO): Promise<number> {
     );
     return 0;
   }
-  const text = renderState(doc.sections, store.list(), {
-    now: new Date(Date.parse(doc.stamp)),
-    actor: doc.actor,
-  });
+  const text = renderState(
+    doc.sections,
+    store.list(),
+    { now: new Date(Date.parse(doc.stamp)), actor: doc.actor },
+    store.leases(),
+    now,
+  );
   io.stdout.write(text);
   return 0;
 }

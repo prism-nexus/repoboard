@@ -281,19 +281,31 @@ generated (above), so a hand-typed copy is a snapshot that goes stale the moment
 gets decided. `repoboard check` catches it as `seat-owner-queue-drift` (RCB-130) once the hand-typed
 set no longer matches the generated one; the fix is to drop the hand line, not to update it.
 
+**LEASES is generated too (RCB-131), right after OWNER QUEUE, on the CLI and MCP read paths —
+never on the on-disk file, never on `GET /api/state`** (item 4 of that card is out of scope: the
+HTTP surface still shows the old four-section page byte for byte). One line per LIVE lease (never
+a stale one — `check`'s `stale-lease` finding already owns those): `<resource> · <holder> · since
+<HH:MMZ or date> · until <HH:MMZ, date, or —> · "<note>"` (the note clause only when one is
+recorded), `(no live leases)` when there are none. `formatLeaseLine`/`renderLeaseLines`
+(`leases.ts`) are the ONE formatter behind this line, this section, and `seat <name>`'s `## Leases`
+block below — the three surfaces cannot disagree on the format. `repoboard state --json` and MCP's
+`get_state` gain a `leases` array of the same `{resource, holder, since, until, state, note}` rows
+`lease list --json`/`list_leases` already use, filtered to live only, via the ONE shared
+`liveLeaseRows` (mcp.ts).
+
 ### CLI
 
 | Command | Example |
 |---|---|
-| `repoboard state` | prints the rendered page (OWNER QUEUE generated fresh) |
-| `repoboard state --json` | (RCB-144) read path only — refused with `--set-section`/`--trim-landings`; prints `{stamp, actor, sections, ownerQueue}` from `store.state()`, `ownerQueue` generated fresh from cards that need a decision (same computation as MCP's `get_state`); no `STATE.md`: `null`, exit 0 |
+| `repoboard state` | prints the rendered page (OWNER QUEUE, and LEASES right after it — RCB-131, live leases only — both generated fresh) |
+| `repoboard state --json` | (RCB-144) read path only — refused with `--set-section`/`--trim-landings`; prints `{stamp, actor, sections, ownerQueue, leases}` from `store.state()`, `ownerQueue` generated fresh from cards that need a decision (same computation as MCP's `get_state`), `leases` (RCB-131) the live leases as `{resource, holder, since, until, state, note}` rows (same `liveLeaseRows` MCP's `get_state` calls); no `STATE.md`: `null`, exit 0 |
 | `repoboard state --set-section LIVE\|LAST-LANDINGS\|SEATS (<text> \| --stdin) [--as a]` | `repoboard state --set-section LIVE "Tree is dev." --as claude/ops` → `updated STATE.md LIVE` |
 | `repoboard state --trim-landings <n> [--archive <path>] [--as a]` | `repoboard state --trim-landings 3 --as claude/ops` — keeps the newest `<n>` LAST LANDINGS entries, archiving the rest verbatim to today's log (`.repoboard/log/<date>.md`, a normal seat-attributed block); with `--archive <path>` (RCB-132), archives to `<path>` INSTEAD (relative to root; created with a `# LAST LANDINGS archive` header if absent; never overwritten; no log block is written at all) — either way the SEATS-adjacent pointer left in LAST LANDINGS names wherever the entries went; `--archive` without `--trim-landings` is a user error; "nothing to trim: `<n>` entries ≤ `<n>`" and no write when there is nothing beyond `<n>` |
 | `repoboard log --as <seat> [--title "…"] (<text> \| --stdin)` | `repoboard log --as claude/ops --title "armed the fires" "Five waiters set."` → `logged 2026-09-17 claude/ops` — creates today's file if this is the first entry. RCB-127 (owner decision 2026-09-25): also restamps STATE.md's own line-3 stamp — the SAME restamp `seat --update` performs (`setStateSectionCore` on `seats`, the UNCHANGED body, actor = `<seat>`) — iff `<seat>` has an UP bullet in SEATS right now (`findSeatLine`'s own match rule); the line then reads `logged 2026-09-17 claude/ops · STATE restamped (claude/ops is UP)`. A DOWN seat, an unknown seat, or a hand-typed block still leave `check`'s stale-state finding to fire until that seat runs `seat --update` |
 | `repoboard log show [--date YYYY-MM-DD] [--seat s] [--since ts] [--tail n]` | prints a day's log (default today); `--seat` filters to that seat's own blocks; `--since ts` (RCB-132) keeps blocks whose `ts` >= `ts` — a full ISO-8601 datetime, or `HH:MMZ` for that UTC time on `--date`'s day; `--tail n` keeps the last `n` blocks of what's left, `n` greater than the count printing everything (never an error); the three compose in that fixed order — seat, then since, then tail. With any of the three, text output is the formatted blocks (as `--seat` alone prints them), never the day's raw file text |
 | `repoboard log show --json [--date YYYY-MM-DD] [--seat s] [--since ts] [--tail n]` | (RCB-144, RCB-132) prints `{date, blocks: [{seat, ts, title, text}]}` from the parsed blocks the text path already has, filtered the same way; no log for that date (or nothing matches): `{date, blocks: []}`, exit 0 |
 | `repoboard log --last <seat>` | `repoboard log --last claude/builder` — prints that seat's newest block, searching back across every day in `.repoboard/log/` AND, when configured, `board.yml`'s `logDir` (RCB-54 — the same merged set `check` reads; `repoboard log` itself still only ever writes `.repoboard/log/`), not just today; the seat match is by LEADING WORD, case-insensitive, when `<seat>` is one word (RCB-62) — `builder` finds a hand-written heading like `BUILDER (fresh, f87be1)`, but `coordinator` does NOT match `COORDINATOR/SEARCH` (no whitespace, so that whole token is its own leading word); a multi-word `<seat>` still compares whole-to-whole; a cold seat with no history prints `(no log block for <seat>)`, exit 0 |
-| `repoboard seat <name> [--json]` | `repoboard seat claude/builder` — the RCB-48 cold-start bundle in one command: an `## In flight / owes` section first (`in-flight:`/`owes:` parsed off the seat's own SEATS bullet, RCB-89), the SEATS bullet mentioning `<name>` (whole word), its own last log block (same RCB-62 leading-word match as `log --last`), the coordinator's (omitted when `<name>` IS the coordinator), its Next card (RCB-103: first, the next unblocked step — `blockedReason(...) === null`, no assignee or assigned to it — of the first non-done card of its own that HAS steps (`parent`/`phase`/`gate`, RCB-68), in list order; only then, as before, assigned to it, else the highest-priority unassigned todo card — high > medium > low > unset, list order among equals — the render says which), and the cards with an open decision. Fixed `## ` headings; a missing part prints a one-line placeholder, never an empty section (a missing `in-flight:`/`owes:` line prints `(none recorded)`, empty-but-present prints as empty). Exit 0 on any successful read, even an entirely cold seat. `--json` prints the bundle object. Prints `warning: dist is older than src — run pnpm build (<pkgs>)` on stderr when run from a source checkout whose `packages/*/src` is newer than its `dist` (RCB-60); silent from an npm install |
+| `repoboard seat <name> [--json]` | `repoboard seat claude/builder` — the RCB-48 cold-start bundle in one command: an `## In flight / owes` section first (`in-flight:`/`owes:` parsed off the seat's own SEATS bullet, RCB-89), the SEATS bullet mentioning `<name>` (whole word), a `## Leases` block right after it (RCB-131: every LIVE lease, `<resource> · <holder> · since <…> · until <…> · "<note>"`, ` (yours)` suffixed when this seat holds it, `(no live leases)` when none — same `formatLeaseLine`/`renderLeaseLines` `state`'s LEASES section uses), its own last log block (same RCB-62 leading-word match as `log --last`), the coordinator's (omitted when `<name>` IS the coordinator), its Next card (RCB-103: first, the next unblocked step — `blockedReason(...) === null`, no assignee or assigned to it — of the first non-done card of its own that HAS steps (`parent`/`phase`/`gate`, RCB-68), in list order; only then, as before, assigned to it, else the highest-priority unassigned todo card — high > medium > low > unset, list order among equals — the render says which), and the cards with an open decision. Fixed `## ` headings; a missing part prints a one-line placeholder, never an empty section (a missing `in-flight:`/`owes:` line prints `(none recorded)`, empty-but-present prints as empty). Exit 0 on any successful read, even an entirely cold seat. `--json` prints the bundle object (`leases` an array of live `Lease`s). Prints `warning: dist is older than src — run pnpm build (<pkgs>)` on stderr when run from a source checkout whose `packages/*/src` is newer than its `dist` (RCB-60); silent from an npm install |
 | `repoboard seat list [--json]` | RCB-89: one row per SEATS bullet whose first line is a seat bullet (a non-seat bullet, e.g. `- Owner tasks elsewhere: …`, is skipped, never an error) — `NAME  STATUS  STAMP  IN-FLIGHT`, columns padded to the widest value, `in-flight` printed as `-` when unrecorded; no bullets at all prints `(no seat bullets in SEATS)`. Exit 0 even with no STATE.md. `--json` prints `SeatRow[]` (`name`, `status`, `stamp`, `inFlight`). `--up`/`--down`/`--update` together with `list` is a usage error — this is the reserved word that stops `seat list` being parsed as a seat literally named "list" |
 | `repoboard seat <name> --up "<text>" \| --down "<text>" \| --update "<text>"` | RCB-58: replaces ONLY that seat's own SEATS bullet — found the way `seat` finds its SEATS line: label first, then first line — with `- **<name>: UP\|DOWN <YYYY-MM-DD HH:MMZ>.** <text>`, restamping line 3 as `<name>` and touching no other byte; appended as the last bullet when the seat has none yet. `state --set-section SEATS` stays the whole-section rewrite. `--up` refuses a second UP inside `activeWindowMinutes` unless `--force` (RCB-87, audited in the log); `--down` is refused, before any write, unless `<text>` carries BOTH an `in-flight:` line and an `owes:` line (case-insensitive key, value trimmed — RCB-89, so a successor never has to guess a stand-down's live subagents/Monitors/worktree/lock holder or what it still owes); `--update` rewrites only the body, keeps the standing status + stamp, restamps line 3, refused when the seat has no bullet (RCB-88). Both `--down` and `--update` (RCB-130, one shared guard, `checkFieldCounts`) are ALSO refused when `<text>` carries MORE THAN ONE `in-flight:` or `owes:` line — a hand-edit that pastes a second copy of both fields (and their stale hand-typed `OWNER QUEUE = …`) into the same bullet is refused before the write, not left for `check` to find after the fact. `--update` still has no PRESENCE guard: a bullet with neither field yet may still be updated |
 | `repoboard check [--json] [--strict]` | exit 0 `ok` with no findings, else exit 1 (or 0 if every finding is warning-grade and `--strict` is absent) with one line per finding |
@@ -314,6 +326,7 @@ values, subagent policy, the per-landing gate — live in one place, written onc
 | `stale-state` | error | STATE's stamp is older than the newest log file's mtime OR the newest `#####` header time inside it, whichever is later | yes |
 | `active-without-lease` | warning | a card in an `active: true` column whose `assignee` holds no live lease on any resource | only with `--strict` |
 | `stale-lease` | error | any lease past `until` (one finding per lease) | yes |
+| `live-lease` | info | RCB-131: one finding per LIVE lease, `live-lease: <resource> held by <holder> since <HH:MMZ> (until <…\|—>)` — so a plain `check` shows who holds what without a separate `lease list` | never |
 | `needs-decision` | info | count of cards with an open decision; only emitted when > 0 | never |
 | `needs-ask` | warning | a card in a `decision: true` column with no OPEN ask — never asked, or already decided and moved back | only with `--strict` |
 | `cost-over-budget` | error | the root `CLAUDE.md` exceeds its budget (default 8192 B, or `board.yml`'s `claudeMdBudgetBytes`) — P8.4, §4 | yes |
@@ -327,13 +340,17 @@ meaning of `--strict` cannot drift between surfaces.
 ### MCP
 
 `get_state()` → `{stamp, actor, sections: {live, lastLandings, seats}, ownerQueue: [{id, question,
-options}], text}` (nulls before any STATE.md exists), `set_state_section(section, body, actor?)`,
-`append_repo_log(seat, text, title?)` → `{date, block, restamped}` (RCB-127: `restamped` is true
-iff `seat` had an UP bullet in SEATS at the moment of the call — the same restamp `seat --update`
-performs), `check(strict?)` → `{findings, exitCode}`. All four are terse (no `CARD_INTRO`,
-matching P8.2's five lease tools) and each measures under 700 B.
-`ownerQueue` (both here and in `repoboard state --json`) is computed by one shared function
-(`card-query.ts`, RCB-146) — the CLI and MCP can no longer disagree about which cards are open.
+options}], leases: [{resource, holder, since, until, state, note}], text}` (nulls/`[]` before any
+STATE.md exists), `set_state_section(section, body, actor?)`, `append_repo_log(seat, text, title?)`
+→ `{date, block, restamped}` (RCB-127: `restamped` is true iff `seat` had an UP bullet in SEATS at
+the moment of the call — the same restamp `seat --update` performs), `check(strict?)` →
+`{findings, exitCode}`. All four are terse (no `CARD_INTRO`, matching P8.2's five lease tools) and
+each measures under 700 B. `ownerQueue` (both here and in `repoboard state --json`) is computed by
+one shared function (`card-query.ts`, RCB-146) — the CLI and MCP can no longer disagree about which
+cards are open. RCB-131: `leases` is the live-only rows `liveLeaseRows` (mcp.ts) computes — the same
+function `repoboard state --json` calls — and `text`'s generated LEASES section (right after OWNER
+QUEUE) formats the SAME live leases through `renderLeaseLines`; none of the three ever writes to
+`.repoboard/STATE.md` on disk.
 
 RCB-146 rounds out the read side: `get_log({date?, seat?, since?, tail?, last?})` → `{date,
 blocks}` (same as `log show --json`, `seat` upper-cased the way the CLI does; RCB-132 adds
@@ -375,10 +392,10 @@ measured via the MCP client the same way as §1/§2's tables.
 
 | Surface | Bytes |
 |---|---|
-| `repoboard state` (rendered page, no open decisions) | 1,186 B |
-| `repoboard state` (same page, 4 cards / 2 with an open decision) | 1,212 B (+26 B: two `RB-n · <question> · [letters]` lines replacing the placeholder) |
+| `repoboard state` (rendered page, no open decisions) | 1,186 B (P8.3). RCB-131's generated `## LEASES` section adds 29 B with no live lease — measured on a fresh `init --practices`, 227 → 256 B; this fixture itself was not re-run |
+| `repoboard state` (same page, 4 cards / 2 with an open decision) | 1,212 B (+26 B: two `RB-n · <question> · [letters]` lines replacing the placeholder) — plus the same 29 B LEASES section since RCB-131 |
 | `repoboard log show` (3 blocks, one per seat) | 242 B |
-| MCP `get_state` result | 515 B |
+| MCP `get_state` result | 515 B (P8.3). RCB-131 adds 49 B with no live lease (the LEASES text section plus `leases: []`) — fresh `init --practices`, 495 → 544 B |
 | MCP `check` result (clean fixture, empty findings) | 83 B |
 | MCP tool schema, 14 tools (P8.2 baseline) | 17,411 B |
 | MCP tool schema, **18 tools** (`client.listTools()`, sum of each tool's own `JSON.stringify`; the current count and bytes are in section 3) | **19,682 B** (+2,271 B for the four P8.3 tools) |

@@ -154,9 +154,10 @@ here changed yet; docs/REFERENCE.md §1), `take_lease`, `release_lease`, `list_l
 `seat <name>`, `gate record`/`gate show`; the seat read is read only, seat writes stay CLI-only),
 `cost` (P8.4, docs/REFERENCE.md §4), `list_systems`, `get_system` (RCB-97, docs/REFERENCE.md §7),
 `archive_cards`, `sync_issues` (P8.5, docs/REFERENCE.md §5).
-All 30 tools' schema, via client.listTools() summing each tool's own JSON.stringify: 27,567 B
-(2026-09-25, RCB-129 + RCB-132, `repoboard mcp` against a fresh init and against this repo's
-board, the same bytes; 26,155 B for 29 tools, 2026-09-25, RCB-146; 22,769 B for 25 tools, 2026-09-24,
+All 30 tools' schema, via client.listTools() summing each tool's own JSON.stringify: 27,808 B
+(2026-09-25, RCB-131's get_seat/get_state/check descriptions, against a fresh init and this
+repo's board, the same bytes; 27,567 B
+before it, RCB-129 + RCB-132, against a fresh init and this repo's board, the same bytes; 26,155 B for 29 tools, 2026-09-25, RCB-146; 22,769 B for 25 tools, 2026-09-24,
 RCB-137 — CARD_INTRO moved out of tool descriptions into the server instructions alone; 31,301 B,
 2026-09-22, RCB-100; before that 26,401 B for 23 tools, RCB-70).
 Call `list_cards` or `board_summary` first: they
@@ -287,12 +288,13 @@ NO `## Log` line, so the same event is never recorded twice.
 ## 8. Everything else
 
 **Cold-start rule (RCB-47/RCB-48):** a seat coming up runs `repoboard seat <name>` — one command
-prints its SEATS line, its own last log block, the coordinator's, its next todo card, the open
-decisions and (RCB-129) any decisions ANSWERED but not yet acknowledged — the owner can answer on
-another surface (the web) and nothing else here changes; `repoboard card note <id> "ack" --as you`
-(or any `## Log`/`## Notes` line from someone else) clears one. The underlying reads stay
-available one at a time: `repoboard state`, `log --last <seat>`, `card list --status todo`, `card
-list --needs-decision`, `repoboard decisions`.
+prints its SEATS line, every live lease (RCB-131 — so a seat sees who holds what before it collides
+with them, not only after running `lease list` by hand), its own last log block, the coordinator's,
+its next todo card, the open decisions and (RCB-129) any decisions ANSWERED but not yet
+acknowledged — the owner can answer on another surface (the web) and nothing else here changes;
+`repoboard card note <id> "ack" --as you` (or any `## Log`/`## Notes` line from someone else) clears
+one. The underlying reads stay available one at a time: `repoboard state`, `log --last <seat>`,
+`card list --status todo`, `card list --needs-decision`, `repoboard decisions`.
 
 STATE shape rules (RCB-55 A3 + A5, owner's letter A, 2026-09-18): **LIVE holds slow-changing facts
 only** — ports and what each serves, the remote, the owner lane, the sibling — never a queue or a
@@ -336,8 +338,8 @@ the facts that are true of THIS machine and must never ship in the public repo. 
 
 Add a tracked detail by adding a heading (or a line under one) to `RIG.md` — it is a plain file,
 edited like any other. `repoboard seat <name>` prints it under `## Rig (.repoboard/local/RIG.md)`,
-right after the SEATS line, so a cold seat gets its rig facts in the same command as everything
-else.
+right after the `## Leases` block (RCB-131: every live lease, itself right after the SEATS line),
+so a cold seat gets its rig facts in the same command as everything else.
 
 `--remote <url>` points `origin` at a private backup — once set, every `seat --up/--down` and
 `log` sync `.repoboard/local/` automatically (commit, then push; a push failure warns and moves

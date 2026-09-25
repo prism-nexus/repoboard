@@ -100,6 +100,11 @@ export function staleLeases(doc: LeasesDoc, now: Date): Lease[] {
   return doc.leases.filter((l) => isStale(l, now));
 }
 
+/** RCB-131: every currently-LIVE lease in the doc — the mirror of `staleLeases`. */
+export function liveLeases(doc: LeasesDoc, now: Date): Lease[] {
+  return doc.leases.filter((l) => !isStale(l, now));
+}
+
 function liveLeaseOn(doc: LeasesDoc, resource: string, at: Date): Lease | undefined {
   return doc.leases.find((l) => l.resource === resource && !isStale(l, at));
 }
@@ -335,4 +340,56 @@ export function resolveTimeSpec(spec: string, now: Date): TimeSpecResult {
     return { ok: false, error: `"${spec}" is not an ISO-8601 datetime or a +90m/+2h offset` };
   }
   return { ok: true, iso: toIso(new Date(parsed)) };
+}
+
+// ---- display (RCB-131: leases surfaced in `seat`, `state`, `check`) -----------------------
+
+/**
+ * RCB-131: `since`/`until` printed as `HH:MMZ` when `iso` falls on the same UTC calendar day as
+ * `now`, else the bare date `YYYY-MM-DD` — "since 2 minutes ago" is useful, "since 3 days ago at
+ * 14:32Z" is not; the date is what a reader actually needs once a lease is a day old or more.
+ * Shared by `formatLeaseLine` below and `checkFindings`'s `live-lease` finding (state.ts) — the
+ * ONE place either surface turns a lease's timestamp into text, so the two can never disagree on
+ * what "since 14:32Z" means.
+ */
+export function formatLeaseMoment(iso: string, now: Date): string {
+  const d = new Date(iso);
+  const sameDay = d.toISOString().slice(0, 10) === now.toISOString().slice(0, 10);
+  return sameDay ? `${d.toISOString().slice(11, 16)}Z` : d.toISOString().slice(0, 10);
+}
+
+/**
+ * RCB-131: the ONE lease line — `<resource> · <holder> · since <moment> · until <moment|—>`, a
+ * `"<note>"` clause appended only when `lease.note` is present (an explicit empty string still
+ * counts as present, same present-vs-missing distinction `parseSeatFields` makes for `in-flight:`/
+ * `owes:`), and a trailing ` (yours)` when `opts.as` (case-insensitive, trimmed) matches
+ * `lease.holder`. Used by `seat <name>`'s `## Leases` block (`opts.as` = the seat's own name) and
+ * `state`'s generated LEASES section (no `opts.as` — that section has no "whose seat is this"
+ * concept). `checkFindings`'s `live-lease` finding renders its own sentence shape, not this line,
+ * but calls `formatLeaseMoment` for the same since/until text, so every surface agrees on the DATE
+ * even where the LAYOUT differs.
+ */
+export function formatLeaseLine(lease: Lease, now: Date, opts?: { as?: string }): string {
+  const since = formatLeaseMoment(lease.since, now);
+  const until = lease.until !== undefined ? formatLeaseMoment(lease.until, now) : '—';
+  const note = lease.note !== undefined ? ` · "${lease.note}"` : '';
+  const wanted = opts?.as?.trim().toLowerCase();
+  const yours =
+    wanted !== undefined && lease.holder.trim().toLowerCase() === wanted ? ' (yours)' : '';
+  return `${lease.resource} · ${lease.holder} · since ${since} · until ${until}${note}${yours}`;
+}
+
+/**
+ * RCB-131: `formatLeaseLine`, one per lease, newline-joined — `(no live leases)` when `leases` is
+ * empty, never an empty section. `leases` is expected already filtered to live-only (`liveLeases`)
+ * — this function does no staleness filtering of its own, so a caller cannot ask it to show a
+ * stale lease by mistake.
+ */
+export function renderLeaseLines(
+  leases: readonly Lease[],
+  now: Date,
+  opts?: { as?: string },
+): string {
+  if (leases.length === 0) return '(no live leases)';
+  return leases.map((l) => formatLeaseLine(l, now, opts)).join('\n');
 }

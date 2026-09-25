@@ -11,12 +11,13 @@ import {
   formatAnsweredChoice,
   needsDecision,
 } from './decisions.js';
+import { liveLeases, renderLeaseLines } from './leases.js';
 import { blockedReason, gateState, stepsOf } from './phases.js';
 import { formatLogBlock, type LogBlock } from './repolog.js';
 import { ownerQueueLine } from './state.js';
 import type { SystemsSummary } from './systems-surface.js';
 import { toIso } from './time.js';
-import type { BoardConfig, Card } from './types.js';
+import type { BoardConfig, Card, Lease, LeasesDoc } from './types.js';
 
 export interface SeatBundleInput {
   /** As typed on the command line — never normalized, so the render echoes what the seat asked. */
@@ -36,6 +37,10 @@ export interface SeatBundleInput {
   /** RCB-97: `systemsSummary(...)`, gathered by the caller — `null`/absent when there is no
    *  systems.yml to summarise (§3.1: unconfigured is inert — the line is simply omitted). */
   systems?: SystemsSummary | null;
+  /** RCB-131: `store.leases()` — `.repoboard/leases.yml`'s whole doc. `null`/absent (no file, or a
+   *  caller that gathered nothing) is inert: `seatBundle` then reports no live leases, never
+   *  throws — same "unconfigured is inert" rule as `systems`. */
+  leases?: LeasesDoc | null;
 }
 
 /** Which rule picked `nextCard`, so the render (and a reader) can say so instead of guessing. */
@@ -87,6 +92,9 @@ export interface SeatBundle {
   /** RCB-97: `input.systems ?? null` — `repoboard seat`'s one Systems line, a pointer not the
    *  table (§3.3: O3, standing cost). */
   systems: SystemsSummary | null;
+  /** RCB-131: `liveLeases(input.leases, input.now)` — live leases only (`isStale` false); a stale
+   *  lease is never shown here, `check`'s `stale-lease` finding already owns that. */
+  leases: Lease[];
   /** RCB-140: true when the SEATS section is absent or has no bullets at all, stamped or not
    *  (`bulletSpans`, not `listSeats`, which drops unstamped ones). A board with no seats recorded yet has never
    *  had a second agent on it, so the cold-start bundle drops the sections that are pure noise on
@@ -632,6 +640,7 @@ export function seatBundle(input: SeatBundleInput): SeatBundle {
     inFlight: fields.inFlight,
     owes: fields.owes,
     systems: input.systems ?? null,
+    leases: liveLeases(input.leases ?? { leases: [], windows: [] }, input.now),
     // Any bullet counts, stamped or not — `listSeats` keeps only stamped ones.
     solo: bulletSpans((input.seatsSection ?? '').split('\n')).length === 0,
   };
@@ -679,6 +688,13 @@ export function renderSeatBundle(b: SeatBundle, now: Date): string {
   if (!b.solo || b.seatsLine !== null) {
     lines.push('## SEATS line');
     lines.push(b.seatsLine ?? `(no SEATS line mentions ${b.name})`, '');
+  }
+
+  // RCB-131: right after the SEATS line block — a seat colliding with another over a resource
+  // sees it here, cold, instead of only after running `lease list` by hand.
+  if (!b.solo || b.leases.length > 0) {
+    lines.push('## Leases');
+    lines.push(renderLeaseLines(b.leases, now, { as: b.name }), '');
   }
 
   if (!b.solo || b.rig !== null) {

@@ -237,6 +237,70 @@ describe('parseState / renderState round-trip', () => {
   });
 });
 
+describe('renderState: generated LEASES section, display-only (RCB-131)', () => {
+  const SECTIONS = { live: 'x', lastLandings: 'y', seats: 'z' };
+  const OPTS = { now: NOW, actor: 'claude/ops' };
+
+  it('a leasesDoc renders "## LEASES" right after OWNER QUEUE, one line per LIVE lease, live only', () => {
+    const leasesDoc: LeasesDoc = {
+      leases: [
+        { resource: 'vitest-lock', holder: 'claude/ops', since: '2026-09-17T20:00:00Z' },
+        {
+          resource: 'dev-server',
+          holder: 'claude/builder',
+          since: '2026-09-16T10:00:00Z',
+          until: '2026-09-16T11:00:00Z', // stale — before NOW
+        },
+      ],
+      windows: [],
+    };
+    const rendered = renderState(SECTIONS, [], OPTS, leasesDoc);
+    const ownerIdx = rendered.indexOf('## OWNER QUEUE');
+    const leasesIdx = rendered.indexOf('## LEASES');
+    const seatsIdx = rendered.indexOf('## SEATS');
+    expect(ownerIdx).toBeGreaterThanOrEqual(0);
+    expect(leasesIdx).toBeGreaterThan(ownerIdx);
+    expect(seatsIdx).toBeGreaterThan(leasesIdx);
+    expect(rendered).toContain('vitest-lock · claude/ops · since 20:00Z · until —');
+    expect(rendered).not.toContain('dev-server'); // stale: excluded
+  });
+
+  it(
+    'no leasesDoc argument at all: no "## LEASES" heading — unchanged old page (HTTP\'s GET ' +
+      '/api/state, out of scope for this card, stays byte-identical)',
+    () => {
+      const rendered = renderState(SECTIONS, [], OPTS);
+      expect(rendered).not.toContain('## LEASES');
+    },
+  );
+
+  it('a leasesDoc with no live leases still shows the section, placeholder text, not omitted', () => {
+    const rendered = renderState(SECTIONS, [], OPTS, { leases: [], windows: [] });
+    expect(rendered).toContain('## LEASES');
+    expect(rendered).toContain('(no live leases)');
+  });
+
+  it(
+    'the control: STATE.md on disk NEVER gets a LEASES heading, regardless of leases — ' +
+      '`setStateSection`/`initialStateText` call `renderStateFile`, which never passes a ' +
+      'leasesBody at all; reverting `renderStateFile` to pass one must fail this test',
+    () => {
+      const before = initialStateText({ now: NOW, actor: 'claude/ops' });
+      expect(before).not.toContain('## LEASES');
+      const res = setStateSection(before, 'live', 'Tree is dev.', {
+        now: NOW,
+        actor: 'claude/ops',
+      });
+      expect(res.ok).toBe(true);
+      if (!res.ok) return;
+      expect(res.text).not.toContain('## LEASES');
+      // parseState still round-trips the FOUR fixed on-disk headings, unaffected.
+      const parsed = parseState(res.text);
+      expect(parsed.ok).toBe(true);
+    },
+  );
+});
+
 describe('ownerQueueLine / renderOwnerQueue', () => {
   it('one line per open card, letters bracketed, omitted when there are none', () => {
     const withLetters = askedCard('RCB-40', 'sync-issues column?', ['A', 'B']);
@@ -681,6 +745,65 @@ describe('checkFindings', () => {
       },
     ]);
     expect(exitCodeForFindings(findings, false)).toBe(1);
+  });
+
+  it('live-lease (RCB-131): one INFO finding per LIVE lease, exit code untouched even with --strict', () => {
+    const state = stateAt('2026-09-17T21:00:00Z');
+    const leases: LeasesDoc = {
+      leases: [
+        {
+          resource: 'vitest-lock',
+          holder: 'claude/ops',
+          since: '2026-09-17T20:00:00Z',
+          until: '2026-09-17T22:00:00Z',
+        },
+      ],
+      windows: [],
+    };
+    const findings = checkFindings({ state, logs: [], cards: [], config, leases, now: NOW });
+    expect(findings).toEqual([
+      {
+        kind: 'live-lease',
+        level: 'info',
+        message: 'live-lease: vitest-lock held by claude/ops since 20:00Z (until 22:00Z)',
+      },
+    ]);
+    expect(exitCodeForFindings(findings, false)).toBe(0);
+    expect(exitCodeForFindings(findings, true)).toBe(0);
+  });
+
+  it('live-lease: a STALE lease never fires it — only stale-lease covers that one', () => {
+    const state = stateAt('2026-09-17T21:00:00Z');
+    const leases: LeasesDoc = {
+      leases: [
+        {
+          resource: 'r',
+          holder: 'claude/ops',
+          since: '2026-09-17T10:00:00Z',
+          until: '2026-09-17T11:00:00Z',
+        },
+      ],
+      windows: [],
+    };
+    const findings = checkFindings({ state, logs: [], cards: [], config, leases, now: NOW });
+    expect(findings.some((f) => f.kind === 'live-lease')).toBe(false);
+    expect(findings.some((f) => f.kind === 'stale-lease')).toBe(true);
+  });
+
+  it('live-lease: no `until` prints "—", not "undefined" or empty', () => {
+    const state = stateAt('2026-09-17T21:00:00Z');
+    const leases: LeasesDoc = {
+      leases: [{ resource: 'r', holder: 'claude/ops', since: '2026-09-17T20:00:00Z' }],
+      windows: [],
+    };
+    const findings = checkFindings({ state, logs: [], cards: [], config, leases, now: NOW });
+    expect(findings).toEqual([
+      {
+        kind: 'live-lease',
+        level: 'info',
+        message: 'live-lease: r held by claude/ops since 20:00Z (until —)',
+      },
+    ]);
   });
 
   it('needs-decision: a count, informational, never fails even with --strict', () => {

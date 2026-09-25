@@ -1,18 +1,28 @@
 /**
  * P8.3 (plan §5 P8.3, §11 O9): `.repoboard/STATE.md` — one page, rewritten in place, never
  * appended (contrast `repolog.ts`). Fixed H2 sections in order: LIVE, LAST LANDINGS, OWNER QUEUE,
- * SEATS. OWNER QUEUE is GENERATED on every read from cards that need a decision (P8.1) — the file
- * on disk keeps a one-line placeholder under that heading and never stores real queue text, so a
- * write here can never bake in a snapshot of decisions that goes stale the moment another one is
- * answered. `checkFindings` (locked decision 4) lives here too: it is the pure half of
- * `repoboard check`, taking already-gathered facts (a parsed STATE, parsed+stat'd logs, the
- * cards, the board config, the leases doc, and `now`) and returning findings — no filesystem
- * access, so it is exactly as testable as everything else in this package (§0.5).
+ * SEATS — this is the ON-DISK shape `parseState` requires, exactly these four headings, in this
+ * order, never more. OWNER QUEUE is GENERATED on every read from cards that need a decision
+ * (P8.1) — the file on disk keeps a one-line placeholder under that heading and never stores real
+ * queue text, so a write here can never bake in a snapshot of decisions that goes stale the moment
+ * another one is answered. RCB-131: `renderState`'s DISPLAY path (never `parseState`/the on-disk
+ * writers) additionally generates a LEASES section right after OWNER QUEUE, same "never stored"
+ * rule as OWNER QUEUE — see `renderTemplate`'s `leasesBody`. `checkFindings` (locked decision 4)
+ * lives here too: it is the pure half of `repoboard check`, taking already-gathered facts (a
+ * parsed STATE, parsed+stat'd logs, the cards, the board config, the leases doc, and `now`) and
+ * returning findings — no filesystem access, so it is exactly as testable as everything else in
+ * this package (§0.5).
  */
 import { findColumn } from './board.js';
 import type { CostReport } from './cost.js';
 import { isOwnerTask, needsDecision } from './decisions.js';
-import { holdsLiveLease, staleLeases } from './leases.js';
+import {
+  formatLeaseMoment,
+  holdsLiveLease,
+  liveLeases,
+  renderLeaseLines,
+  staleLeases,
+} from './leases.js';
 import { blockedReason } from './phases.js';
 import { isActive } from './presence.js';
 import type { LogBlock } from './repolog.js';
@@ -129,11 +139,19 @@ export function renderOwnerQueue(cards: readonly Card[]): string {
   return open.map(ownerQueueLine).join('\n');
 }
 
+/**
+ * RCB-131: `leasesBody` is the DISPLAY-only LEASES section body — `undefined` (never an empty
+ * string) omits the whole `## LEASES` heading, which is exactly what every ON-DISK writer
+ * (`renderStateFile`) passes by leaving the argument out. A caller that wants the section, even
+ * with no live leases, passes `renderLeaseLines([], now)` (`'(no live leases)'`), never `undefined`.
+ */
 function renderTemplate(
   sections: StateSections,
   ownerQueueBody: string,
   opts: { now: Date; actor: string },
+  leasesBody?: string,
 ): string {
+  const leasesPart = leasesBody !== undefined ? ['', '## LEASES', '', leasesBody] : [];
   return `${[
     '# STATE',
     '',
@@ -150,6 +168,7 @@ function renderTemplate(
     '## OWNER QUEUE',
     '',
     ownerQueueBody,
+    ...leasesPart,
     '',
     '## SEATS',
     '',
@@ -162,13 +181,28 @@ function renderTemplate(
  * from `openDecisions` every time. Pass the doc's own recorded `stamp`/`actor` as `now`/`actor`
  * to show the page as last WRITTEN (a read must never look like a rewrite); pass the real clock
  * only when this call IS the rewrite (see `setStateSection` below, and the store's `init`).
+ *
+ * RCB-131: `leasesDoc`, when given, generates a LEASES section the same way OWNER QUEUE is
+ * generated — live leases only (`liveLeases`), formatted by the ONE shared `renderLeaseLines`
+ * (leases.ts) so `seat <name>`'s `## Leases` block and this section can never disagree on the
+ * line format. Absent `leasesDoc` omits the section entirely rather than showing an empty one —
+ * a caller that has not gathered leases (HTTP's `GET /api/state` is out of scope for this card)
+ * gets exactly the old page back, byte for byte. Liveness (and the since/until moment text) is
+ * judged against `leasesNow`, defaulting to `opts.now` — pass the REAL clock here, not the doc's
+ * stamp: unlike LIVE/LAST LANDINGS/SEATS (frozen as last WRITTEN), LEASES is a fresh read, same
+ * as OWNER QUEUE, so a lease that went stale after the last write must not still show as live.
  */
 export function renderState(
   sections: StateSections,
   openDecisions: readonly Card[],
   opts: { now: Date; actor: string },
+  leasesDoc?: LeasesDoc,
+  leasesNow?: Date,
 ): string {
-  return renderTemplate(sections, renderOwnerQueue(openDecisions), opts);
+  const at = leasesNow ?? opts.now;
+  const leasesBody =
+    leasesDoc !== undefined ? renderLeaseLines(liveLeases(leasesDoc, at), at) : undefined;
+  return renderTemplate(sections, renderOwnerQueue(openDecisions), opts, leasesBody);
 }
 
 /** The ON-DISK rendering: OWNER QUEUE is always the placeholder, never generated content. */
@@ -216,6 +250,7 @@ export interface Finding {
     | 'stale-state'
     | 'active-without-lease'
     | 'stale-lease'
+    | 'live-lease'
     | 'needs-decision'
     | 'needs-ask'
     | 'gated-steps'
@@ -470,6 +505,20 @@ export function checkFindings(input: CheckInput): Finding[] {
       kind: 'stale-lease',
       level: 'error',
       message: `stale-lease: ${lease.resource} held by ${lease.holder} until ${lease.until ?? '—'}`,
+    });
+  }
+
+  // RCB-131 (owner 2026-09-24: two seats collided on a resource while one held a lease, visible
+  // only to a seat that ran `lease list` by hand) — one INFO finding per LIVE lease, so a plain
+  // `repoboard check` surfaces who holds what without a separate command. Info-grade, like
+  // `needs-decision`: ordinary board state, never blocks, `exitCodeForFindings` untouched.
+  for (const lease of liveLeases(input.leases, input.now)) {
+    const since = formatLeaseMoment(lease.since, input.now);
+    const until = lease.until !== undefined ? formatLeaseMoment(lease.until, input.now) : '—';
+    findings.push({
+      kind: 'live-lease',
+      level: 'info',
+      message: `live-lease: ${lease.resource} held by ${lease.holder} since ${since} (until ${until})`,
     });
   }
 

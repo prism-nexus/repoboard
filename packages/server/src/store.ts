@@ -23,6 +23,7 @@ import {
   type Column,
   type CostReport,
   type CreateCardInput,
+  checkFieldCounts,
   checkFindings,
   checkResource,
   closeSyncedCard,
@@ -62,6 +63,7 @@ import {
   type StateDoc,
   type StateSectionName,
   type SystemsDoc,
+  seatBulletTexts,
   seatBundle as seatBundleCore,
   selectArchivable as selectArchivableCore,
   serializeBoard,
@@ -741,6 +743,11 @@ export class CardStore extends EventEmitter<StoreEvents> {
             error: `seat ${name} has no standing bullet to update; use --up or --down`,
           };
         }
+        // RCB-130: --update has no PRESENCE guard of its own (RCB-88, deliberate: a bullet with
+        // neither field yet may still be updated) but shares the COUNT guard `--down` uses —
+        // `checkFieldCounts`, the same function, so the rule can never drift between the two.
+        const countErr = checkFieldCounts(text);
+        if (countErr) return { ok: false as const, error: countErr };
         const rewrite = rewriteSeatBulletBody(line, text);
         if (rewrite === null) {
           return {
@@ -1018,6 +1025,10 @@ export class CardStore extends EventEmitter<StoreEvents> {
       local,
       systems: await this.gatherSystemsCheck(),
       untrackedCards: await this.gatherUntrackedCards().catch(() => null),
+      // RCB-130: every SEATS bullet's name + text, split the SAME way `repoboard seat`/`seat list`
+      // split it (`seatBulletTexts`, core's own `bulletSpans` — no second splitter here) — pure,
+      // so gathering it is just reading the section already on `this.stateDoc`.
+      seatBullets: seatBulletTexts(this.stateDoc?.sections.seats ?? ''),
     });
     return { findings, exitCode: exitCodeForFindings(findings, strict) };
   }

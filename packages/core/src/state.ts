@@ -225,7 +225,8 @@ export interface Finding {
     | 'future-stamp'
     | 'systems-invalid'
     | 'systems-stale'
-    | 'untracked-cards';
+    | 'untracked-cards'
+    | 'seat-owner-queue-drift';
   level: FindingLevel;
   message: string;
 }
@@ -272,6 +273,12 @@ export interface CheckInput {
    * finding fires for it. `actor` is the creating actor's newest `create` event, or `null` when
    * none is known (e.g. the id was never created through this store). */
   untrackedCards?: readonly { id: string; actor: string | null }[] | null;
+  /** RCB-130: every SEATS bullet's name + whole text — gathered (with I/O: reading STATE.md) by
+   * the caller via core's own `seatBulletTexts` (`seat.ts`; `state.ts` never imports `seat.ts`
+   * itself, so the two files can't cycle) and passed through unchanged. `null`/absent/`[]` is
+   * inert — no bullets to scan means no finding, same "ungathered signal is inert" rule as
+   * `systems`/`local`/`untrackedCards` above. */
+  seatBullets?: readonly { name: string; text: string }[] | null;
 }
 
 /**
@@ -348,6 +355,56 @@ function newestLogMoment(logs: readonly LogFileInfo[], nowMs: number): number | 
     if (max === null || m > max) max = m;
   }
   return max;
+}
+
+/**
+ * RCB-130: ids named after a hand-typed `OWNER QUEUE =`/`OWNER QUEUE:` line inside a SEATS
+ * bullet's text, to the end of that physical line — a card-id-shaped token (`phases.ts`'s own
+ * `CARD_ID_SHAPE` rule, scanned rather than anchored), comma/space/anything else between them.
+ * `null` when the text never mentions OWNER QUEUE at all, OR mentions it with no id-shaped token
+ * after it (e.g. "OWNER QUEUE = none") — either way there is no LIST of card ids to compare, so
+ * `seatOwnerQueueDriftFindings` has nothing to fire on.
+ */
+const OWNER_QUEUE_HAND_RE = /OWNER QUEUE\s*[=:]\s*(.*)$/m;
+const CARD_ID_TOKEN_RE = /\b[A-Za-z][A-Za-z0-9]*-\d+\b/g;
+
+function handTypedOwnerQueueIds(text: string): string[] | null {
+  const m = OWNER_QUEUE_HAND_RE.exec(text);
+  if (!m) return null;
+  const ids = [...(m[1] ?? '').matchAll(CARD_ID_TOKEN_RE)].map((mm) => mm[0]);
+  return ids.length > 0 ? ids : null;
+}
+
+/**
+ * RCB-130 (owner: fpj STATE.md, 2026-09-25 01:56Z — a coordinator bullet's `owes:` line ended
+ * `OWNER QUEUE = FPJ-86, FPJ-119`, 3.5 h stale, while the GENERATED queue — `renderOwnerQueue`,
+ * from `needsDecision` cards — was right): warning-grade, like `active-without-lease` (hygiene,
+ * not a broken rig; blocks only with `--strict`). One finding per bullet whose hand-typed id set
+ * differs from `generatedIds` (order-insensitive — a same set in another order is not drift); a
+ * bullet that never mentions OWNER QUEUE, or whose set already matches, contributes nothing.
+ */
+export function seatOwnerQueueDriftFindings(
+  seatBullets: readonly { name: string; text: string }[],
+  generatedIds: readonly string[],
+): Finding[] {
+  const generated = new Set(generatedIds);
+  const findings: Finding[] = [];
+  for (const { name, text } of seatBullets) {
+    const handIds = handTypedOwnerQueueIds(text);
+    if (handIds === null) continue;
+    const hand = new Set(handIds);
+    const sameSet = hand.size === generated.size && [...hand].every((id) => generated.has(id));
+    if (sameSet) continue;
+    findings.push({
+      kind: 'seat-owner-queue-drift',
+      level: 'warning',
+      message:
+        `seat-owner-queue-drift: ${name} bullet says OWNER QUEUE = ${handIds.join(', ')}; ` +
+        `generated: ${generatedIds.length > 0 ? generatedIds.join(', ') : 'none'} — seats print ` +
+        'open decisions; drop the hand line',
+    });
+  }
+  return findings;
 }
 
 /**
@@ -433,14 +490,19 @@ export function checkFindings(input: CheckInput): Finding[] {
     });
   }
 
-  const needsCount = input.cards.filter((c) => needsDecision(c)).length;
-  if (needsCount > 0) {
+  const openDecisionIds = input.cards.filter((c) => needsDecision(c)).map((c) => c.id);
+  if (openDecisionIds.length > 0) {
     findings.push({
       kind: 'needs-decision',
       level: 'info',
-      message: `needs-decision: ${needsCount} card${needsCount === 1 ? '' : 's'} waiting on the owner`,
+      message: `needs-decision: ${openDecisionIds.length} card${openDecisionIds.length === 1 ? '' : 's'} waiting on the owner`,
     });
   }
+
+  // RCB-130: a hand-typed OWNER QUEUE line inside a SEATS bullet, checked against the SAME
+  // `needsDecision` set `openDecisionIds` above already computed — the generated queue is never
+  // re-derived a second way.
+  findings.push(...seatOwnerQueueDriftFindings(input.seatBullets ?? [], openDecisionIds));
 
   // RCB-68: info-grade like `needs-decision` — a blocked step is expected, ordinary board state,
   // not a rig problem; `check` never fails on it (`exitCodeForFindings` untouched).

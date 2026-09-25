@@ -17,6 +17,7 @@ import {
   renderOwnerQueue,
   renderState,
   SECTION_PLACEHOLDER,
+  seatOwnerQueueDriftFindings,
   setStateSection,
   splitLandings,
   systemsFindings,
@@ -717,6 +718,102 @@ describe('checkFindings', () => {
     expect(findings).toEqual([]);
   });
 });
+
+describe(
+  'seat-owner-queue-drift (RCB-130, owner: fpj STATE.md 2026-09-25 01:56Z — a coordinator ' +
+    'bullet hand-typed "OWNER QUEUE = FPJ-86, FPJ-119" 3.5 h stale)',
+  () => {
+    const config = defaultBoardConfig();
+
+    it('a bullet with no OWNER QUEUE text at all: nothing', () => {
+      const bullets = [{ name: 'coordinator', text: '- **coordinator**: routes work' }];
+      expect(seatOwnerQueueDriftFindings(bullets, ['RCB-1'])).toEqual([]);
+    });
+
+    it('OWNER QUEUE mentioned but with no id-shaped token (e.g. "none"): nothing — there is no LIST to compare', () => {
+      const bullets = [{ name: 'coordinator', text: 'owes: OWNER QUEUE = none' }];
+      expect(seatOwnerQueueDriftFindings(bullets, [])).toEqual([]);
+      expect(seatOwnerQueueDriftFindings(bullets, ['RCB-1'])).toEqual([]);
+    });
+
+    it('the hand-typed set EQUALS the generated set: nothing', () => {
+      const bullets = [{ name: 'coordinator', text: 'owes: OWNER QUEUE = FPJ-86, FPJ-119' }];
+      expect(seatOwnerQueueDriftFindings(bullets, ['FPJ-86', 'FPJ-119'])).toEqual([]);
+    });
+
+    it('same set, different order: still nothing — the comparison is order-insensitive', () => {
+      const bullets = [{ name: 'coordinator', text: 'owes: OWNER QUEUE = FPJ-86, FPJ-119' }];
+      expect(seatOwnerQueueDriftFindings(bullets, ['FPJ-119', 'FPJ-86'])).toEqual([]);
+    });
+
+    it(
+      'REPRODUCTION: the hand-typed set has an id (FPJ-86) the generated queue no longer has ' +
+        '(decided) — one warning-grade finding, the exact message',
+      () => {
+        const bullets = [
+          { name: 'coordinator', text: 'stood down\nowes: RCB-1 OWNER QUEUE = FPJ-86, FPJ-119' },
+        ];
+        const findings = seatOwnerQueueDriftFindings(bullets, ['FPJ-119']);
+        expect(findings).toEqual([
+          {
+            kind: 'seat-owner-queue-drift',
+            level: 'warning',
+            message:
+              'seat-owner-queue-drift: coordinator bullet says OWNER QUEUE = FPJ-86, FPJ-119; ' +
+              'generated: FPJ-119 — seats print open decisions; drop the hand line',
+          },
+        ]);
+      },
+    );
+
+    it('the generated queue is empty: message says "generated: none"', () => {
+      const bullets = [{ name: 'ops', text: 'owes: OWNER QUEUE = RCB-9' }];
+      const findings = seatOwnerQueueDriftFindings(bullets, []);
+      expect(findings[0]?.message).toContain('generated: none');
+    });
+
+    it('one finding per bullet — only the drifting bullet fires, the matching one does not', () => {
+      const bullets = [
+        { name: 'coordinator', text: 'owes: OWNER QUEUE = RCB-1' }, // drifted
+        { name: 'ops', text: 'owes: OWNER QUEUE = RCB-1, RCB-2' }, // matches
+      ];
+      const findings = seatOwnerQueueDriftFindings(bullets, ['RCB-1', 'RCB-2']);
+      expect(findings).toHaveLength(1);
+      expect(findings[0]?.message).toContain('coordinator bullet');
+    });
+
+    it('wired into checkFindings via CheckInput.seatBullets — warning-grade: blocks only with --strict', () => {
+      const state = stateAt('2026-09-17T21:00:00Z');
+      const findings = checkFindings({
+        state,
+        logs: [],
+        cards: [askedCard('FPJ-119', 'q', ['A'])],
+        config,
+        leases: emptyLeases(),
+        now: NOW,
+        seatBullets: [{ name: 'coordinator', text: 'owes: OWNER QUEUE = FPJ-86, FPJ-119' }],
+      });
+      const drift = findings.filter((f) => f.kind === 'seat-owner-queue-drift');
+      expect(drift).toHaveLength(1);
+      expect(drift[0]?.level).toBe('warning');
+      expect(exitCodeForFindings(findings, false)).toBe(0);
+      expect(exitCodeForFindings(findings, true)).toBe(1);
+    });
+
+    it('CheckInput.seatBullets absent (older caller, or none gathered): inert, never a finding', () => {
+      const state = stateAt('2026-09-17T21:00:00Z');
+      const findings = checkFindings({
+        state,
+        logs: [],
+        cards: [],
+        config,
+        leases: emptyLeases(),
+        now: NOW,
+      });
+      expect(findings.some((f) => f.kind === 'seat-owner-queue-drift')).toBe(false);
+    });
+  },
+);
 
 describe('checkFindings: local (RCB-83)', () => {
   const config = defaultBoardConfig();

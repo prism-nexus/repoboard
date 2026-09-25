@@ -114,20 +114,38 @@ function bulletLabel(firstLine: string): string {
 }
 
 /**
+ * RCB-130: a top-level `- in-flight: …` or `- owes: …` line is never a real bullet on its own —
+ * nobody writes a standalone bullet to say only that; it is what a hand-edit leaves behind when a
+ * continuation line loses its 2-space indent and gets typed as its own `- ` item instead (fpj
+ * STATE.md, 2026-09-25 01:56Z: a coordinator bullet replace left exactly this behind, surviving as
+ * an orphan `bulletSpans` neither `locateSeatBullet` pass claims — see `bulletSpans`' own comment).
+ * `bulletLabel`'s field names, not a separately hand-written pair, so this can never drift from
+ * what `parseSeatFields` recognizes as a field line.
+ */
+const STRAY_FIELD_BULLET_RE = /^-\s+(?:in-flight|owes):/i;
+
+/**
  * Line-index spans (end exclusive) of `lines`' top-level bullets — a line starting with `- `, plus
  * every following line up to the next `- ` line as its continuation. Lines before the first bullet
  * (if any) belong to no span, same as the old inline splitter this replaces. Shared by
  * `findSeatLine` and `replaceSeatBullet` (RCB-58) so both split a SEATS section identically —
  * `bulletSpans` is the one place that decides where a bullet starts and ends.
+ *
+ * RCB-130: a line matching `STRAY_FIELD_BULLET_RE` does NOT start a new span when one is already
+ * open — it is folded into the bullet in progress as an ordinary continuation line instead, so a
+ * mis-indented `in-flight:`/`owes:` line can never survive a `replaceSeatBullet` as an orphan
+ * bullet nobody's label matches. Only when NO span is open yet (the stray line is the very first
+ * thing in the section) does it still start one of its own — there is nothing to fold it into.
  */
 function bulletSpans(lines: readonly string[]): Array<{ start: number; end: number }> {
   const spans: Array<{ start: number; end: number }> = [];
   let start = -1;
   for (let i = 0; i < lines.length; i++) {
-    if (/^- /.test(lines[i] ?? '')) {
-      if (start !== -1) spans.push({ start, end: i });
-      start = i;
-    }
+    const line = lines[i] ?? '';
+    if (!/^- /.test(line)) continue;
+    if (STRAY_FIELD_BULLET_RE.test(line) && start !== -1) continue;
+    if (start !== -1) spans.push({ start, end: i });
+    start = i;
   }
   if (start !== -1) spans.push({ start, end: lines.length });
   return spans;
@@ -360,12 +378,45 @@ export function parseSeatFields(bullet: string): { inFlight: string | null; owes
 }
 
 /**
+ * RCB-130: counts every line matching `re` — derived from `re`'s own source with a `g` flag added
+ * (never a second, separately hand-written pattern), so a counting pass can never disagree with
+ * `IN_FLIGHT_LINE_RE`/`OWES_LINE_RE`'s own single-match use in `parseSeatFields`.
+ */
+function countLineMatches(text: string, re: RegExp): number {
+  const global = new RegExp(re.source, re.flags.includes('g') ? re.flags : `${re.flags}g`);
+  return [...text.matchAll(global)].length;
+}
+
+/**
+ * RCB-130 (fpj STATE.md, 2026-09-25 01:56Z: a coordinator bullet carried TWO `in-flight:`/`owes:`
+ * pairs, the second ending a now-stale hand-typed `OWNER QUEUE = …`): `null` (ok) only when `text`
+ * carries AT MOST ONE `in-flight:` line and AT MOST ONE `owes:` line — else names which count(s)
+ * are over. Reproduced with a plain `--down` text that already holds two of each: nothing before
+ * this guarded against that shape, so both landed verbatim in the formatted bullet. The ONE guard
+ * `checkDownFields` (which additionally requires both lines present) and `seat --update`'s text
+ * (`store.ts`'s `updateSeatBullet`, which has no presence requirement of its own) both call — a
+ * caller cannot ask it to allow a second line of either kind.
+ */
+export function checkFieldCounts(text: string): string | null {
+  const inFlightCount = countLineMatches(text, IN_FLIGHT_LINE_RE);
+  const owesCount = countLineMatches(text, OWES_LINE_RE);
+  const over: string[] = [];
+  if (inFlightCount > 1) over.push(`${inFlightCount} "in-flight:" lines`);
+  if (owesCount > 1) over.push(`${owesCount} "owes:" lines`);
+  if (over.length === 0) return null;
+  return `seat: text has ${over.join(' and ')} — one of each, at most`;
+}
+
+/**
  * RCB-89: guard for `seat --down` — `null` (ok) only when `text` (the raw `--down` argument, not
  * yet a formatted bullet) carries BOTH an `in-flight:` line and an `owes:` line (same regexes as
- * `parseSeatFields`); else the exact error a caller should surface verbatim. One function, no
- * argument that could weaken it — a caller cannot ask it to check only one of the two lines.
+ * `parseSeatFields`), AND neither more than once (RCB-130's `checkFieldCounts`, checked first);
+ * else the exact error a caller should surface verbatim. One function, no argument that could
+ * weaken it — a caller cannot ask it to check only one of the two lines.
  */
 export function checkDownFields(text: string): string | null {
+  const countErr = checkFieldCounts(text);
+  if (countErr) return countErr;
   if (IN_FLIGHT_LINE_RE.test(text) && OWES_LINE_RE.test(text)) return null;
   return (
     'seat --down needs an "in-flight:" line (subagent ids, Monitor ids, worktree, lock holder — ' +
@@ -390,6 +441,17 @@ export interface SeatRow {
  * `SEAT_BULLET_RE`'s own captures (not the parsed `Date`) so a stamp that fails to parse
  * (`18:0xZ`) still survives into the row.
  */
+/**
+ * A bullet's NAME half of its label — `bulletLabel`'s bold span, or up to that span's own first
+ * `:` when there is none, trimmed. `listSeats` and `seatBulletTexts` (RCB-130) both call this ONE
+ * function so the name a row/entry carries can never drift between the two.
+ */
+function bulletName(firstLine: string): string {
+  const label = bulletLabel(firstLine);
+  const colonIdx = label.indexOf(':');
+  return (colonIdx === -1 ? label : label.slice(0, colonIdx)).trim();
+}
+
 export function listSeats(seatsSection: string): SeatRow[] {
   const lines = seatsSection.split('\n');
   const spans = bulletSpans(lines);
@@ -401,14 +463,33 @@ export function listSeats(seatsSection: string): SeatRow[] {
     if (!parsed) continue;
     const firstLine = bulletLines[0] ?? '';
     const m = SEAT_BULLET_RE.exec(firstLine);
-    const label = bulletLabel(firstLine);
-    const colonIdx = label.indexOf(':');
-    const name = (colonIdx === -1 ? label : label.slice(0, colonIdx)).trim();
     const stamp = m ? `${m[3]} ${m[4]}Z` : '';
     const { inFlight } = parseSeatFields(bulletText);
-    rows.push({ name, status: parsed.status, stamp, inFlight });
+    rows.push({ name: bulletName(firstLine), status: parsed.status, stamp, inFlight });
   }
   return rows;
+}
+
+export interface SeatBulletText {
+  /** `bulletName`'s derivation — same rule `listSeats`'s `name` uses. */
+  name: string;
+  /** The bullet's whole text, continuation lines included (joined by `\n`, not trimmed). */
+  text: string;
+}
+
+/**
+ * RCB-130: every top-level SEATS bullet, in section order — unlike `listSeats`, this does NOT
+ * require the bullet's first line to parse as a stamped `UP|DOWN` bullet (`parseSeatStamp`), so a
+ * hand-typed or malformed bullet still gets an entry. Used by `state.ts`'s `checkFindings` (via
+ * the caller that gathers `CheckInput.seatBullets` — core stays split from `state.ts` so the two
+ * never import each other) to scan every bullet's text for a hand-typed `OWNER QUEUE` line.
+ */
+export function seatBulletTexts(seatsSection: string): SeatBulletText[] {
+  const lines = seatsSection.split('\n');
+  return bulletSpans(lines).map((span) => {
+    const bulletLines = lines.slice(span.start, span.end);
+    return { name: bulletName(bulletLines[0] ?? ''), text: bulletLines.join('\n') };
+  });
 }
 
 /**

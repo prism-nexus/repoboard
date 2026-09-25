@@ -224,7 +224,11 @@ Usage:
                                         --force (audited in the log); --down is refused
                                         unless the text carries BOTH an "in-flight:" line and an
                                         "owes:" line; --update rewrites only the body,
-                                        keeps the standing stamp, no guard
+                                        keeps the standing stamp, no presence guard; --down and
+                                        --update both refuse a text with MORE THAN ONE
+                                        "in-flight:" or "owes:" line (never hand-type OWNER QUEUE
+                                        into either field — it is generated, see \`repoboard
+                                        check\`'s seat-owner-queue-drift)
   repoboard check [--json] [--strict]  exit 0 "ok" / 1 with one line per finding: stale-state
                                         (also reads board.yml's logDir, P8.6 — an extra daily-log
                                         directory alongside .repoboard/log/, read-only),
@@ -246,7 +250,11 @@ Usage:
                                         or clock skew), systems-invalid (error — a
                                         .repoboard/systems.yml that fails to parse), systems-stale
                                         (warning; blocks only with --strict — a detected system no
-                                        longer matches its source file), untracked-cards (warning;
+                                        longer matches its source file), seat-owner-queue-drift
+                                        (warning; blocks only with --strict — a SEATS bullet
+                                        hand-types "OWNER QUEUE = <ids>" and that set no longer
+                                        matches the generated queue; drop the hand line),
+                                        untracked-cards (warning;
                                         blocks only with --strict — card files git does not track)
   repoboard gate record --as <seat> [--tests <passed>|<skipped> --failed n] [--files n]
                         [--typecheck n] [--lint n] [--build n] [--sha s] [--note t]

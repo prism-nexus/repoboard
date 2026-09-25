@@ -286,7 +286,12 @@ only** — ports and what each serves, the remote, the owner lane, the sibling �
 per-landing status (the queue is the board, landings are LAST LANDINGS, seat status is SEATS).
 **A SEATS bullet is ≤ 3 lines**: `UP/DOWN <stamp>`, what the seat holds (lease + card), where its
 last block is. Anything else goes in the seat's log block. A seat restamps its own with
-`repoboard seat <name> --up|--down`.
+`repoboard seat <name> --up|--down`. **Never hand-type `OWNER QUEUE = <ids>` into a SEATS bullet**
+(e.g. inside its `owes:` line) — the queue is generated fresh on every read from open decisions
+(`repoboard state`), so a hand-typed copy is a snapshot that goes stale the moment any of those
+ids is decided; `repoboard check` flags a stale one as `seat-owner-queue-drift` (RCB-130), and
+`--down`/`--update` both refuse a text carrying more than one `in-flight:`/`owes:` line (the shape
+a hand-edit like this tends to leave behind) before the write even lands.
 
 Everything below is wire shapes, byte tables and RCB-nn history — read the matching
 `docs/REFERENCE.md` section only when a card sends you there:

@@ -150,9 +150,16 @@ export {
   lastBlockFor,
   parseLogBlocks,
 } from './repolog.js';
-export type { NextCardReason, SeatBundle, SeatBundleInput, SeatRow } from './seat.js';
+export type {
+  NextCardReason,
+  SeatBulletText,
+  SeatBundle,
+  SeatBundleInput,
+  SeatRow,
+} from './seat.js';
 export {
   checkDownFields,
+  checkFieldCounts,
   findSeatLine,
   formatSeatBullet,
   listSeats,
@@ -162,6 +169,7 @@ export {
   renderSeatList,
   replaceSeatBullet,
   rewriteSeatBulletBody,
+  seatBulletTexts,
   seatBundle,
   seatUpConflict,
 } from './seat.js';
@@ -188,6 +196,7 @@ export {
   renderOwnerQueue,
   renderState,
   SECTION_PLACEHOLDER,
+  seatOwnerQueueDriftFindings,
   setStateSection,
   splitLandings,
   systemsFindings,

@@ -7,6 +7,7 @@ import { describe, expect, it } from 'vitest';
 import { defaultBoardConfig } from '../src/board.js';
 import {
   checkDownFields,
+  checkFieldCounts,
   findSeatLine,
   formatSeatBullet,
   listSeats,
@@ -17,6 +18,7 @@ import {
   replaceSeatBullet,
   rewriteSeatBulletBody,
   type SeatBundle,
+  seatBulletTexts,
   seatBundle,
   seatUpConflict,
 } from '../src/seat.js';
@@ -953,6 +955,102 @@ describe('replaceSeatBullet / formatSeatBullet (RCB-58)', () => {
     const replaced = replaceSeatBullet(THREE, 'builder', bullet);
     expect(findSeatLine(replaced, 'builder')).toBe(bullet);
   });
+
+  describe('RCB-130: an unindented "- in-flight:"/"- owes:" continuation is folded, not orphaned', () => {
+    // REPRODUCTION (candidate B): a hand-edit that types a continuation as its own "- " item
+    // instead of indenting it. Before the `bulletSpans` fix, this line started a NEW span with no
+    // owner label, and `replaceSeatBullet` left it sitting right after the freshly replaced
+    // bullet — the "coordinator's SEATS bullet carried TWO in-flight/owes pairs" shape.
+    const HAND_EDITED = [
+      '- **coordinator: UP 2026-09-24 22:00Z.** doing X',
+      '  in-flight: sonnet A',
+      '  owes: RCB-1',
+      '- in-flight: sonnet B',
+      '  owes: RCB-2 OWNER QUEUE = FPJ-86, FPJ-119',
+      '- **ops**: watching things',
+    ].join('\n');
+
+    it('findSeatLine folds the stray "- in-flight:"/"- owes:" pair into the coordinator bullet', () => {
+      const line = findSeatLine(HAND_EDITED, 'coordinator');
+      expect(line).toBe(
+        [
+          '- **coordinator: UP 2026-09-24 22:00Z.** doing X',
+          '  in-flight: sonnet A',
+          '  owes: RCB-1',
+          '- in-flight: sonnet B',
+          '  owes: RCB-2 OWNER QUEUE = FPJ-86, FPJ-119',
+        ].join('\n'),
+      );
+      // The unrelated "- Owner tasks elsewhere: …"-shaped bullet ("- **ops**…") is NOT folded in —
+      // only a stray field line is.
+      expect(line).not.toContain('ops');
+    });
+
+    it(
+      'the control: replaceSeatBullet removes the stray pair along with the rest of the ' +
+        'coordinator bullet — it does NOT survive as an orphan bullet after the replace (revert ' +
+        'the `STRAY_FIELD_BULLET_RE` check in `bulletSpans` to make this fail)',
+      () => {
+        const fresh = formatSeatBullet(
+          'coordinator',
+          'UP',
+          'doing Y',
+          new Date('2026-09-25T01:56:00Z'),
+        );
+        const replaced = replaceSeatBullet(HAND_EDITED, 'coordinator', fresh);
+        expect(replaced).toBe(
+          ['- **coordinator: UP 2026-09-25 01:56Z.** doing Y', '- **ops**: watching things'].join(
+            '\n',
+          ),
+        );
+        expect(replaced).not.toContain('in-flight: sonnet B');
+        expect(replaced).not.toContain('OWNER QUEUE');
+      },
+    );
+
+    it('a stray field line with NO open bullet ahead of it still starts its own span (nothing to fold into) — replaceSeatBullet appends after it rather than dropping it', () => {
+      const noPriorBullet = ['- in-flight: sonnet B', '  owes: RCB-2'].join('\n');
+      const replaced = replaceSeatBullet(noPriorBullet, 'ops', 'X');
+      expect(replaced).toBe(['- in-flight: sonnet B', '  owes: RCB-2', 'X'].join('\n'));
+    });
+
+    it('an unrelated bullet that merely STARTS with "in-flight"/"owes" text but is not the exact field shape is untouched', () => {
+      const section = [
+        '- **coordinator**: routes work',
+        '- in-flight-notes: some card mentions this word, not a field line',
+      ].join('\n');
+      // Two separate bullets, not folded — the stray-line rule only matches the exact
+      // "in-flight:"/"owes:" shape, not a merely similar-looking label.
+      const line = findSeatLine(section, 'coordinator');
+      expect(line).toBe('- **coordinator**: routes work');
+    });
+  });
+});
+
+describe('seatBulletTexts (RCB-130)', () => {
+  it('one entry per top-level bullet, name + whole text, in section order', () => {
+    const entries = seatBulletTexts(SEATS);
+    expect(entries).toEqual([
+      {
+        name: 'repoboard builder (its own terminal, no autonomy)',
+        text: '- **repoboard builder (its own terminal, no autonomy)**: on RCB-1\n  continuation line here',
+      },
+      { name: 'ops', text: '- **ops**: watching things' },
+      { name: 'coordinator', text: '- **coordinator**: routes work' },
+    ]);
+  });
+
+  it('a malformed (unstamped) bullet still gets an entry, unlike listSeats', () => {
+    const section = '- Owner tasks elsewhere: whatever';
+    expect(seatBulletTexts(section)).toEqual([
+      { name: 'Owner tasks elsewhere', text: '- Owner tasks elsewhere: whatever' },
+    ]);
+    expect(listSeats(section)).toEqual([]);
+  });
+
+  it('no bullets at all (a placeholder section) -> []', () => {
+    expect(seatBulletTexts('_(nothing recorded yet)_')).toEqual([]);
+  });
 });
 
 describe('parseSeatStamp / seatUpConflict (RCB-87)', () => {
@@ -1088,6 +1186,52 @@ describe('RCB-89 in-flight/owes + listSeats', () => {
 
     it('missing owes -> the exact error', () => {
       expect(checkDownFields('x\nin-flight: none')).toBe(DOWN_ERR);
+    });
+  });
+
+  describe('checkFieldCounts (RCB-130)', () => {
+    it('at most one of each -> null', () => {
+      expect(checkFieldCounts('x\nin-flight: a\nowes: b')).toBeNull();
+    });
+
+    it('no fields at all -> null (this guard is count-only, never a presence guard)', () => {
+      expect(checkFieldCounts('just prose, no fields')).toBeNull();
+    });
+
+    it(
+      'REPRODUCTION (fpj STATE.md, 2026-09-25 01:56Z): a --down text carrying TWO in-flight/owes ' +
+        'pairs — before this guard, checkDownFields let it straight through as "ok"',
+      () => {
+        const text =
+          'stood down\nin-flight: sonnet A\nowes: RCB-1\nin-flight: sonnet B\nowes: RCB-2 OWNER QUEUE = FPJ-86, FPJ-119';
+        expect(checkFieldCounts(text)).toBe(
+          'seat: text has 2 "in-flight:" lines and 2 "owes:" lines — one of each, at most',
+        );
+        // The control: reverting `checkDownFields` to skip `checkFieldCounts` (or reverting this
+        // function to always return null) makes checkDownFields "ok" this shape again.
+        expect(checkDownFields(text)).not.toBeNull();
+      },
+    );
+
+    it('two in-flight, one owes -> names only the over count', () => {
+      expect(checkFieldCounts('x\nin-flight: a\nin-flight: b\nowes: c')).toBe(
+        'seat: text has 2 "in-flight:" lines — one of each, at most',
+      );
+    });
+
+    it('one in-flight, three owes -> names only the over count', () => {
+      expect(checkFieldCounts('x\nin-flight: a\nowes: b\nowes: c\nowes: d')).toBe(
+        'seat: text has 3 "owes:" lines — one of each, at most',
+      );
+    });
+  });
+
+  describe('checkDownFields calls checkFieldCounts first (RCB-130)', () => {
+    it('both present but in-flight doubled -> the count error, not null', () => {
+      const text = 'x\nin-flight: a\nin-flight: b\nowes: c';
+      expect(checkDownFields(text)).toBe(
+        'seat: text has 2 "in-flight:" lines — one of each, at most',
+      );
     });
   });
 

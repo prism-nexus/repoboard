@@ -15,7 +15,7 @@
  * manages. Nothing here ever runs `git` with `cwd` = the parent root.
  */
 import { spawn } from 'node:child_process';
-import { mkdir, readFile, rename, stat, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, rename, stat, unlink, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 
 /** The minimal shape `scaffoldIfAbsent` needs — structurally satisfied by `CliIO`. */
@@ -111,6 +111,45 @@ function rigTemplate(): string {
 
 const GITIGNORE_LINE = '.repoboard/local/';
 
+const LOCAL_YML_NAME = 'local.yml';
+
+function localYmlPath(root: string): string {
+  return join(localDir(root), LOCAL_YML_NAME);
+}
+
+/**
+ * RCB-128: is `.repoboard/local/local.yml`'s one meaningful line exactly `remote: none` — the
+ * owner's opt-out ack for a local layer with no backup on purpose (freshpickedjobs). Blank lines
+ * and `#`-comments are ignored; anything else in the file (or a second meaningful line) means it
+ * is NOT the ack — an ack this loose would silence `check` on a typo. Absent file is also not an
+ * ack, never thrown.
+ */
+async function readRemoteAck(root: string): Promise<boolean> {
+  let text: string;
+  try {
+    text = await readFile(localYmlPath(root), 'utf8');
+  } catch {
+    return false;
+  }
+  const lines = text
+    .split('\n')
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0 && !line.startsWith('#'));
+  return lines.length === 1 && lines[0] === 'remote: none';
+}
+
+/** Write the `remote: none` ack — the local dir must already exist. */
+async function writeRemoteAck(root: string): Promise<void> {
+  await writeFile(localYmlPath(root), 'remote: none\n', 'utf8');
+}
+
+/** Remove the ack file, if any — never throws when it is already absent. */
+async function removeRemoteAck(root: string): Promise<void> {
+  await unlink(localYmlPath(root)).catch((e) => {
+    if ((e as NodeJS.ErrnoException).code !== 'ENOENT') throw e;
+  });
+}
+
 async function ensureGitignored(root: string, io: LocalIO): Promise<void> {
   const path = join(root, '.gitignore');
   let text = '';
@@ -130,6 +169,8 @@ async function ensureGitignored(root: string, io: LocalIO): Promise<void> {
 }
 
 export interface LocalInitOptions {
+  /** RCB-128: the literal string `'none'` is the opt-out ack, not a git remote — it writes
+   * `local.yml` (`remote: none`) and sets NO `origin`. */
   remote?: string;
   io: LocalIO;
   now?: () => Date;
@@ -139,11 +180,16 @@ export interface LocalInitOptions {
 }
 
 /**
- * `repoboard local init [--remote <url>]`. Idempotent: mkdir + scaffold RIG.md (never overwrites),
- * ensure the root `.gitignore` carries the exact `.repoboard/local/` line, `git init -q` only when
- * `local/.git` is absent, set a REPO-LOCAL `user.name`/`user.email` only when `git config
- * user.email` is empty inside that repo (never touches global config), point `origin` at
+ * `repoboard local init [--remote <url>|none]`. Idempotent: mkdir + scaffold RIG.md (never
+ * overwrites), ensure the root `.gitignore` carries the exact `.repoboard/local/` line, `git init
+ * -q` only when `local/.git` is absent, set a REPO-LOCAL `user.name`/`user.email` only when `git
+ * config user.email` is empty inside that repo (never touches global config), point `origin` at
  * `--remote` when given, then `localSync`. Never pushes beyond what `localSync` itself does.
+ *
+ * RCB-128: `--remote none` is the owner's ack that this local layer has no backup ON PURPOSE — it
+ * writes `local.yml` instead of setting a remote, and `check`'s `local-no-remote` goes quiet. A
+ * later `--remote <url>` supersedes the ack (a real remote is strictly more backed up than the
+ * ack it replaces) and removes the file, saying so.
  */
 export async function localInit(root: string, opts: LocalInitOptions): Promise<void> {
   const dir = localDir(root);
@@ -162,12 +208,22 @@ export async function localInit(root: string, opts: LocalInitOptions): Promise<v
     await runGit(dir, ['config', 'user.email', 'repoboard@localhost']);
   }
 
-  if (opts.remote) {
+  // RCB-128: `--remote none` writes the opt-out ack instead of a git remote. `--remote <url>`
+  // sets/updates `origin` as before, and removes a pre-existing ack — a real remote supersedes it.
+  if (opts.remote === 'none') {
+    await writeRemoteAck(root);
+    opts.io.stdout.write('wrote .repoboard/local/local.yml (remote: none)\n');
+  } else if (opts.remote) {
+    const hadAck = await readRemoteAck(root);
     const existing = await runGit(dir, ['remote', 'get-url', 'origin']);
     if (existing.code === 0) {
       await runGit(dir, ['remote', 'set-url', 'origin', opts.remote]);
     } else {
       await runGit(dir, ['remote', 'add', 'origin', opts.remote]);
+    }
+    if (hadAck) {
+      await removeRemoteAck(root);
+      opts.io.stdout.write('removed .repoboard/local/local.yml (remote: none) — real remote set\n');
     }
   }
 
@@ -195,7 +251,8 @@ export async function localInit(root: string, opts: LocalInitOptions): Promise<v
   const sync = await localSync(root, 'repoboard local: init');
   // A remote given to a repo that already has its commits: `localSync` found nothing to commit,
   // so it pushed nothing — push the existing history now, or the backup silently stays empty.
-  if (opts.remote && sync.status === 'clean') {
+  // `--remote none` set no origin, so there is nothing to push.
+  if (opts.remote && opts.remote !== 'none' && sync.status === 'clean') {
     const push = await runGit(dir, ['push', '-q', '-u', 'origin', 'HEAD']);
     if (push.code !== 0) {
       opts.io.stdout.write(`warning: local: push failed: ${push.stderr.trim() || 'push failed'}\n`);
@@ -312,15 +369,19 @@ export interface LocalStatus {
   hasRemote: boolean;
   dirty: boolean;
   ahead: number | null;
+  /** RCB-128: true iff `.repoboard/local/local.yml` says `remote: none` — the owner's opt-out ack
+   * for a local layer with no backup on purpose. */
+  remoteAck: boolean;
 }
 
 /** `null` when there is no `.repoboard/local/` directory at all. */
 export async function localStatus(root: string): Promise<LocalStatus | null> {
   if (!(await hasLocal(root))) return null;
   const dir = localDir(root);
+  const remoteAck = await readRemoteAck(root);
 
   const isRepo = await isDirectory(join(dir, '.git'));
-  if (!isRepo) return { isRepo: false, hasRemote: false, dirty: false, ahead: null };
+  if (!isRepo) return { isRepo: false, hasRemote: false, dirty: false, ahead: null, remoteAck };
 
   const status = await runGit(dir, ['status', '--porcelain']);
   const dirty = status.stdout.trim().length > 0;
@@ -332,5 +393,5 @@ export async function localStatus(root: string): Promise<LocalStatus | null> {
   const parsed = count.code === 0 ? Number.parseInt(count.stdout.trim(), 10) : Number.NaN;
   const ahead = Number.isNaN(parsed) ? null : parsed;
 
-  return { isRepo, hasRemote, dirty, ahead };
+  return { isRepo, hasRemote, dirty, ahead, remoteAck };
 }

@@ -234,7 +234,8 @@ Usage:
                                         local-unsynced (warning; blocks only with --strict —
                                         uncommitted changes or unpushed commits in
                                         .repoboard/local/), local-no-remote (informational, never
-                                        fails — .repoboard/local/ has no origin),
+                                        fails — .repoboard/local/ has no origin and no
+                                        \`remote: none\` ack; see \`local init\`),
                                         future-stamp (warning; blocks only with --strict — a log
                                         block's header time is more than a minute ahead of the
                                         clock, so it was ignored for stale-state; hand-typed header
@@ -255,19 +256,26 @@ Usage:
   repoboard gate show [--json]         the newest recorded result per check (tests, typecheck,
                                         lint, build); \`no gate recorded\` for any check with no
                                         line yet
-  repoboard local init [--remote <url>] [--move-record]
+  repoboard local init [--remote <url>|none] [--move-record]
                                         create .repoboard/local/ — a gitignored, separate git repo
                                         for machine facts (scaffolds RIG.md, adds the exact line
                                         \`.repoboard/local/\` to the root .gitignore, git-inits and
-                                        commits); --remote sets (or updates) origin for a private
-                                        backup that needs no extra step; a tracked
+                                        commits); --remote <url> sets (or updates) origin for a
+                                        private backup that needs no extra step, and removes any
+                                        \`remote: none\` ack (a real remote supersedes it);
+                                        --remote none writes that ack instead — no backup on
+                                        purpose, so \`check\`'s local-no-remote goes quiet; with
+                                        neither --remote nor a remote already configured, prints
+                                        \`local: no remote — back up with --remote <url>, or
+                                        --remote none to stop check asking\`; a tracked
                                         STATE.md/log is kept in place unless --move-record — the
                                         store reads the record where it is
   repoboard local sync [-m "<msg>"]    stage, commit (default message "repoboard local: sync") and
                                         push .repoboard/local/ if it has an origin; "no
                                         .repoboard/local/" when there is none to sync
   repoboard local status                one line: \`local: <n> ahead, dirty|clean, remote|no
-                                        remote\`, or the "run repoboard local init" prompt
+                                        remote|no remote (ack: none)\`, or the "run repoboard local
+                                        init" prompt
   repoboard cost [--root <dir>] [--budget <bytes>] [--json]
                                         "cold context": bytes (and ≈tokens at 4 B/token) of what a
                                         cold agent loads — CLAUDE.md/.claude/CLAUDE.md/CLAUDE.local.md
@@ -1815,6 +1823,17 @@ async function cmdLocal(sub: string | undefined, args: string[], io: CliIO): Pro
       now: io.now,
       moveRecord: values['move-record'],
     });
+    // RCB-128: no --remote given this run — say so ONLY if there is still nothing backing this
+    // local layer up (no remote AND no ack), so a bare `local init` doesn't nag a repo that
+    // already opted out or already has a remote from an earlier run.
+    if (values.remote === undefined) {
+      const status = await localStatus(root);
+      if (status && !status.hasRemote && !status.remoteAck) {
+        io.stdout.write(
+          'local: no remote — back up with --remote <url>, or --remote none to stop check asking\n',
+        );
+      }
+    }
     io.stdout.write(`see also: repoboard init --practices (${PRACTICES_OUTPUTS_DESC})\n`);
     return 0;
   }
@@ -1843,10 +1862,12 @@ async function cmdLocal(sub: string | undefined, args: string[], io: CliIO): Pro
       return 0;
     }
     const ahead = status.ahead === null ? '—' : String(status.ahead);
-    io.stdout.write(
-      `local: ${ahead} ahead, ${status.dirty ? 'dirty' : 'clean'}, ` +
-        `${status.hasRemote ? 'remote' : 'no remote'}\n`,
-    );
+    const remoteText = status.hasRemote
+      ? 'remote'
+      : status.remoteAck
+        ? 'no remote (ack: none)'
+        : 'no remote';
+    io.stdout.write(`local: ${ahead} ahead, ${status.dirty ? 'dirty' : 'clean'}, ${remoteText}\n`);
     return 0;
   }
   throw new UserError(`unknown local command "${sub ?? ''}" (init, sync, status)`);

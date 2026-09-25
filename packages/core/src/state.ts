@@ -251,8 +251,16 @@ export interface CheckInput {
   cost?: CostReport | null;
   /** RCB-83: `.repoboard/local/`'s git status, gathered (with I/O) by the caller. `null`/absent
    * when there is no local layer at all — an unconfigured local layer is inert, not dangerous, so
-   * no finding fires for it. */
-  local?: { isRepo: boolean; hasRemote: boolean; dirty: boolean; ahead: number | null } | null;
+   * no finding fires for it. RCB-128: `remoteAck` (default `false` when omitted, for a caller
+   * built before the ack existed) is the owner's opt-out ack (`local.yml`: `remote: none`) —
+   * `!hasRemote && !remoteAck` is `local-no-remote`'s whole condition. */
+  local?: {
+    isRepo: boolean;
+    hasRemote: boolean;
+    dirty: boolean;
+    ahead: number | null;
+    remoteAck?: boolean;
+  } | null;
   /** RCB-97: `.repoboard/systems.yml`'s parse errors and stale detected-row ids, gathered (with
    * I/O) by the caller — core stays I/O-free (§0.5). `null`/absent when the caller gathered
    * nothing (no systems.yml at all, or it gathered no stale check) — an unconfigured systems.yml
@@ -452,7 +460,7 @@ export function checkFindings(input: CheckInput): Finding[] {
   // RCB-83: an absent/null `local` (no `.repoboard/local/`, or one that is not itself a git repo
   // yet) is inert, not a finding — an unconfigured local layer yields nothing, never a warning.
   if (input.local?.isRepo) {
-    const { dirty, ahead, hasRemote } = input.local;
+    const { dirty, ahead, hasRemote, remoteAck } = input.local;
     if (dirty) {
       findings.push({
         kind: 'local-unsynced',
@@ -466,7 +474,9 @@ export function checkFindings(input: CheckInput): Finding[] {
         message: `local: ${ahead} ahead of origin — repoboard local sync`,
       });
     }
-    if (!hasRemote) {
+    // RCB-128: a remote makes the ack moot; without one, the ack (`local.yml`: `remote: none`)
+    // silences the line on purpose — without it, a forgotten backup is still caught every run.
+    if (!hasRemote && !remoteAck) {
       findings.push({
         kind: 'local-no-remote',
         level: 'info',

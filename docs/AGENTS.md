@@ -328,6 +328,12 @@ any time, and `repoboard local status` for a one-line read. `repoboard check` wa
 way it watches leases: `local-unsynced` (warning) for uncommitted changes or unpushed commits,
 `local-no-remote` (informational) when there is no backup configured yet.
 
+A repo with no local remote ON PURPOSE (e.g. freshpickedjobs) can ack that instead of seeing
+`local-no-remote` forever: `repoboard local init --remote none` writes `.repoboard/local/local.yml`
+(`remote: none`) and sets no `origin`; `check` then stays quiet about it. A later `repoboard local
+init --remote <url>` sets the remote and removes the ack — a real remote supersedes it. Without the
+ack the line still prints on every `check`, so a forgotten backup is still caught.
+
 The running record follows the layer. Once `.repoboard/local/` exists, `STATE.md` is read and
 written at `.repoboard/local/STATE.md` and new log blocks go to `.repoboard/local/log/`, so
 `repoboard local init` moves an existing top-level `STATE.md` and `log/` in (a rename, printed as

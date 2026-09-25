@@ -134,6 +134,73 @@ describe('repoboard local init', () => {
     expect(url).toBe(bare);
   });
 
+  // RCB-128: an opt-out ack for a local layer with no backup on purpose (freshpickedjobs).
+  describe('--remote none (RCB-128)', () => {
+    it('writes local.yml (remote: none) and sets no origin', async () => {
+      const root = await freshRepo({});
+      const res = await repoboard(root, 'local', 'init', '--remote', 'none');
+      expect(res.code).toBe(0);
+      expect(res.out).toContain('wrote .repoboard/local/local.yml (remote: none)');
+
+      const ymlPath = join(root, '.repoboard', 'local', 'local.yml');
+      expect(await readFile(ymlPath, 'utf8')).toBe('remote: none\n');
+
+      await expect(
+        git(join(root, '.repoboard', 'local'), 'remote', 'get-url', 'origin'),
+      ).rejects.toThrow();
+
+      const status = await localStatus(root);
+      expect(status?.hasRemote).toBe(false);
+      expect(status?.remoteAck).toBe(true);
+    });
+
+    it('`local status` reads it as "no remote (ack: none)"', async () => {
+      const root = await freshRepo({});
+      await repoboard(root, 'local', 'init', '--remote', 'none');
+      const res = await repoboard(root, 'local', 'status');
+      expect(res.code).toBe(0);
+      expect(res.out).toContain('local: — ahead, clean, no remote (ack: none)');
+    });
+
+    it('a later --remote <url> sets the remote AND removes the ack', async () => {
+      const root = await freshRepo({});
+      await repoboard(root, 'local', 'init', '--remote', 'none');
+      const bare = await makeBareRemote();
+      const res = await repoboard(root, 'local', 'init', '--remote', bare);
+      expect(res.code).toBe(0);
+      expect(res.out).toContain(
+        'removed .repoboard/local/local.yml (remote: none) — real remote set',
+      );
+
+      expect(existsSync(join(root, '.repoboard', 'local', 'local.yml'))).toBe(false);
+      const url = (
+        await git(join(root, '.repoboard', 'local'), 'remote', 'get-url', 'origin')
+      ).trim();
+      expect(url).toBe(bare);
+
+      const status = await localStatus(root);
+      expect(status?.hasRemote).toBe(true);
+      expect(status?.remoteAck).toBe(false);
+    });
+
+    it('with no --remote at all: bare `local init` still nags (control: the ack, not the flag, silences it)', async () => {
+      const root = await freshRepo({});
+      const res = await repoboard(root, 'local', 'init');
+      expect(res.code).toBe(0);
+      expect(res.out).toContain(
+        'local: no remote — back up with --remote <url>, or --remote none to stop check asking',
+      );
+    });
+
+    it('acked: a bare `local init` re-run no longer nags', async () => {
+      const root = await freshRepo({});
+      await repoboard(root, 'local', 'init', '--remote', 'none');
+      const res = await repoboard(root, 'local', 'init');
+      expect(res.code).toBe(0);
+      expect(res.out).not.toContain('local: no remote — back up with --remote <url>');
+    });
+  });
+
   it('moves a top-level STATE.md and log/ into local/ (the store reads them there from now on)', async () => {
     const root = await freshRepo({});
     const withThem = await repoboard(root, 'init', '--practices');
@@ -422,6 +489,16 @@ describe('repoboard check: local-unsynced / local-no-remote (RCB-83)', () => {
     const res = await repoboard(root, 'check', '--strict');
     expect(res.code).toBe(0);
     expect(res.out).toContain('local: no remote — repoboard local init --remote <url>');
+  });
+
+  // RCB-128: the ack (`local init --remote none`) is what actually silences it — not merely
+  // having run `local init` at all (the case right above is the control: unacked, it still prints).
+  it('acked (--remote none): local-no-remote is silenced, even with --strict', async () => {
+    const root = await freshRepo({});
+    await repoboard(root, 'local', 'init', '--remote', 'none');
+    const res = await repoboard(root, 'check', '--strict');
+    expect(res.code).toBe(0);
+    expect(res.out).not.toContain('local: no remote');
   });
 
   it('clean, synced, with a remote: no local finding at all', async () => {

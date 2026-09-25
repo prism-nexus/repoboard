@@ -812,6 +812,32 @@ describe('checkFindings: local (RCB-83)', () => {
     });
     expect(findings.map((f) => f.kind).sort()).toEqual(['local-no-remote', 'local-unsynced']);
   });
+
+  // RCB-128: an opt-out ack (`local.yml`: `remote: none`) silences local-no-remote; without it
+  // the line still prints — a forgotten backup is still caught.
+  it('acked, no remote: local-no-remote is absent', () => {
+    const findings = checkFindings({
+      ...base(),
+      local: { isRepo: true, hasRemote: false, dirty: false, ahead: null, remoteAck: true },
+    });
+    expect(findings).toEqual([]);
+  });
+
+  it('not acked, no remote: local-no-remote still present (the control for the case above)', () => {
+    const findings = checkFindings({
+      ...base(),
+      local: { isRepo: true, hasRemote: false, dirty: false, ahead: null, remoteAck: false },
+    });
+    expect(findings.map((f) => f.kind)).toEqual(['local-no-remote']);
+  });
+
+  it('remote AND ack: local-no-remote absent either way — a remote alone already silences it', () => {
+    const findings = checkFindings({
+      ...base(),
+      local: { isRepo: true, hasRemote: true, dirty: false, ahead: 0, remoteAck: true },
+    });
+    expect(findings).toEqual([]);
+  });
 });
 
 describe('checkFindings: needs-ask (RCB-69, FPJ-28)', () => {

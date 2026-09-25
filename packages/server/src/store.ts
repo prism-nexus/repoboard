@@ -50,6 +50,7 @@ import {
   parseCard,
   parseLeases,
   parseLogBlocks,
+  parseSeatStamp,
   parseState,
   parseSystems,
   pruneWindows,
@@ -205,6 +206,12 @@ export type SetColumnsOutcome =
 /** P8.3: `appendRepoLog` outcome. */
 export type AppendRepoLogOutcome =
   | { ok: true; date: string; text: string; block: LogBlock }
+  | { ok: false; error: string; readOnly?: boolean };
+
+/** RCB-127: `appendSeatLog` outcome — `AppendRepoLogOutcome`'s ok branch plus whether STATE.md
+ * got restamped (only when `seat` had an UP bullet in SEATS at the moment of the call). */
+export type AppendSeatLogOutcome =
+  | { ok: true; date: string; text: string; block: LogBlock; restamped: boolean }
   | { ok: false; error: string; readOnly?: boolean };
 
 /** P8.3: one `.repoboard/log/<date>.md` file, read fresh from disk (never cached). */
@@ -771,33 +778,94 @@ export class CardStore extends EventEmitter<StoreEvents> {
     text: string,
     title: string | undefined,
   ): Promise<AppendRepoLogOutcome> {
+    return this.mutate(() => this.doAppendRepoLog(seat, text, title));
+  }
+
+  /**
+   * RCB-127: `appendRepoLog`'s own body, factored out so `appendSeatLog` can run it and then,
+   * still inside the SAME `mutate` turn, restamp STATE.md. `appendSeatLog` cannot call the public
+   * `appendRepoLog` above to get this: that would be a second `mutate`/`enqueue` call made from
+   * inside the first's still-running callback, which chains onto `this.queue` (the first call's
+   * own in-flight promise) and deadlocks — the outer call would then be awaiting a promise that
+   * can only resolve once the outer call itself returns. Not wrapped in `mutate` itself; every
+   * caller must already be inside one.
+   */
+  private async doAppendRepoLog(
+    seat: string,
+    text: string,
+    title: string | undefined,
+  ): Promise<AppendRepoLogOutcome> {
+    if (seat.trim().length === 0) return { ok: false as const, error: 'seat must not be empty' };
+    const line = text.trim();
+    if (line.length === 0) return { ok: false as const, error: 'text must not be empty' };
+    this.refuseWriteWithoutBoard();
+    const now = this.now();
+    const date = toIso(now).slice(0, 10);
+    const path = join(this.logDir, `${date}.md`);
+    let existing = '';
+    try {
+      existing = await readFile(path, 'utf8');
+    } catch (e) {
+      if ((e as NodeJS.ErrnoException).code !== 'ENOENT') throw e;
+    }
+    const base = existing.length > 0 ? existing : `${dailyLogHeader(date)}\n\n`;
+    const ts = toIso(now);
+    const block = formatLogBlock({ seat, ts, title, text: line });
+    const next = appendLogBlock(base, block);
+    await this.writeLog(date, next);
+    const parsedBlocks = parseLogBlocks(next);
+    const parsedBlock = parsedBlocks[parsedBlocks.length - 1];
+    return {
+      ok: true as const,
+      date,
+      text: next,
+      block: parsedBlock ?? { seat: seat.toUpperCase(), ts, title: title ?? line, text: line },
+    };
+  }
+
+  /**
+   * RCB-127 (owner decision 2026-09-25): `log --as <seat>` — the CLI and MCP entry point for a
+   * mid-session log block. Runs `doAppendRepoLog`, then, under `this.statePath`'s cross-process
+   * file lock, restamps STATE.md's own line-3 stamp/actor line iff `seat` has an UP bullet in
+   * SEATS right now — the SAME restamp `updateSeatBullet` performs (`setStateSectionCore` on
+   * `seats`, with the UNCHANGED seats body, actor = `seat`): every section byte-identical, only
+   * the stamp/actor line changes. This is what keeps `check`'s stale-state finding from firing
+   * just because an UP seat logged mid-session, without that seat having to also run
+   * `seat --update`. A DOWN seat, an unknown seat (no bullet at all), a STATE.md that does not
+   * exist, or one that fails to parse all get the log append with `restamped: false` — stale-state
+   * still fires for them until `seat --update` (or `--up`/`--down`) runs. Seat matching is
+   * `findSeatLine`'s own two-pass rule (RCB-58) — no new matcher, so this can never disagree with
+   * `check`/`seat --update`/`seat --up` about who is UP.
+   */
+  appendSeatLog(
+    seat: string,
+    text: string,
+    title: string | undefined,
+  ): Promise<AppendSeatLogOutcome> {
     return this.mutate(async () => {
-      if (seat.trim().length === 0) return { ok: false as const, error: 'seat must not be empty' };
-      const line = text.trim();
-      if (line.length === 0) return { ok: false as const, error: 'text must not be empty' };
-      this.refuseWriteWithoutBoard();
-      const now = this.now();
-      const date = toIso(now).slice(0, 10);
-      const path = join(this.logDir, `${date}.md`);
-      let existing = '';
-      try {
-        existing = await readFile(path, 'utf8');
-      } catch (e) {
-        if ((e as NodeJS.ErrnoException).code !== 'ENOENT') throw e;
-      }
-      const base = existing.length > 0 ? existing : `${dailyLogHeader(date)}\n\n`;
-      const ts = toIso(now);
-      const block = formatLogBlock({ seat, ts, title, text: line });
-      const next = appendLogBlock(base, block);
-      await this.writeLog(date, next);
-      const parsedBlocks = parseLogBlocks(next);
-      const parsedBlock = parsedBlocks[parsedBlocks.length - 1];
-      return {
-        ok: true as const,
-        date,
-        text: next,
-        block: parsedBlock ?? { seat: seat.toUpperCase(), ts, title: title ?? line, text: line },
-      };
+      const appended = await this.doAppendRepoLog(seat, text, title);
+      if (!appended.ok) return appended;
+      const restamped = await withFileLock(this.statePath, async () => {
+        let raw: string;
+        try {
+          raw = await readFile(this.statePath, 'utf8');
+        } catch (e) {
+          if ((e as NodeJS.ErrnoException).code !== 'ENOENT') throw e;
+          return false;
+        }
+        const parsed = parseState(raw);
+        if (!parsed.ok) return false;
+        const line = findSeatLine(parsed.doc.sections.seats, seat);
+        if (line === null || parseSeatStamp(line)?.status !== 'UP') return false;
+        const res = setStateSectionCore(raw, 'seats', parsed.doc.sections.seats, {
+          now: this.now(),
+          actor: seat,
+        });
+        if (!res.ok) return false;
+        await this.writeState(res.text);
+        return true;
+      });
+      return { ...appended, restamped };
     });
   }
 

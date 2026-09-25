@@ -252,7 +252,7 @@ every other section byte-identical.
 | `repoboard state` | prints the rendered page (OWNER QUEUE generated fresh) |
 | `repoboard state --json` | (RCB-144) read path only — refused with `--set-section`/`--trim-landings`; prints `{stamp, actor, sections, ownerQueue}` from `store.state()`, `ownerQueue` generated fresh from cards that need a decision (same computation as MCP's `get_state`); no `STATE.md`: `null`, exit 0 |
 | `repoboard state --set-section LIVE\|LAST-LANDINGS\|SEATS (<text> \| --stdin) [--as a]` | `repoboard state --set-section LIVE "Tree is dev." --as claude/ops` → `updated STATE.md LIVE` |
-| `repoboard log --as <seat> [--title "…"] (<text> \| --stdin)` | `repoboard log --as claude/ops --title "armed the fires" "Five waiters set."` → `logged 2026-09-17 claude/ops` — creates today's file if this is the first entry |
+| `repoboard log --as <seat> [--title "…"] (<text> \| --stdin)` | `repoboard log --as claude/ops --title "armed the fires" "Five waiters set."` → `logged 2026-09-17 claude/ops` — creates today's file if this is the first entry. RCB-127 (owner decision 2026-09-25): also restamps STATE.md's own line-3 stamp — the SAME restamp `seat --update` performs (`setStateSectionCore` on `seats`, the UNCHANGED body, actor = `<seat>`) — iff `<seat>` has an UP bullet in SEATS right now (`findSeatLine`'s own match rule); the line then reads `logged 2026-09-17 claude/ops · STATE restamped (claude/ops is UP)`. A DOWN seat, an unknown seat, or a hand-typed block still leave `check`'s stale-state finding to fire until that seat runs `seat --update` |
 | `repoboard log show [--date YYYY-MM-DD] [--seat s]` | prints a day's log (default today); `--seat` filters to that seat's own blocks |
 | `repoboard log show --json [--date YYYY-MM-DD] [--seat s]` | (RCB-144) prints `{date, blocks: [{seat, ts, title, text}]}` from the parsed blocks the text path already has; no log for that date (or no entries for that seat): `{date, blocks: []}`, exit 0 |
 | `repoboard log --last <seat>` | `repoboard log --last claude/builder` — prints that seat's newest block, searching back across every day in `.repoboard/log/` AND, when configured, `board.yml`'s `logDir` (RCB-54 — the same merged set `check` reads; `repoboard log` itself still only ever writes `.repoboard/log/`), not just today; the seat match is by LEADING WORD, case-insensitive, when `<seat>` is one word (RCB-62) — `builder` finds a hand-written heading like `BUILDER (fresh, f87be1)`, but `coordinator` does NOT match `COORDINATOR/SEARCH` (no whitespace, so that whole token is its own leading word); a multi-word `<seat>` still compares whole-to-whole; a cold seat with no history prints `(no log block for <seat>)`, exit 0 |
@@ -290,8 +290,10 @@ meaning of `--strict` cannot drift between surfaces.
 
 `get_state()` → `{stamp, actor, sections: {live, lastLandings, seats}, ownerQueue: [{id, question,
 options}], text}` (nulls before any STATE.md exists), `set_state_section(section, body, actor?)`,
-`append_repo_log(seat, text, title?)`, `check(strict?)` → `{findings, exitCode}`. All four are
-terse (no `CARD_INTRO`, matching P8.2's five lease tools) and each measures under 700 B.
+`append_repo_log(seat, text, title?)` → `{date, block, restamped}` (RCB-127: `restamped` is true
+iff `seat` had an UP bullet in SEATS at the moment of the call — the same restamp `seat --update`
+performs), `check(strict?)` → `{findings, exitCode}`. All four are terse (no `CARD_INTRO`,
+matching P8.2's five lease tools) and each measures under 700 B.
 `ownerQueue` (both here and in `repoboard state --json`) is computed by one shared function
 (`card-query.ts`, RCB-146) — the CLI and MCP can no longer disagree about which cards are open.
 
@@ -306,7 +308,7 @@ none. `get_seat({name})` → the SAME cold-start bundle `seat <name> --json` pri
 `GET /api/state` (same shape as MCP `get_state`), `PUT /api/state/section`
 `{section, body, actor?}` — 200 with the refreshed state, 400 for a bad section/empty body, 409
 map-only. `GET /api/log?date=` → `{date, text, blocks}` — merged with `board.yml`'s configured `logDir` for that date when set (RCB-62; the same source `check`/`seat` read), 404 only when neither file exists for that date. **Reversed 2026-09-21 (RCB-71, owner chose A):** `repoboard log` WRITES to `logDir` when it is set; reads unchanged.
-`POST /api/log` `{seat, text, title?}` — 200 with `{date, text, block}`, 400/409 as above.
+`POST /api/log` `{seat, text, title?}` — 200 with `{date, text, block, restamped}`, 400/409 as above; `restamped` is true when `seat` had an UP bullet in SEATS, so STATE.md was restamped too (RCB-127, same function as `log --as`).
 `GET /api/check?strict=1` is a pure read, always 200 (`{findings, exitCode}` — exitCode is data,
 not a status code, the same reasoning as `GET /api/leases/check/:resource`). The WS `snapshot`
 carries `state` and today's `log`; a `{type:"state", state}` message follows any rewrite (from any

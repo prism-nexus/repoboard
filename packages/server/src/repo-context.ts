@@ -973,9 +973,16 @@ export async function openRepoContext(key: string, opts: RepoContextOptions): Pr
     if (method === 'POST' && path === '/api/log') {
       const body = await readBody(req);
       const input = toAppendLogInput(body);
-      const outcome = await store.appendRepoLog(input.seat, input.text, input.title);
+      // RCB-127: the same `appendSeatLog` CLI `log --as` and MCP `append_repo_log` call — one
+      // guarantee on every surface: an UP seat's block also restamps STATE.md.
+      const outcome = await store.appendSeatLog(input.seat, input.text, input.title);
       if (!outcome.ok) throw new HttpError(outcome.readOnly ? 409 : 400, outcome.error);
-      return sendJson(res, 200, { date: outcome.date, text: outcome.text, block: outcome.block });
+      return sendJson(res, 200, {
+        date: outcome.date,
+        text: outcome.text,
+        block: outcome.block,
+        restamped: outcome.restamped,
+      });
     }
     if (method === 'GET' && path === '/api/check') {
       const strict =

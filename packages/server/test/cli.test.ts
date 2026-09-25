@@ -2496,6 +2496,80 @@ describe('repoboard log', () => {
   });
 });
 
+describe('repoboard log --as restamps STATE.md when that seat is UP (RCB-127)', () => {
+  /** Like `repoboard`, but with an explicit clock — needed so the restamp visibly changes
+   *  STATE.md's stamp rather than rewriting it with the SAME `now`. Same helper `repoboard seat
+   *  --up/--down`'s own tests use. */
+  async function repoboardWithClock(cwd: string, now: Date, ...argv: string[]) {
+    const stdout = new Sink();
+    const stderr = new Sink();
+    const code = await run(argv, {
+      cwd,
+      stdout,
+      stderr,
+      env: { REPOBOARD_ACTOR: 'test-actor' },
+      now: () => now,
+    });
+    return { code, out: stdout.text, err: stderr.text };
+  }
+
+  it('an UP seat: "logged … · STATE restamped (<seat> is UP)", only line 3 of STATE.md changes', async () => {
+    const root = await freshRepo({});
+    await repoboard(root, 'seat', 'builder', '--up', 'holding RCB-127'); // stamps STATE at NOW
+    const before = await readFile(join(root, '.repoboard', 'STATE.md'), 'utf8');
+
+    const later = new Date(NOW.getTime() + 5 * 60_000);
+    const res = await repoboardWithClock(
+      root,
+      later,
+      'log',
+      '--as',
+      'builder',
+      'mid-session update',
+    );
+    expect(res.code).toBe(0);
+    expect(res.out).toBe('logged 2026-09-02 builder · STATE restamped (builder is UP)\n');
+
+    const after = await readFile(join(root, '.repoboard', 'STATE.md'), 'utf8');
+    expect(after).toContain('**Written 2026-09-02T22:46:10Z by builder.**');
+    // Only line 3 (the stamp) differs; the builder's own SEATS bullet — restamped by `seat --up`
+    // a moment ago — stays untouched, byte for byte, by this second restamp.
+    const beforeLines = before.split('\n');
+    const afterLines = after.split('\n');
+    expect(afterLines.length).toBe(beforeLines.length);
+    for (let i = 0; i < beforeLines.length; i++) {
+      if (i === 2) continue;
+      expect(afterLines[i]).toBe(beforeLines[i]);
+    }
+    expect(afterLines[2]).not.toBe(beforeLines[2]);
+  });
+
+  it('a DOWN seat: plain "logged" line, no restamp suffix', async () => {
+    const root = await freshRepo({});
+    await repoboard(
+      root,
+      'seat',
+      'ops',
+      '--down',
+      'stood down for the night\nin-flight: none\nowes: none',
+    );
+    const res = await repoboard(root, 'log', '--as', 'ops', 'mid-session update');
+    expect(res.code).toBe(0);
+    expect(res.out).toBe('logged 2026-09-02 ops\n');
+  });
+
+  it('a seat with no SEATS bullet at all: plain "logged" line, no restamp suffix', async () => {
+    const root = await freshRepo({});
+    await repoboard(root, 'state', '--set-section', 'LIVE', 'x', '--as', 'coordinator');
+    const res = await repoboard(root, 'log', '--as', 'ghost', 'mid-session update');
+    expect(res.code).toBe(0);
+    expect(res.out).toBe('logged 2026-09-02 ghost\n');
+  });
+
+  // RCB-127 control: in `cmdLogAppend`, hardcode `restampSuffix` to '' (never print the suffix,
+  // even when `res.restamped` is true) — the first test above must fail on `res.out`.
+});
+
 describe('repoboard seat', () => {
   it(
     "prints only this seat's SEATS bullet, its own last block, the coordinator's, its " +

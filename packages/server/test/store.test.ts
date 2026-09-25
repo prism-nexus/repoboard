@@ -1061,6 +1061,124 @@ describe('updateSeatBullet (RCB-88)', () => {
   // See cli.test.ts for the CLI-facing half of this same control.
 });
 
+describe('appendSeatLog (RCB-127): log --as <seat> restamps STATE.md when that seat is UP', () => {
+  it('an UP seat: restamped true, and check has no stale-state once the log mtime is pinned to the same clock', async () => {
+    const repo = await repoWith({});
+    let clock = NOW;
+    const store = await openStore(repo.root, { watch: false, now: () => clock });
+    opened.push(store);
+
+    await store.setSeatBullet('builder', 'UP', 'holding RCB-127'); // stamps STATE at NOW
+    clock = new Date(NOW.getTime() + 5 * 60_000);
+
+    const res = await store.appendSeatLog('builder', 'mid-session update', undefined);
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    expect(res.restamped).toBe(true);
+    expect(store.state()?.stamp).toBe('2026-09-02T22:46:10Z');
+    expect(store.state()?.actor).toBe('builder');
+
+    // Pin the log file's mtime to the SAME clock reading the append+restamp just used — real
+    // filesystem mtimes otherwise reflect wall-clock "now", not this mocked one (same technique
+    // `check aggregates findings` above and cli.test.ts's `seat --up` test use).
+    const logPath = join(repo.root, '.repoboard', 'log', '2026-09-02.md');
+    await utimes(logPath, clock, clock);
+
+    const result = await store.check(false);
+    expect(result.findings.some((f) => f.kind === 'stale-state')).toBe(false);
+  });
+
+  it('a DOWN seat: restamped false, and check is stale-state (the old stamp predates the log)', async () => {
+    const repo = await repoWith({});
+    let clock = NOW;
+    const store = await openStore(repo.root, { watch: false, now: () => clock });
+    opened.push(store);
+
+    await store.setSeatBullet('ops', 'DOWN', 'stood down for the night'); // stamps STATE at NOW
+    clock = new Date(NOW.getTime() + 5 * 60_000);
+
+    const res = await store.appendSeatLog('ops', 'mid-session note', undefined);
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    expect(res.restamped).toBe(false);
+    expect(store.state()?.stamp).toBe('2026-09-02T22:41:10Z'); // unchanged — still NOW
+
+    const logPath = join(repo.root, '.repoboard', 'log', '2026-09-02.md');
+    await utimes(logPath, clock, clock); // strictly after the (unmoved) STATE stamp
+
+    const result = await store.check(false);
+    expect(result.findings.some((f) => f.kind === 'stale-state')).toBe(true);
+  });
+
+  it('a seat with no SEATS bullet at all: restamped false, and check is stale-state', async () => {
+    const repo = await repoWith({});
+    let clock = NOW;
+    const store = await openStore(repo.root, { watch: false, now: () => clock });
+    opened.push(store);
+
+    await store.setStateSection('live', 'x', 'coordinator'); // STATE.md exists, but no bullet for "ghost"
+    clock = new Date(NOW.getTime() + 5 * 60_000);
+
+    const res = await store.appendSeatLog('ghost', 'mid-session note', undefined);
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    expect(res.restamped).toBe(false);
+
+    const logPath = join(repo.root, '.repoboard', 'log', '2026-09-02.md');
+    await utimes(logPath, clock, clock);
+
+    const result = await store.check(false);
+    expect(result.findings.some((f) => f.kind === 'stale-state')).toBe(true);
+  });
+
+  it('no STATE.md at all: restamped false, the log append still succeeds, and no file is scaffolded', async () => {
+    const repo = await repoWith({});
+    const store = await open(repo, false);
+    expect(store.state()).toBeNull();
+
+    const res = await store.appendSeatLog('ghost', 'mid-session note', undefined);
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    expect(res.restamped).toBe(false);
+    expect(existsSync(join(repo.root, '.repoboard', 'STATE.md'))).toBe(false);
+  });
+
+  it("every STATE.md byte outside line 3 (the stamp) is unchanged — including the builder's own SEATS bullet", async () => {
+    const repo = await repoWith({});
+    let clock = NOW;
+    const store = await openStore(repo.root, { watch: false, now: () => clock });
+    opened.push(store);
+
+    await store.setStateSection('live', 'Tree is dev.', 'coordinator');
+    await store.setStateSection('lastLandings', 'RCB-1 landed.', 'coordinator');
+    await store.setSeatBullet('builder', 'UP', 'holding RCB-127'); // stamps STATE at NOW
+    const before = await readFile(join(repo.root, '.repoboard', 'STATE.md'), 'utf8');
+
+    clock = new Date(NOW.getTime() + 5 * 60_000);
+    const res = await store.appendSeatLog('builder', 'mid-session update', undefined);
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    expect(res.restamped).toBe(true);
+
+    const after = await readFile(join(repo.root, '.repoboard', 'STATE.md'), 'utf8');
+    const beforeLines = before.split('\n');
+    const afterLines = after.split('\n');
+    expect(afterLines.length).toBe(beforeLines.length);
+    for (let i = 0; i < beforeLines.length; i++) {
+      if (i === 2) continue; // "**Written <ISO> by <actor>.**" — the one line that restamps
+      expect(afterLines[i]).toBe(beforeLines[i]);
+    }
+    expect(afterLines[2]).not.toBe(beforeLines[2]);
+    expect(after).toContain('**Written 2026-09-02T22:46:10Z by builder.**');
+    expect(after).toContain('- **builder: UP 2026-09-02 22:41Z.** holding RCB-127'); // builder's own bullet, byte-identical
+  });
+
+  // RCB-127 control: in `appendSeatLog`'s restamp step, drop the
+  // `parseSeatStamp(line)?.status !== 'UP'` check (always restamp when a bullet is found) — the
+  // DOWN-seat test above must fail (`restamped` flips to `true`, and its stale-state assertion
+  // fails once the restamp fixes the stamp too). See cli.test.ts for the CLI-facing half.
+});
+
 // ---- RCB-34/P7.3: the column set is editable from the app (plan §11 O6) ---------------------
 describe('setColumns (RCB-34/P7.3)', () => {
   const NEXT_COLUMNS = [
@@ -1891,6 +2009,7 @@ describe('K10 structure of store.ts', () => {
       'addWindow',
       'appendLog',
       'appendRepoLog',
+      'appendSeatLog',
       'archiveCards',
       'ask',
       'closeSynced',
@@ -1922,6 +2041,7 @@ describe('K10 structure of store.ts', () => {
       'mutate', // setSeatBullet
       'mutate', // updateSeatBullet
       'mutate', // appendRepoLog
+      'mutate', // appendSeatLog (RCB-127)
       'mutate', // appendLog
       'mutate', // addNote
       'mutate', // closeSynced

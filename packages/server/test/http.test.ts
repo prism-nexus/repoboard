@@ -1539,8 +1539,10 @@ describe('state/log/check over HTTP (P8.3)', () => {
       body: JSON.stringify({ seat: 'claude/p8-3', title: 'kickoff', text: 'first entry' }),
     });
     expect(post.status).toBe(200);
-    const posted = (await json(post)) as { date: string; text: string };
+    const posted = (await json(post)) as { date: string; text: string; restamped: boolean };
     expect(posted.date).toBe('2026-09-02');
+    // RCB-127: no SEATS bullet for this seat, so no restamp.
+    expect(posted.restamped).toBe(false);
     expect(posted.text).toContain('kickoff');
 
     const get = await fetch(`${r.url}/api/log`);

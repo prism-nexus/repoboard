@@ -890,6 +890,33 @@ describe('repoboard mcp: get_state / set_state_section / append_repo_log / check
     expect((await r.call('append_repo_log', { seat: '  ', text: 'x' })).isError).toBe(true);
   });
 
+  it('append_repo_log: restamped is true for a seat with an UP bullet, false otherwise (RCB-127)', async () => {
+    const r = await rig();
+    await r.json('set_state_section', {
+      section: 'SEATS',
+      body: '- **builder: UP 2026-09-02 22:00Z.** holding RCB-127',
+      actor: 'coordinator',
+    });
+    const stateBefore = await r.json<{ actor: string }>('get_state');
+    expect(stateBefore.actor).toBe('coordinator');
+
+    const up = await r.json<{ restamped: boolean }>('append_repo_log', {
+      seat: 'builder',
+      text: 'mid-session update',
+    });
+    expect(up.restamped).toBe(true);
+    // The restamp's actor line flips from `coordinator` (the SEATS write above) to `builder` —
+    // the visible proof this call rewrote STATE.md's own stamp/actor line, not just the flag.
+    const stateAfterUp = await r.json<{ actor: string }>('get_state');
+    expect(stateAfterUp.actor).toBe('builder');
+
+    const down = await r.json<{ restamped: boolean }>('append_repo_log', {
+      seat: 'ops', // no SEATS bullet at all
+      text: 'mid-session note',
+    });
+    expect(down.restamped).toBe(false);
+  });
+
   it('check: ok (empty findings, exitCode 0) on a clean fixture', async () => {
     const r = await rig();
     const res = await r.json<{ findings: unknown[]; exitCode: number }>('check');

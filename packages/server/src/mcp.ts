@@ -794,9 +794,9 @@ export function createMcpServer(opts: McpServerOptions): McpServer {
       },
     },
     async ({ seat, text, title }) => {
-      const res = await store.appendRepoLog(seat, text, title);
+      const res = await store.appendSeatLog(seat, text, title);
       if (!res.ok) return fail(res.error);
-      return ok({ date: res.date, block: res.block });
+      return ok({ date: res.date, block: res.block, restamped: res.restamped });
     },
   );
 

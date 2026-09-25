@@ -199,7 +199,11 @@ Usage:
                                         beyond <n>
   repoboard log --as <seat> [--title "…"] (<text> | --stdin)
                                         append one block to today's log — board.yml logDir when
-                                        set, else .repoboard/local/log/, else .repoboard/log/
+                                        set, else .repoboard/local/log/, else .repoboard/log/;
+                                        also restamps STATE.md's stamp (RCB-127) when <seat> has
+                                        an UP bullet in SEATS right now, printing " · STATE
+                                        restamped (<seat> is UP)" on the same line — a DOWN or
+                                        unknown seat just logs, and still needs \`seat --update\`
   repoboard log show [--date YYYY-MM-DD] [--seat s] [--json]
                                         print a day's log (default today), optionally one seat's
                                         blocks; --json prints {date, blocks: [{seat, ts, title,
@@ -1433,7 +1437,9 @@ async function cmdLogAppend(args: string[], io: CliIO): Promise<number> {
     );
   const root = await requireRoot(io);
   const store = await openStore(root, { watch: false, now: io.now });
-  const res = await store.appendRepoLog(seat, text, values.title);
+  // RCB-127: `appendSeatLog` restamps STATE.md's own stamp iff `seat` has an UP bullet right
+  // now — see the store's own doc comment. A DOWN/unknown seat still just logs.
+  const res = await store.appendSeatLog(seat, text, values.title);
   if (!res.ok) throw new UserError(res.error);
   // RCB-83: same rule as `seat --up/--down` — sync .repoboard/local/ after the write, a no-op
   // when there is no local layer.
@@ -1443,7 +1449,8 @@ async function cmdLogAppend(args: string[], io: CliIO): Promise<number> {
       (io.stderr ?? io.stdout).write(`warning: local: push failed: ${sync.error}\n`);
     }
   }
-  io.stdout.write(`logged ${res.date} ${seat}\n`);
+  const restampSuffix = res.restamped ? ` · STATE restamped (${seat} is UP)` : '';
+  io.stdout.write(`logged ${res.date} ${seat}${restampSuffix}\n`);
   return 0;
 }
 

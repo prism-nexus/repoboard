@@ -10,6 +10,7 @@ import {
   type Card,
   type DecisionOption,
   findColumn,
+  type GateMemberFacts,
   needsDecision,
   type Size,
   stepsOf,
@@ -63,8 +64,18 @@ function idNumber(id: string): number {
  * `unblocked`-without-`parent` case itself, with its own `--flag`-worded message, before this
  * function is ever called for it; MCP `list_cards` has no such pre-check, so its callers see this
  * function's own wording.
+ *
+ * RCB-154: `members` is REQUIRED (never defaulted here) — the `unblocked` filter's own
+ * `blockedReason` call is the exact gap this card closes: `card list --unblocked` used to resolve
+ * a step's `gate:` against THIS board only, so a step gated on an already-clear MEMBER card read
+ * as blocked. A caller with no workspace passes `[]`.
  */
-export function filterCards(all: readonly Card[], config: BoardConfig, f: CardFilterInput): Card[] {
+export function filterCards(
+  all: readonly Card[],
+  config: BoardConfig,
+  f: CardFilterInput,
+  members: readonly GateMemberFacts[],
+): Card[] {
   if (f.unblocked && f.parent === undefined) {
     throw new Error('unblocked requires parent');
   }
@@ -83,7 +94,9 @@ export function filterCards(all: readonly Card[], config: BoardConfig, f: CardFi
   if (f.needsDecision) cards = cards.filter((c) => needsDecision(c));
   if (f.unblocked) {
     cards = cards.filter(
-      (c) => findColumn(config, c.status)?.done !== true && blockedReason(c, all, config) === null,
+      (c) =>
+        findColumn(config, c.status)?.done !== true &&
+        blockedReason(c, all, config, members) === null,
     );
   }
   if (parent === undefined) {

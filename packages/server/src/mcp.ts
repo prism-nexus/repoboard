@@ -19,6 +19,7 @@ import {
   exitCodeForFindings,
   type Finding,
   filterLogBlocks,
+  type GateMemberFacts,
   isStale,
   type Lease,
   type LeasesDoc,
@@ -44,11 +45,13 @@ import { systemTests } from './systems-tests.js';
 import { VERSION } from './version.js';
 import {
   checkMembers,
+  gateMemberFacts,
   memberStateRepos,
   openWorkspaceBoards,
   resolveWorkspaceCardRef,
   resolveWorkspaceWriteTarget,
   Workspace,
+  workspaceGateMembers,
 } from './workspace.js';
 
 export const MCP_TOOL_NAMES = [
@@ -124,8 +127,18 @@ export function formatRows(rows: readonly unknown[]): string {
 /**
  * RCB-68: the signature grows on purpose — a row cannot be built without the facts that decide
  * `blocked` (every OTHER card on the board, and the board's own columns).
+ *
+ * RCB-154: `members` is REQUIRED (never defaulted here) — the same workspace gate-member facts
+ * `card list`/`show`/`move` already resolve a `gate:` against, so `list_cards`/`board_summary`'s
+ * `blocked` field stops reading "no such card" for a gate that names an already-clear MEMBER
+ * card. A caller with no workspace passes `[]`.
  */
-export function toRow(card: Card, cards: readonly Card[], config: BoardConfig): CardRow {
+export function toRow(
+  card: Card,
+  cards: readonly Card[],
+  config: BoardConfig,
+  members: readonly GateMemberFacts[],
+): CardRow {
   return {
     id: card.id,
     title: card.title,
@@ -138,7 +151,7 @@ export function toRow(card: Card, cards: readonly Card[], config: BoardConfig): 
     parent: card.parent ?? null,
     phase: card.phase ?? null,
     gate: card.gate ?? null,
-    blocked: blockedReason(card, cards, config),
+    blocked: blockedReason(card, cards, config, members),
     updated: card.updated,
   };
 }
@@ -324,41 +337,53 @@ export function createMcpServer(opts: McpServerOptions): McpServer {
       // `openWorkspaceBoards`'s doc comment on why).
       const workspace = new Workspace(store.root, repos, now);
       const wsKey = workspaceKey();
-      let targets: { key: string; store: CardStore }[];
+      // RCB-154: only the workspace's OWN row carries the W4/W5-gate member list — a member's own
+      // gate stays single-board, the same "clear-ness from the MEMBER's own config" rule
+      // `cli.ts`'s `cmdCardListAcrossRepos` already applies.
+      let targets: { key: string; store: CardStore; members: readonly GateMemberFacts[] }[];
       if (repo === 'all') {
         const opened = await workspace.openAll();
-        targets = [{ key: wsKey, store }, ...opened.map((m) => ({ key: m.key, store: m.store }))];
+        const members = gateMemberFacts(opened);
+        targets = [
+          { key: wsKey, store, members },
+          ...opened.map((m) => ({ key: m.key, store: m.store, members: [] as GateMemberFacts[] })),
+        ];
       } else if (repo === wsKey) {
-        targets = [{ key: wsKey, store }];
+        targets = [{ key: wsKey, store, members: await workspaceGateMembers(store, now) }];
       } else {
         const opening = workspace.open(repo);
         if (!opening) return fail(`repo: unknown workspace member "${repo}"`);
-        targets = [{ key: repo, store: await opening }];
+        targets = [{ key: repo, store: await opening, members: [] }];
       }
       const rows: unknown[] = [];
       for (const t of targets) {
         const all = t.store.list();
         let cards: Card[];
         try {
-          cards = filterCards(all, t.store.config, filters);
+          cards = filterCards(all, t.store.config, filters, t.members);
         } catch (e) {
           return fail((e as Error).message);
         }
         const tRows: readonly unknown[] = full
           ? cards
-          : cards.map((c) => toRow(c, all, t.store.config));
+          : cards.map((c) => toRow(c, all, t.store.config, t.members));
         for (const r of tRows) rows.push({ ...(r as Record<string, unknown>), repo: t.key });
       }
       return { content: [{ type: 'text', text: formatRows(rows) }] };
     }
+    // RCB-154: this board's own gate-member facts — `[]` on a plain board — so a plain
+    // `list_cards` (no `repo`) at a workspace resolves a step's `gate:` against a member too.
+    const members = await workspaceGateMembers(store, now);
     const all = store.list();
     let cards: Card[];
     try {
-      cards = filterCards(all, store.config, filters);
+      cards = filterCards(all, store.config, filters, members);
     } catch (e) {
       return fail((e as Error).message);
     }
-    const rows: readonly unknown[] = full ? cards : cards.map((c) => toRow(c, all, store.config));
+    const rows: readonly unknown[] = full
+      ? cards
+      : cards.map((c) => toRow(c, all, store.config, members));
     return { content: [{ type: 'text', text: formatRows(rows) }] };
   };
   if (isWorkspace) {
@@ -773,6 +798,9 @@ export function createMcpServer(opts: McpServerOptions): McpServer {
         target = await opening;
       }
     }
+    // RCB-154: only when `target` is still this store's OWN board — a member's own gate stays
+    // single-board, same rule `list_cards`'s per-target `members` above applies.
+    const targetMembers = target === store ? await workspaceGateMembers(store, now) : [];
     const config = target.config;
     const summary = computeBoardSummary(target.list(), config, now());
     const columns = config.columns.map((c) => ({
@@ -792,7 +820,7 @@ export function createMcpServer(opts: McpServerOptions): McpServer {
       activeWindowMinutes: config.activeWindowMinutes,
       columns,
       unknownStatuses,
-      active: summary.active.map((c) => toRow(c, target.list(), config)),
+      active: summary.active.map((c) => toRow(c, target.list(), config, targetMembers)),
       wipBreaches: summary.wipBreaches,
       invalid: target.invalid,
     });
@@ -1236,7 +1264,9 @@ export function createMcpServer(opts: McpServerOptions): McpServer {
       },
       annotations: { readOnlyHint: true },
     },
-    async ({ name }) => ok(await store.seatBundle(name)),
+    // RCB-154: the workspace's own gate-member facts — `[]` on a plain board — reaching the seat
+    // bundle the same way `card list`/`show`/`move` already resolve a `gate:` against them.
+    async ({ name }) => ok(await store.seatBundle(name, await workspaceGateMembers(store, now))),
   );
 
   server.registerTool(
@@ -1312,20 +1342,25 @@ export function createMcpServer(opts: McpServerOptions): McpServer {
     const s = strict ?? false;
     if (repo !== undefined) {
       const wsKey = workspaceKey();
-      if (repo === wsKey) return ok(await store.check(s));
+      if (repo === wsKey) {
+        return ok(await store.check(s, await workspaceGateMembers(store, now)));
+      }
       const opening = new Workspace(store.root, repos, now).open(repo);
       if (!opening) return fail(`repo: unknown workspace member "${repo}"`);
       const memberStore = await opening;
       const findings = await checkMembers(
         [{ key: repo, root: memberStore.root, store: memberStore }],
         s,
+        now,
       );
       return ok({ findings, exitCode: exitCodeForFindings(findings, s) });
     }
-    const own = await store.check(s);
     const ws = await openWorkspaceBoards(store.root, store, now);
+    // RCB-154: `gateMemberFacts(ws.opened)` — `opened` already exists once the workspace is open —
+    // else `[]`, same as a plain board.
+    const own = await store.check(s, ws ? gateMemberFacts(ws.opened) : []);
     if (!ws) return ok(own);
-    const memberFindings = await checkMembers(ws.opened, s);
+    const memberFindings = await checkMembers(ws.opened, s, now);
     const findings: Finding[] = [...own.findings, ...memberFindings];
     return ok({ findings, exitCode: exitCodeForFindings(findings, s) });
   };

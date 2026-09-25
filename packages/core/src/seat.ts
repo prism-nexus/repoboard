@@ -12,7 +12,7 @@ import {
   needsDecision,
 } from './decisions.js';
 import { liveLeases, renderLeaseLines } from './leases.js';
-import { blockedReason, gateState, stepsOf } from './phases.js';
+import { blockedReason, type GateMemberFacts, gateState, stepsOf } from './phases.js';
 import { formatLogBlock, type LogBlock } from './repolog.js';
 import { ownerQueueLine } from './state.js';
 import type { SystemsSummary } from './systems-surface.js';
@@ -41,6 +41,12 @@ export interface SeatBundleInput {
    *  caller that gathered nothing) is inert: `seatBundle` then reports no live leases, never
    *  throws — same "unconfigured is inert" rule as `systems`. */
   leases?: LeasesDoc | null;
+  /** RCB-154: a WORKSPACE's opened member boards — a card's `gate:` (this store's own, or a
+   *  step's) can then resolve against them, the SAME facts `card list`/`show`/`move` already pass
+   *  to `blockedReason`. Absent/`[]` (a plain board, or a caller that gathered none) is inert:
+   *  every `blockedReason`/`gateState` call below defaults to `[]` on its own too, so this whole
+   *  card's wiring is a no-op for any caller that never touches it. */
+  members?: readonly GateMemberFacts[];
 }
 
 /** Which rule picked `nextCard`, so the render (and a reader) can say so instead of guessing. */
@@ -542,6 +548,7 @@ export function seatBundle(input: SeatBundleInput): SeatBundle {
   const coordinatorBlock = isCoordinatorSeat(input.name) ? null : input.coordinatorBlock;
 
   const config = input.config ?? defaultBoardConfig();
+  const members = input.members ?? [];
   const wantedAssignee = input.name.trim().toLowerCase();
   const todoCards = input.cards.filter((c) => c.status === 'todo');
   const assigned = todoCards.find((c) => (c.assignee ?? '').toLowerCase() === wantedAssignee);
@@ -573,13 +580,13 @@ export function seatBundle(input: SeatBundleInput): SeatBundle {
     if (findColumn(config, c.status)?.done === true) continue;
     const step = stepsOf(c.id, input.cards).find((s) => {
       if (findColumn(config, s.status)?.done === true) return false;
-      if (blockedReason(s, input.cards, config) !== null) return false;
+      if (blockedReason(s, input.cards, config, members) !== null) return false;
       const stepAssignee = (s.assignee ?? '').trim().toLowerCase();
       return stepAssignee === '' || stepAssignee === wantedAssignee;
     });
     if (step !== undefined) {
       parentStep = step;
-      const state = gateState(step, input.cards, config);
+      const state = gateState(step, input.cards, config, members);
       nextCardStep = { parentId: c.id, gateBy: state.kind === 'clear' ? state.by : null };
       break;
     }
@@ -618,7 +625,7 @@ export function seatBundle(input: SeatBundleInput): SeatBundle {
           gated: input.cards.filter(
             (c) =>
               findColumn(config, c.status)?.done !== true &&
-              blockedReason(c, input.cards, config) !== null,
+              blockedReason(c, input.cards, config, members) !== null,
           ).length,
           awaitingOwner: openDecisions.length,
         };

@@ -45,6 +45,7 @@ import { type CardStore, openStore } from './store.js';
 import { runDetect } from './systems-detect.js';
 import { systemTests } from './systems-tests.js';
 import { buildRepoWatchIgnore, EMPTY_IGNORED, gitIgnoredPaths } from './watch-ignore.js';
+import { workspaceGateMembers } from './workspace.js';
 
 const MAX_BODY = 1024 * 1024;
 const PATCH_FIELDS: ReadonlySet<string> = new Set([
@@ -987,7 +988,10 @@ export async function openRepoContext(key: string, opts: RepoContextOptions): Pr
     if (method === 'GET' && path === '/api/check') {
       const strict =
         url.searchParams.get('strict') === '1' || url.searchParams.get('strict') === 'true';
-      const outcome = await store.check(strict);
+      // RCB-154: this board's own gate-member facts — `[]` on a plain board — so `gated-steps`
+      // resolves a step's `gate:` against a workspace member the same way `card list` already does.
+      const members = await workspaceGateMembers(store, opts.now);
+      const outcome = await store.check(strict, members);
       return sendJson(res, 200, outcome);
     }
     // P8.4: a pure read, always 200 — `over: true` is a well-formed answer, not a failed request

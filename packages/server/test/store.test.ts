@@ -846,7 +846,7 @@ describe('state and log (P8.3)', () => {
     const store = await openStore(repo.root, { watch: false, now: () => clock });
     opened.push(store);
 
-    const clean = await store.check(false);
+    const clean = await store.check(false, []);
     expect(clean.findings).toEqual([]);
     expect(clean.exitCode).toBe(0);
 
@@ -859,13 +859,13 @@ describe('state and log (P8.3)', () => {
     const later = new Date(NOW.getTime() + 60_000);
     await utimes(logPath, later, later); // mtime strictly after the STATE stamp
 
-    const stale = await store.check(false);
+    const stale = await store.check(false, []);
     expect(stale.findings.some((f) => f.kind === 'stale-state')).toBe(true);
     expect(stale.exitCode).toBe(1);
 
     clock = new Date(later.getTime() + 60_000); // now strictly after the log's mtime
     await store.setStateSection('live', 'second', 'claude/p8-3'); // restamp
-    const fresh = await store.check(false);
+    const fresh = await store.check(false, []);
     expect(fresh.findings.some((f) => f.kind === 'stale-state')).toBe(false);
   });
 
@@ -874,7 +874,7 @@ describe('state and log (P8.3)', () => {
     const store = await open(repo, false);
     expect(store.state()).toBeNull();
     expect(await store.log()).toBeNull();
-    const check = await store.check(false);
+    const check = await store.check(false, []);
     expect(check.exitCode).toBe(0);
     expect(await store.setStateSection('live', 'x', 't')).toMatchObject({
       ok: false,
@@ -899,7 +899,7 @@ describe('state and log (P8.3)', () => {
     expect(created.ok).toBe(true);
     if (!created.ok) return;
 
-    const { findings } = await store.check(false);
+    const { findings } = await store.check(false, []);
     const finding = findings.find((f) => f.kind === 'untracked-cards');
     expect(finding).toEqual({
       kind: 'untracked-cards',
@@ -911,7 +911,7 @@ describe('state and log (P8.3)', () => {
   it('check: a non-git dir gathers no untracked-cards finding — check() still works', async () => {
     const repo = await repoWith({ 'RB-1.md': cardText('RB-1', 'todo') });
     const store = await open(repo, false);
-    const { findings, exitCode } = await store.check(false);
+    const { findings, exitCode } = await store.check(false, []);
     expect(findings.some((f) => f.kind === 'untracked-cards')).toBe(false);
     expect(exitCode).toBe(0);
   });
@@ -1084,7 +1084,7 @@ describe('appendSeatLog (RCB-127): log --as <seat> restamps STATE.md when that s
     const logPath = join(repo.root, '.repoboard', 'log', '2026-09-02.md');
     await utimes(logPath, clock, clock);
 
-    const result = await store.check(false);
+    const result = await store.check(false, []);
     expect(result.findings.some((f) => f.kind === 'stale-state')).toBe(false);
   });
 
@@ -1106,7 +1106,7 @@ describe('appendSeatLog (RCB-127): log --as <seat> restamps STATE.md when that s
     const logPath = join(repo.root, '.repoboard', 'log', '2026-09-02.md');
     await utimes(logPath, clock, clock); // strictly after the (unmoved) STATE stamp
 
-    const result = await store.check(false);
+    const result = await store.check(false, []);
     expect(result.findings.some((f) => f.kind === 'stale-state')).toBe(true);
   });
 
@@ -1127,7 +1127,7 @@ describe('appendSeatLog (RCB-127): log --as <seat> restamps STATE.md when that s
     const logPath = join(repo.root, '.repoboard', 'log', '2026-09-02.md');
     await utimes(logPath, clock, clock);
 
-    const result = await store.check(false);
+    const result = await store.check(false, []);
     expect(result.findings.some((f) => f.kind === 'stale-state')).toBe(true);
   });
 
@@ -1354,7 +1354,7 @@ describe('check: board.yml logDir (P8.6, C2)', () => {
     expect((await stat(extraLogPath)).mtimeMs).toBeGreaterThan(NOW.getTime());
 
     // Assertion 1: with logDir configured, the extra directory's newer entry is seen — stale-state fires.
-    const withLogDir = await store.check(false);
+    const withLogDir = await store.check(false, []);
     expect(withLogDir.findings.some((f) => f.kind === 'stale-state')).toBe(true);
     expect(withLogDir.exitCode).toBe(1);
 
@@ -1370,7 +1370,7 @@ describe('check: board.yml logDir (P8.6, C2)', () => {
     // Assertion 2: with logDir unset, .repoboard/log/ is empty and docs/log/ is ignored — no
     // logs at all, so stale-state cannot fire. This is the proof the config is READ, not that
     // the directory merely exists.
-    const withoutLogDir = await storeNoLogDir.check(false);
+    const withoutLogDir = await storeNoLogDir.check(false, []);
     expect(withoutLogDir.findings.some((f) => f.kind === 'stale-state')).toBe(false);
     expect(withoutLogDir.exitCode).toBe(0);
   });

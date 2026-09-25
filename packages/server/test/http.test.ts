@@ -1639,7 +1639,7 @@ describe('state/log/check over HTTP (P8.3)', () => {
         '',
       ].join('\n'),
     });
-    const findings = await r.store.check(false);
+    const findings = await r.store.check(false, []);
     expect(findings.findings.some((f) => f.kind === 'active-without-lease')).toBe(true);
 
     const plain = await fetch(`${r.url}/api/check`);

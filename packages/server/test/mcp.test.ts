@@ -1673,3 +1673,140 @@ describe('repoboard mcp: plain-board tools/list carries no trace of W7 (RCB-153 
     }
   });
 });
+
+// ---- RCB-154: member-board gate resolution reaches get_seat/check/list_cards -------------------
+
+interface GateRig {
+  wsRoot: string;
+  mbRoot: string;
+  call(name: string, args?: Record<string, unknown>): Promise<CallToolResult>;
+  json<T = unknown>(name: string, args?: Record<string, unknown>): Promise<T>;
+}
+
+/**
+ * The MCP-server equivalent of `workspace.test.ts`'s `makeGateFixture`: a `WS` workspace with one
+ * member (`prefix: MB`, key `m`, one card `MB-1` whose status is `mb1Status`) and a phase card
+ * WS-3 (`assignee: builder`, `doing`) whose two steps are WS-1 (`gate: MB-1`, `assignee: builder`,
+ * `todo`) and WS-2 (`gate: ZZ-9`, `assignee: other-seat`, `todo`). The two steps are created via
+ * `create_card` BEFORE the phase card, so ids come out WS-1/WS-2/WS-3; `create_card` refuses an
+ * unknown `parent`, so each step gets `parent: WS-3` by `update_card` once WS-3 exists.
+ */
+async function makeGateRig(mb1Status: 'done' | 'todo'): Promise<GateRig> {
+  const mb = await makeTempRepoboard({});
+  cleanups.push(mb.cleanup);
+  await writeFile(
+    join(mb.root, '.repoboard', 'board.yml'),
+    serializeBoard({ ...defaultBoardConfig(), prefix: 'MB' }),
+  );
+  const mbStore = await openStore(mb.root, { watch: false, now: () => NOW });
+  const created = await mbStore.create({ title: 'member card', status: mb1Status }, 'test');
+  if (!created.ok) throw new Error(`MB-1 create failed: ${created.error}`);
+
+  const wsRoot = await makeTempDir('repoboard-mcp-ws-gate-');
+  cleanups.push(() => rm(wsRoot, { recursive: true, force: true }));
+  await mkdir(join(wsRoot, '.repoboard', 'cards'), { recursive: true });
+  await writeFile(
+    join(wsRoot, '.repoboard', 'board.yml'),
+    serializeBoard({
+      ...defaultBoardConfig(),
+      prefix: 'WS',
+      repos: [{ key: 'm', root: relative(wsRoot, mb.root) }],
+    }),
+  );
+
+  const store = await openStore(wsRoot, { watch: false, now: () => NOW });
+  const server = createMcpServer({ store, defaultActor: 'test/mcp', now: () => NOW });
+  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+  await server.connect(serverTransport);
+  const client = new Client({ name: 'repoboard-test', version: '0.0.0' });
+  await client.connect(clientTransport);
+  cleanups.push(async () => {
+    await client.close();
+    await server.close();
+  });
+  const call = async (name: string, args: Record<string, unknown> = {}) =>
+    (await client.callTool({ name, arguments: args })) as CallToolResult;
+  const json = async <T>(name: string, args: Record<string, unknown> = {}) => {
+    const res = await call(name, args);
+    expect(res.isError, `tool ${name} failed: ${textOf(res)}`).toBeFalsy();
+    return JSON.parse(textOf(res)) as T;
+  };
+
+  await json('create_card', {
+    title: 'step one',
+    phase: 'PH.1',
+    gate: 'MB-1',
+    assignee: 'builder',
+    status: 'todo',
+  });
+  await json('create_card', {
+    title: 'step two',
+    phase: 'PH.2',
+    gate: 'ZZ-9',
+    assignee: 'other-seat',
+    status: 'todo',
+  });
+  await json('create_card', { title: 'phase three', assignee: 'builder', status: 'doing' });
+  await json('update_card', { id: 'WS-1', parent: 'WS-3' });
+  await json('update_card', { id: 'WS-2', parent: 'WS-3' });
+
+  return { wsRoot, mbRoot: mb.root, call, json };
+}
+
+interface SeatBundleJson {
+  nextCard: { id: string } | null;
+  nextCardReason: string | null;
+  nextCardStep: { parentId: string; gateBy: string | null } | null;
+}
+
+describe('repoboard mcp: get_seat/check/list_cards resolve a step gated on a MEMBER card (RCB-154)', () => {
+  it('MB-1 done: get_seat builder reaches WS-1 via the clear parent-step; check gated-steps: 1 card; list_cards shows WS-1 clear, WS-2 blocked; {parent, unblocked} keeps WS-1 only', async () => {
+    const r = await makeGateRig('done');
+
+    const bundle = await r.json<SeatBundleJson>('get_seat', { name: 'builder' });
+    expect(bundle.nextCard?.id).toBe('WS-1');
+    expect(bundle.nextCardReason).toBe('parent-step');
+    expect(bundle.nextCardStep).toEqual({ parentId: 'WS-3', gateBy: 'MB-1 (done)' });
+
+    const checked = await r.json<{ findings: Array<{ kind: string; message: string }> }>('check');
+    expect(checked.findings.find((f) => f.kind === 'gated-steps')?.message).toContain(
+      'gated-steps: 1 card',
+    );
+
+    const rows = await r.json<Array<{ id: string; blocked: string | null }>>('list_cards');
+    expect(rows.find((row) => row.id === 'WS-1')?.blocked).toBeNull();
+    expect(rows.find((row) => row.id === 'WS-2')?.blocked).toBe('blocked on ZZ-9 (no such card)');
+
+    const unblocked = await r.json<Array<{ id: string }>>('list_cards', {
+      parent: 'WS-3',
+      unblocked: true,
+    });
+    expect(unblocked.map((row) => row.id)).toEqual(['WS-1']);
+  });
+
+  it('MB-1 todo: list_cards shows WS-1 blocked on MB-1 (todo); check gated-steps: 2 cards; {parent, unblocked} is empty', async () => {
+    const r = await makeGateRig('todo');
+
+    const rows = await r.json<Array<{ id: string; blocked: string | null }>>('list_cards');
+    expect(rows.find((row) => row.id === 'WS-1')?.blocked).toBe('blocked on MB-1 (todo)');
+    expect(rows.find((row) => row.id === 'WS-2')?.blocked).toBe('blocked on ZZ-9 (no such card)');
+
+    const checked = await r.json<{ findings: Array<{ kind: string; message: string }> }>('check');
+    expect(checked.findings.find((f) => f.kind === 'gated-steps')?.message).toContain(
+      'gated-steps: 2 cards',
+    );
+
+    const unblocked = await r.json<Array<{ id: string }>>('list_cards', {
+      parent: 'WS-3',
+      unblocked: true,
+    });
+    expect(unblocked).toEqual([]);
+
+    // Both steps now gated: the parent-step search finds nothing and get_seat falls through to
+    // the plain "assigned" pick — still WS-1, but with no gate resolution behind it this time.
+    const bundle = await r.json<SeatBundleJson>('get_seat', { name: 'builder' });
+    expect(bundle.nextCard?.id).toBe('WS-1');
+    expect(bundle.nextCardReason).toBe('assigned');
+    expect(bundle.nextCardStep).toBeNull();
+  });
+});

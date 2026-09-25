@@ -40,6 +40,7 @@ import {
   formatLogBlock,
   formatLogLine,
   formatSeatBullet,
+  type GateMemberFacts,
   initialStateText,
   type LeaseMutationResult,
   type LeasesDoc,
@@ -1018,8 +1019,13 @@ export class CardStore extends EventEmitter<StoreEvents> {
    * one read. Read-only: nothing is written, no event, works with no STATE.md (`seatsSection`
    * `null`). The coordinator's own block is fetched unconditionally — core's `seatBundle` is what
    * forces it `null` when `name` IS the coordinator, same as everywhere else that guarantee lives.
+   *
+   * RCB-154: `members` is REQUIRED (never defaulted here) — the same workspace gate-member facts
+   * `card list`/`show`/`move` already pass to `blockedReason`, now forwarded to core's
+   * `seatBundle` too, so a step's `gate:` naming a card on another board resolves the same way
+   * everywhere. A caller with no workspace passes `[]`, never omits the argument.
    */
-  async seatBundle(name: string): Promise<SeatBundle> {
+  async seatBundle(name: string, members: readonly GateMemberFacts[]): Promise<SeatBundle> {
     const [ownBlock, coordinatorBlock, rig] = await Promise.all([
       this.lastRepoLogBlock(name),
       this.lastRepoLogBlock('coordinator'),
@@ -1040,6 +1046,7 @@ export class CardStore extends EventEmitter<StoreEvents> {
       systems: systemsSummary(this.systemsDoc, this.systemsErrors),
       // RCB-131: `.repoboard/leases.yml`'s doc — `seatBundleCore` keeps only the live ones.
       leases: this.leasesDoc,
+      members,
     });
   }
 
@@ -1058,8 +1065,13 @@ export class CardStore extends EventEmitter<StoreEvents> {
    * config, leases) and hand them to core's pure `checkFindings`. A read, so it works even in
    * map-only mode (with no cards, no leases, and `state: null`, which is itself a stale-state
    * finding only when a log exists to compare against).
+   *
+   * RCB-154: `members` is REQUIRED (never defaulted here) — the same workspace gate-member facts
+   * `card list`/`show`/`move` already pass to `blockedReason`, now forwarded into the
+   * `gated-steps` count too, so a step's `gate:` naming a card on another board is not
+   * double-counted as gated once it actually clears. A caller with no workspace passes `[]`.
    */
-  async check(strict: boolean): Promise<CheckOutcome> {
+  async check(strict: boolean, members: readonly GateMemberFacts[]): Promise<CheckOutcome> {
     const now = this.now();
     const logs = await this.loadAllLogInfo();
     // P8.4: read-only, so a check never fails to gather it; a read error (e.g. a permissions
@@ -1084,6 +1096,7 @@ export class CardStore extends EventEmitter<StoreEvents> {
       // split it (`seatBulletTexts`, core's own `bulletSpans` — no second splitter here) — pure,
       // so gathering it is just reading the section already on `this.stateDoc`.
       seatBullets: seatBulletTexts(this.stateDoc?.sections.seats ?? ''),
+      members,
     });
     return { findings, exitCode: exitCodeForFindings(findings, strict) };
   }

@@ -357,7 +357,7 @@ describe('store.check(): systems-invalid / systems-stale (RCB-97)', () => {
     await writeSystemsYml(repo.root, INVALID_SYSTEMS_YML);
     const store = await openStore(repo.root, { watch: false, now: () => NOW });
     cleanups.push(() => store.close());
-    const res = await store.check(false);
+    const res = await store.check(false, []);
     expect(res.findings.some((f) => f.kind === 'systems-invalid' && f.level === 'error')).toBe(
       true,
     );
@@ -375,13 +375,13 @@ describe('store.check(): systems-invalid / systems-stale (RCB-97)', () => {
       const store = await openStore(repo.root, { watch: false, now: () => NOW });
       cleanups.push(() => store.close());
 
-      const plain = await store.check(false);
+      const plain = await store.check(false, []);
       const stale = plain.findings.find((f) => f.kind === 'systems-stale');
       expect(stale?.level).toBe('warning');
       expect(stale?.message).toContain('gateway');
       expect(plain.exitCode).toBe(0);
 
-      const strict = await store.check(true);
+      const strict = await store.check(true, []);
       expect(strict.exitCode).toBe(1);
     },
   );
@@ -390,7 +390,7 @@ describe('store.check(): systems-invalid / systems-stale (RCB-97)', () => {
     const repo = await freshRepo();
     const store = await openStore(repo.root, { watch: false, now: () => NOW });
     cleanups.push(() => store.close());
-    const res = await store.check(false);
+    const res = await store.check(false, []);
     expect(
       res.findings.some((f) => f.kind === 'systems-invalid' || f.kind === 'systems-stale'),
     ).toBe(false);

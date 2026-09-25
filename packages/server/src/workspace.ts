@@ -12,7 +12,14 @@
  */
 import { homedir } from 'node:os';
 import { isAbsolute, join, resolve } from 'node:path';
-import type { Card, Finding, LeasesDoc, WorkspaceBoardRef, WorkspaceRepo } from '@repoboard/core';
+import type {
+  Card,
+  Finding,
+  GateMemberFacts,
+  LeasesDoc,
+  WorkspaceBoardRef,
+  WorkspaceRepo,
+} from '@repoboard/core';
 import { resolveCardRef } from '@repoboard/core';
 import { type CardStore, openStore } from './store.js';
 
@@ -196,16 +203,55 @@ export async function resolveWorkspaceWriteTarget(
 }
 
 /**
+ * RCB-153 gate (W4/W5), moved here from `cli.ts` (RCB-154): `opened`'s members as `gateState`'s
+ * member FACTS — raw `cards`/`config`, never a verdict this function itself computed. A missing
+ * member (`hasBoard: false`) contributes nothing to resolve against (W3: a finding elsewhere, not
+ * a crash here).
+ */
+export function gateMemberFacts(opened: readonly OpenedWorkspaceMember[]): GateMemberFacts[] {
+  return opened
+    .filter((m) => m.store.hasBoard)
+    .map((m) => ({
+      key: m.key,
+      prefix: m.store.config.prefix,
+      cards: m.store.list(),
+      config: m.store.config,
+    }));
+}
+
+/**
+ * RCB-154: `store`'s own gate-member facts — `[]` when `store.config.repos` is absent/empty (not
+ * a workspace, or a member with no repos of its own), else `gateMemberFacts` of every configured
+ * member, opened fresh (never memoised across calls, same reasoning as `openWorkspaceBoards`).
+ * The one function every caller that needs "the members of the board whose cards I am reading"
+ * calls instead of re-deriving the `repos.length > 0 ? gateMemberFacts(...) : []` shape by hand.
+ */
+export async function workspaceGateMembers(
+  store: CardStore,
+  now?: () => Date,
+): Promise<GateMemberFacts[]> {
+  const repos = store.config.repos ?? [];
+  if (repos.length === 0) return [];
+  return gateMemberFacts(await new Workspace(store.root, repos, now).openAll());
+}
+
+/**
  * W5: `check`'s member loop — split out of `cmdCheck` (RCB-153 slice 3b) so MCP's `check` tool can
  * run the identical aggregation instead of a second copy of it. A root with no `.repoboard/` is
  * one `workspace-member-missing` error finding naming the key and the resolved path; otherwise the
  * member's own `check` runs (the SAME `checkFindings`/`store.check` every board runs) and every one
  * of its findings is prefixed `[<key>] `. `cmdCheck`'s own output is unchanged by this split — same
  * loop, same ordering, only moved.
+ *
+ * RCB-154: each member's OWN gate-member facts (`workspaceGateMembers(m.store, now)` — a member
+ * that is itself a nested workspace resolves its own `gate:` fields against ITS OWN configured
+ * members, never the top workspace's) are passed into that member's `check`, the same REQUIRED
+ * `members` argument every `store.check` call now takes.
  */
 export async function checkMembers(
   opened: readonly OpenedWorkspaceMember[],
   strict: boolean,
+  now?: () => Date,
 ): Promise<Finding[]> {
   const memberFindings: Finding[] = [];
   for (const { key, root: memberRoot, store } of opened) {
@@ -217,7 +263,8 @@ export async function checkMembers(
       });
       continue;
     }
-    const outcome = await store.check(strict);
+    const members = await workspaceGateMembers(store, now);
+    const outcome = await store.check(strict, members);
     for (const f of outcome.findings) {
       memberFindings.push({ ...f, message: `[${key}] ${f.message}` });
     }

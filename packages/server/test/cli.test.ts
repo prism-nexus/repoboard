@@ -1329,7 +1329,7 @@ describe('card list --parent / card show --steps (RCB-104)', () => {
   });
 
   it('8. formatStepsTable([]) is "(no steps)"; formatTable is untouched', () => {
-    expect(formatStepsTable([], [], defaultBoardConfig())).toBe('(no steps)');
+    expect(formatStepsTable([], [], defaultBoardConfig(), [])).toBe('(no steps)');
   });
 });
 

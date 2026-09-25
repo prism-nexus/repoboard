@@ -140,18 +140,23 @@ export function stepsOf(parentId: string, cards: readonly Card[]): Card[] {
  * `null` when the card has no children — a plain card is not a phase card. `done` is a step in a
  * `done: true` column. `blockedOn` is `blockedReason` of the FIRST blocked step in `stepsOf`
  * order (single level: a step's own children are not consulted — see this file's header).
+ *
+ * RCB-154: `members`, when given, is forwarded to `blockedReason` unchanged — the same
+ * workspace-member facts `gateState` resolves a gate against. Defaults to `[]`: every existing
+ * caller (none of which knows about workspace members) keeps today's single-board behaviour.
  */
 export function rollup(
   card: Card,
   cards: readonly Card[],
   config: BoardConfig,
+  members: readonly GateMemberFacts[] = [],
 ): { total: number; done: number; blockedOn: string | null } | null {
   const steps = stepsOf(card.id, cards);
   if (steps.length === 0) return null;
   const done = steps.filter((s) => findColumn(config, s.status)?.done === true).length;
   let blockedOn: string | null = null;
   for (const step of steps) {
-    const reason = blockedReason(step, cards, config);
+    const reason = blockedReason(step, cards, config, members);
     if (reason !== null) {
       blockedOn = reason;
       break;

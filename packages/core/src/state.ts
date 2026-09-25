@@ -23,7 +23,7 @@ import {
   renderLeaseLines,
   staleLeases,
 } from './leases.js';
-import { blockedReason } from './phases.js';
+import { blockedReason, type GateMemberFacts } from './phases.js';
 import { isActive } from './presence.js';
 import type { LogBlock } from './repolog.js';
 import { toIso } from './time.js';
@@ -342,6 +342,11 @@ export interface CheckInput {
    * inert — no bullets to scan means no finding, same "ungathered signal is inert" rule as
    * `systems`/`local`/`untrackedCards` above. */
   seatBullets?: readonly { name: string; text: string }[] | null;
+  /** RCB-154: a WORKSPACE's opened member boards — `gated-steps` resolves each card's `gate:`
+   *  against them too, the SAME facts `card list`/`show`/`move` already pass to `blockedReason`.
+   *  Absent/`[]` (a plain board, or a caller that gathered none) is inert: `blockedReason`
+   *  defaults to `[]` on its own, so this is a no-op for every existing caller. */
+  members?: readonly GateMemberFacts[];
 }
 
 /**
@@ -584,7 +589,7 @@ export function checkFindings(input: CheckInput): Finding[] {
   // RCB-68: info-grade like `needs-decision` — a blocked step is expected, ordinary board state,
   // not a rig problem; `check` never fails on it (`exitCodeForFindings` untouched).
   const gatedCount = input.cards.filter(
-    (c) => blockedReason(c, input.cards, input.config) !== null,
+    (c) => blockedReason(c, input.cards, input.config, input.members ?? []) !== null,
   ).length;
   if (gatedCount > 0) {
     findings.push({

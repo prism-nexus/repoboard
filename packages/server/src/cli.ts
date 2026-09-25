@@ -97,10 +97,12 @@ import { VERSION } from './version.js';
 import {
   checkMembers,
   expandHome,
+  gateMemberFacts,
   memberStateRepos,
   type OpenedWorkspaceMember,
   resolveMemberRoot,
   Workspace,
+  workspaceGateMembers,
 } from './workspace.js';
 
 export { VERSION };
@@ -558,20 +560,6 @@ async function openWorkspace(
       .map((m) => ({ key: m.key, prefix: m.store.config.prefix })),
   ];
   return { workspace, opened, boards };
-}
-
-/** RCB-153 gate (W4/W5): `opened`'s members as `gateState`'s member FACTS — raw `cards`/`config`,
- * never a verdict this function itself computed. A missing member (`hasBoard: false`) contributes
- * nothing to resolve against (W3: a finding elsewhere, not a crash here). */
-function gateMemberFacts(opened: readonly OpenedWorkspaceMember[]): GateMemberFacts[] {
-  return opened
-    .filter((m) => m.store.hasBoard)
-    .map((m) => ({
-      key: m.key,
-      prefix: m.store.config.prefix,
-      cards: m.store.list(),
-      config: m.store.config,
-    }));
 }
 
 /**
@@ -1256,8 +1244,17 @@ function formatTableAcrossRepos(rows: readonly RepoTableRow[]): string {
  * appears-if-any-row-has-one rule like `formatTable`'s SIZE/DECISION/BLOCKED): `ID PHASE STATUS
  * ASSIGNEE GATE BLOCKED TITLE`. `all` is the whole board, same reason as `formatTable`: a gate or
  * `blockedReason` may point outside `steps`. Zero steps prints the single line `(no steps)`.
+ *
+ * RCB-154: `members` is REQUIRED (never defaulted here) — the same workspace gate-member facts
+ * `formatTable` already takes, closing the one gap where a step's own `gate:` naming an
+ * already-clear MEMBER card still read as blocked. A caller with no workspace passes `[]`.
  */
-export function formatStepsTable(steps: Card[], all: readonly Card[], config: BoardConfig): string {
+export function formatStepsTable(
+  steps: Card[],
+  all: readonly Card[],
+  config: BoardConfig,
+  members: readonly GateMemberFacts[],
+): string {
   if (steps.length === 0) return '(no steps)';
   const header = ['ID', 'PHASE', 'STATUS', 'ASSIGNEE', 'GATE', 'BLOCKED', 'TITLE'];
   const rows = steps.map((s) => [
@@ -1266,7 +1263,7 @@ export function formatStepsTable(steps: Card[], all: readonly Card[], config: Bo
     s.status,
     s.assignee ?? '-',
     s.gate ?? '-',
-    blockedReason(s, all, config) ?? '',
+    blockedReason(s, all, config, members) ?? '',
     s.title,
   ]);
   return renderFixedWidthTable(header, rows);
@@ -1319,7 +1316,7 @@ async function cmdCardListAcrossRepos(
     const boardAll = t.store.list();
     let cards: Card[];
     try {
-      cards = filterCards(boardAll, t.store.config, filters);
+      cards = filterCards(boardAll, t.store.config, filters, t.members);
     } catch (e) {
       throw new UserError((e as Error).message);
     }
@@ -1330,9 +1327,7 @@ async function cmdCardListAcrossRepos(
 
   if (json) {
     const jsonRows = rows.map(({ key, card, all, config, members: m }) => ({
-      ...(full
-        ? card
-        : { ...toRow(card, all, config), blocked: blockedReason(card, all, config, m) }),
+      ...(full ? card : toRow(card, all, config, m)),
       repo: key,
     }));
     io.stdout.write(`${formatRows(jsonRows)}\n`);
@@ -1348,7 +1343,7 @@ async function cmdCardListAcrossRepos(
   io.stdout.write(
     `${
       filters.parent !== undefined
-        ? formatStepsTable(cards, only.store.list(), only.store.config)
+        ? formatStepsTable(cards, only.store.list(), only.store.config, only.members)
         : formatTable(cards, only.store.list(), only.store.config, only.members)
     }\n`,
   );
@@ -1398,33 +1393,32 @@ async function cmdCardList(args: string[], io: CliIO): Promise<number> {
   }
   const all = store.list();
   const parentId = values.parent;
+  // RCB-153/RCB-154 W4/W5-gate: member facts for a workspace's OWN cards' `gate:` resolution — `[]`
+  // (a no-op) when `repos:` is absent/empty, so a plain board's BLOCKED column is unchanged. Also
+  // reaches `filterCards`'s own `unblocked` filter now, not just the printed BLOCKED column.
+  const members = await workspaceGateMembers(store, io.now);
   let cards: Card[];
   try {
-    cards = filterCards(all, store.config, {
-      status: values.status,
-      size,
-      needsDecision: values['needs-decision'],
-      parent: parentId,
-      unblocked: values.unblocked,
-    });
+    cards = filterCards(
+      all,
+      store.config,
+      {
+        status: values.status,
+        size,
+        needsDecision: values['needs-decision'],
+        parent: parentId,
+        unblocked: values.unblocked,
+      },
+      members,
+    );
   } catch (e) {
     throw new UserError((e as Error).message);
   }
-  // RCB-153 W4/W5-gate: member facts for a workspace's OWN cards' `gate:` resolution — `[]` (a
-  // no-op) when `repos:` is absent/empty, so a plain board's BLOCKED column is unchanged.
-  const repos = store.config.repos ?? [];
-  const members =
-    repos.length > 0 ? gateMemberFacts(await new Workspace(root, repos, io.now).openAll()) : [];
   if (values.json) {
     // Compact rows by default (K6): bodies only with --full. Same shape as MCP list_cards.
     io.stdout.write(
       `${formatRows(
-        values.full
-          ? cards
-          : cards.map((c) => ({
-              ...toRow(c, all, store.config),
-              blocked: blockedReason(c, all, store.config, members),
-            })),
+        values.full ? cards : cards.map((c) => toRow(c, all, store.config, members)),
       )}\n`,
     );
     return 0;
@@ -1432,7 +1426,7 @@ async function cmdCardList(args: string[], io: CliIO): Promise<number> {
   io.stdout.write(
     `${
       parentId !== undefined
-        ? formatStepsTable(cards, all, store.config)
+        ? formatStepsTable(cards, all, store.config, members)
         : formatTable(cards, all, store.config, members)
     }\n`,
   );
@@ -1457,6 +1451,10 @@ async function cmdCardShow(args: string[], io: CliIO): Promise<number> {
   // calls `resolveCardRef` at all, so `id`/`store` below are the SAME `ref`/`openedStore` as
   // before this card — every existing error text (e.g. `unknown card "NOPE-1"`) is byte-identical.
   const { store, id } = await resolveCardTarget(root, openedStore, ref, io);
+  // RCB-154: only when `store` is still the ROOT board (workspace or plain) — a member resolved
+  // via `<key>:<id>`/prefix keeps its own gate single-board, same rule `list_cards`'s per-target
+  // `members` applies.
+  const stepMembers = store === openedStore ? await workspaceGateMembers(store, io.now) : [];
   const card = store.get(id);
   if (!card) {
     const archivedPath = join(store.repoboardDir, 'archive', `${id}.md`);
@@ -1480,7 +1478,9 @@ async function cmdCardShow(args: string[], io: CliIO): Promise<number> {
     // shape. `steps`/`refs` are added only on request, same as the text path below.
     const all = store.list();
     const out: Record<string, unknown> = { ...card };
-    if (values.steps) out.steps = stepsOf(card.id, all).map((s) => toRow(s, all, store.config));
+    if (values.steps) {
+      out.steps = stepsOf(card.id, all).map((s) => toRow(s, all, store.config, stepMembers));
+    }
     if (values.resolve) out.refs = await resolveCardRefs(store.root, card);
     io.stdout.write(`${JSON.stringify(out, null, 2)}\n`);
     return 0;
@@ -1489,7 +1489,9 @@ async function cmdCardShow(args: string[], io: CliIO): Promise<number> {
   if (values.steps) {
     // RCB-104: render-only — the card file is never written.
     const all = store.list();
-    io.stdout.write(`\n## Steps\n${formatStepsTable(stepsOf(card.id, all), all, store.config)}\n`);
+    io.stdout.write(
+      `\n## Steps\n${formatStepsTable(stepsOf(card.id, all), all, store.config, stepMembers)}\n`,
+    );
   }
   if (values.resolve) {
     // K7: each ref as a fenced block headed path:start-end, resolved now from the file.
@@ -2192,7 +2194,10 @@ async function cmdSeat(args: string[], io: CliIO): Promise<number> {
     return 0;
   }
 
-  const bundle = await store.seatBundle(name);
+  // RCB-154: the workspace's own member gate facts, `[]` on a plain board — the same members
+  // `card list`/`show`/`move` already resolve a `gate:` against, now reaching the seat bundle too.
+  const seatMembers = await workspaceGateMembers(store, io.now);
+  const bundle = await store.seatBundle(name, seatMembers);
   if (values.json) {
     io.stdout.write(`${JSON.stringify(bundle, null, 2)}\n`);
   } else {
@@ -2265,19 +2270,22 @@ async function cmdCheck(args: string[], io: CliIO): Promise<number> {
   });
   const root = await requireRoot(io);
   const store = await openStore(root, { watch: false, now: io.now });
-  const { findings } = await store.check(values.strict);
   // RCB-153 W5/W3: `repos:` absent/empty is not a workspace — `allFindings`/`exitCode` fall
   // straight through to `findings`/`store.check`'s own exit code, byte-identical to before this
   // card (the slice's own regression control).
   const repos = store.config.repos ?? [];
+  const opened = repos.length > 0 ? await new Workspace(root, repos, io.now).openAll() : [];
+  // RCB-154: the workspace's own gate-member facts — `[]` on a plain board — so the top board's
+  // OWN `gated-steps` count resolves a step's `gate:` against a member the same way `card list`
+  // already does, `opened` reused rather than opened a second time.
+  const { findings } = await store.check(values.strict, gateMemberFacts(opened));
   let allFindings: readonly Finding[] = findings;
   if (repos.length > 0) {
-    const opened = await new Workspace(root, repos, io.now).openAll();
     // W3/W5, slice 3b: `checkMembers` (workspace.ts) is the SAME member loop MCP's `check` tool
     // runs — a root with no `.repoboard/` is one `workspace-member-missing` error finding, every
     // other member's own findings prefixed `[<key>] `. Moved, not changed: this call reproduces
     // the loop that used to be inline here, findings identical.
-    const memberFindings = await checkMembers(opened, values.strict);
+    const memberFindings = await checkMembers(opened, values.strict, io.now);
     allFindings = [...findings, ...memberFindings];
   }
   // W5: "exit code = the worst" — one `exitCodeForFindings` call over the combined list, the same

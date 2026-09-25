@@ -662,6 +662,38 @@ describe('seatBundle: nextCardEmpty (RCB-118)', () => {
     expect(bundle.nextCard).not.toBeNull();
     expect(bundle.nextCardEmpty).toBeNull();
   });
+
+  it('RCB-154: `gated` resolves a gate on a MEMBER card — done member card clears, todo one stays gated', () => {
+    const cards: Card[] = [
+      card({ id: 'RCB-2', status: 'doing', gate: 'MB-1', title: 'gated on a done member card' }),
+      card({ id: 'RCB-3', status: 'doing', gate: 'MB-2', title: 'gated on a todo member card' }),
+    ];
+    const members = [
+      {
+        key: 'm',
+        prefix: 'MB',
+        cards: [card({ id: 'MB-1', status: 'done' }), card({ id: 'MB-2', status: 'todo' })],
+        config: { ...defaultBoardConfig(), prefix: 'MB' },
+      },
+    ];
+    const input = {
+      name: 'builder',
+      now: NOW,
+      seatsSection: null,
+      ownBlock: null,
+      coordinatorBlock: null,
+      cards,
+    };
+    const withMembers = seatBundle({ ...input, members });
+    expect(withMembers.nextCard).toBeNull();
+    expect(withMembers.nextCardEmpty).toEqual({ todoForOthers: 0, gated: 1, awaitingOwner: 0 });
+    // No member facts: both gates read "(no such card)" — the pre-RCB-154 count.
+    expect(seatBundle(input).nextCardEmpty).toEqual({
+      todoForOthers: 0,
+      gated: 2,
+      awaitingOwner: 0,
+    });
+  });
 });
 
 describe('renderSeatBundle: placeholders for every missing part', () => {

@@ -401,6 +401,161 @@ describe('repoboard card list — gate across boards (RCB-153 §4 control 6)', (
   });
 });
 
+// ---- RCB-154: member-board gate resolution reaches seat/check/unblocked, not just card list ----
+
+/**
+ * A `WS` workspace with one member (`prefix: MB`, key `m`) and a phase card WS-3 (`assignee:
+ * builder`, `doing`) whose two steps are WS-1 (`gate: MB-1`, `assignee: builder`, `todo`) and WS-2
+ * (`gate: ZZ-9`, `assignee: other-seat`, `todo`) — `ZZ-9` names no board at all, `MB-1` names the
+ * member's own single card, whose status (`mb1Status`) is the ONE thing that varies between the
+ * two fixture uses below. Ids come out WS-1/WS-2/WS-3 because the two steps are created before
+ * the phase card; `card add --parent` refuses an unknown card, so each step gets `--parent WS-3`
+ * by `card update` once WS-3 exists.
+ */
+async function makeGateFixture(mb1Status: 'done' | 'todo'): Promise<{ wsRoot: string }> {
+  const mbRoot = await boardRoot('MB');
+  const addMb1 = await repoboard(mbRoot, 'card', 'add', 'member card', '--status', mb1Status);
+  if (addMb1.code !== 0) throw new Error(`MB-1 create failed: ${addMb1.err}`);
+
+  const wsRoot = await makeTempDir('repoboard-ws-gate-');
+  dirs.push(wsRoot);
+  await mkdir(join(wsRoot, '.repoboard', 'cards'), { recursive: true });
+  await writeFile(
+    join(wsRoot, '.repoboard', 'board.yml'),
+    serializeBoard({
+      ...defaultBoardConfig(),
+      prefix: 'WS',
+      repos: [{ key: 'm', root: relative(wsRoot, mbRoot) }],
+    }),
+  );
+  await writeStateMd(wsRoot);
+
+  const addWs1 = await repoboard(
+    wsRoot,
+    'card',
+    'add',
+    'step one',
+    '--phase',
+    'PH.1',
+    '--gate',
+    'MB-1',
+    '--assignee',
+    'builder',
+    '--status',
+    'todo',
+  );
+  if (addWs1.code !== 0) throw new Error(`WS-1 create failed: ${addWs1.err}`);
+  const addWs2 = await repoboard(
+    wsRoot,
+    'card',
+    'add',
+    'step two',
+    '--phase',
+    'PH.2',
+    '--gate',
+    'ZZ-9',
+    '--assignee',
+    'other-seat',
+    '--status',
+    'todo',
+  );
+  if (addWs2.code !== 0) throw new Error(`WS-2 create failed: ${addWs2.err}`);
+  const addWs3 = await repoboard(
+    wsRoot,
+    'card',
+    'add',
+    'phase three',
+    '--assignee',
+    'builder',
+    '--status',
+    'doing',
+  );
+  if (addWs3.code !== 0) throw new Error(`WS-3 create failed: ${addWs3.err}`);
+  for (const step of ['WS-1', 'WS-2']) {
+    const upd = await repoboard(wsRoot, 'card', 'update', step, '--parent', 'WS-3');
+    if (upd.code !== 0) throw new Error(`${step} --parent WS-3 failed: ${upd.err}`);
+  }
+
+  return { wsRoot };
+}
+
+interface SeatBundleJson {
+  nextCard: { id: string } | null;
+  nextCardReason: string | null;
+  nextCardStep: { parentId: string; gateBy: string | null } | null;
+}
+
+describe('repoboard seat/check/card list — a step gated on a MEMBER card (RCB-154)', () => {
+  it('MB-1 done: seat builder reaches WS-1 via the clear parent-step; check gated-steps: 1 card; --unblocked keeps WS-1 only', async () => {
+    const { wsRoot } = await makeGateFixture('done');
+
+    const seat = await repoboard(wsRoot, 'seat', 'builder', '--json');
+    expect(seat.code).toBe(0);
+    const bundle = JSON.parse(seat.out) as SeatBundleJson;
+    expect(bundle.nextCard?.id).toBe('WS-1');
+    expect(bundle.nextCardReason).toBe('parent-step');
+    expect(bundle.nextCardStep).toEqual({ parentId: 'WS-3', gateBy: 'MB-1 (done)' });
+
+    const checked = await repoboard(wsRoot, 'check');
+    expect(checked.code).toBe(0);
+    expect(checked.out).toContain('gated-steps: 1 card');
+
+    const listed = await repoboard(wsRoot, 'card', 'list', '--json');
+    expect(listed.code).toBe(0);
+    const rows = JSON.parse(listed.out) as Array<{ id: string; blocked: string | null }>;
+    expect(rows.find((r) => r.id === 'WS-1')?.blocked).toBeNull();
+    expect(rows.find((r) => r.id === 'WS-2')?.blocked).toBe('blocked on ZZ-9 (no such card)');
+
+    const unblocked = await repoboard(
+      wsRoot,
+      'card',
+      'list',
+      '--parent',
+      'WS-3',
+      '--unblocked',
+      '--json',
+    );
+    expect(unblocked.code).toBe(0);
+    expect((JSON.parse(unblocked.out) as Array<{ id: string }>).map((r) => r.id)).toEqual(['WS-1']);
+  });
+
+  it('MB-1 todo: WS-1 reads blocked on MB-1 (todo) everywhere — seat falls through to the plain assigned pick, check counts 2, --unblocked is empty', async () => {
+    const { wsRoot } = await makeGateFixture('todo');
+
+    // parent-step skips a blocked step; BOTH WS-1 and WS-2 are now blocked, so the parent-step
+    // search finds nothing and `seat` falls through to the plain "assigned" pick — still WS-1
+    // (directly assigned, todo), but with no gate resolution behind the pick this time.
+    const seat = await repoboard(wsRoot, 'seat', 'builder', '--json');
+    expect(seat.code).toBe(0);
+    const bundle = JSON.parse(seat.out) as SeatBundleJson;
+    expect(bundle.nextCard?.id).toBe('WS-1');
+    expect(bundle.nextCardReason).toBe('assigned');
+    expect(bundle.nextCardStep).toBeNull();
+
+    const checked = await repoboard(wsRoot, 'check');
+    expect(checked.code).toBe(0);
+    expect(checked.out).toContain('gated-steps: 2 cards');
+
+    const listed = await repoboard(wsRoot, 'card', 'list', '--json');
+    expect(listed.code).toBe(0);
+    const rows = JSON.parse(listed.out) as Array<{ id: string; blocked: string | null }>;
+    expect(rows.find((r) => r.id === 'WS-1')?.blocked).toBe('blocked on MB-1 (todo)');
+    expect(rows.find((r) => r.id === 'WS-2')?.blocked).toBe('blocked on ZZ-9 (no such card)');
+
+    const unblocked = await repoboard(
+      wsRoot,
+      'card',
+      'list',
+      '--parent',
+      'WS-3',
+      '--unblocked',
+      '--json',
+    );
+    expect(unblocked.code).toBe(0);
+    expect(JSON.parse(unblocked.out)).toEqual([]);
+  });
+});
+
 describe('repoboard card show — plain board (no repos:) regression', () => {
   it('an unknown id on a plain board never touches resolveCardRef — the error text is byte-identical to before this card', async () => {
     const root = await boardRoot('RB');

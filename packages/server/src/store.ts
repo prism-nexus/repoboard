@@ -8,7 +8,7 @@ import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { EventEmitter } from 'node:events';
 import { appendFile, mkdir, readdir, readFile, rename, stat, writeFile } from 'node:fs/promises';
-import { basename, join, relative, resolve, sep } from 'node:path';
+import { basename, dirname, join, relative, resolve, sep } from 'node:path';
 import {
   type AddWindowInput,
   addNote as addNoteCore,
@@ -216,6 +216,11 @@ export type AppendSeatLogOutcome =
   | { ok: true; date: string; text: string; block: LogBlock; restamped: boolean }
   | { ok: false; error: string; readOnly?: boolean };
 
+/** RCB-132: `state --trim-landings --archive <path>` outcome — `path` is relative to `root`. */
+export type AppendArchiveOutcome =
+  | { ok: true; path: string; block: LogBlock }
+  | { ok: false; error: string; readOnly?: boolean };
+
 /** P8.3: one `.repoboard/log/<date>.md` file, read fresh from disk (never cached). */
 export interface LogFile {
   date: string;
@@ -249,6 +254,9 @@ export class MapOnlyError extends Error {
 }
 
 const CARD_FILE = /^[^/\\]+\.md$/;
+
+/** RCB-132: `appendArchiveText`'s header, written once, the first time `<path>` is created. */
+const ARCHIVE_HEADER = '# LAST LANDINGS archive';
 
 function sha1(text: string): string {
   return createHash('sha1').update(text).digest('hex');
@@ -877,6 +885,51 @@ export class CardStore extends EventEmitter<StoreEvents> {
   }
 
   /**
+   * RCB-132: `state --trim-landings --archive <path>` — the SAME block shape as `appendRepoLog`
+   * (`formatLogBlock`/`appendLogBlock`, its own `now()` for `ts`), but written to
+   * `<root>/<relPath>` instead of the log, and never through `this.logDir`. `relPath`'s file is
+   * created with `ARCHIVE_HEADER` first if it does not exist, and — like the log — never
+   * rewritten, only appended to. `withFileLock` on the resolved path is the SAME guard
+   * `setStateSection` uses on `statePath`, so two seats archiving into the same file at once
+   * do not race each other.
+   */
+  appendArchiveText(
+    relPath: string,
+    seat: string,
+    text: string,
+    title: string | undefined,
+  ): Promise<AppendArchiveOutcome> {
+    return this.mutate(async () => {
+      if (seat.trim().length === 0) return { ok: false as const, error: 'seat must not be empty' };
+      const line = text.trim();
+      if (line.length === 0) return { ok: false as const, error: 'text must not be empty' };
+      this.refuseWriteWithoutBoard();
+      const path = resolve(this.root, relPath);
+      // RCB-132 (seat): the archive is a file IN this repo — a path that resolves outside the root
+      // (`../x`, an absolute path elsewhere) is refused before anything is created.
+      const inRoot = relative(this.root, path);
+      if (inRoot === '' || inRoot === '..' || inRoot.startsWith(`..${sep}`)) {
+        return {
+          ok: false as const,
+          error: `--archive must name a file inside the repo (got "${relPath}")`,
+        };
+      }
+      const ts = toIso(this.now());
+      const block = formatLogBlock({ seat, ts, title, text: line });
+      const next = await this.writeArchive(path, (existing) =>
+        appendLogBlock(existing.length > 0 ? existing : `${ARCHIVE_HEADER}\n\n`, block),
+      );
+      const parsedBlocks = parseLogBlocks(next);
+      const parsedBlock = parsedBlocks[parsedBlocks.length - 1];
+      return {
+        ok: true as const,
+        path: relative(this.root, path),
+        block: parsedBlock ?? { seat: seat.toUpperCase(), ts, title: title ?? line, text: line },
+      };
+    });
+  }
+
+  /**
    * RCB-71 A: the log WRITE target, precedence high to low — `board.yml`'s `cfg.logDir`
    * (resolved against `this.root`) when set, then `.repoboard/local/log/` when a local layer
    * exists, else `.repoboard/log/`. Called from `load()` (after `loadConfig()`) and from the
@@ -1448,6 +1501,31 @@ export class CardStore extends EventEmitter<StoreEvents> {
     await writeFile(tmp, text, 'utf8');
     await rename(tmp, path);
     this.emit('log', { date, text });
+  }
+
+  /**
+   * RCB-132: the `--archive` file's one write site (K10: every disk write lives in a private
+   * `writeXxx`). Read-modify-write under `withFileLock` on `path` — the same guard
+   * `setStateSection` uses — then tmp + rename like `writeLog`. `next` maps the current text
+   * (`''` when the file is absent) to the new one, which is returned. The directory is made
+   * before the lock, because the lock file sits next to `path`.
+   */
+  private async writeArchive(path: string, next: (existing: string) => string): Promise<string> {
+    this.refuseWriteWithoutBoard();
+    await mkdir(dirname(path), { recursive: true });
+    return withFileLock(path, async () => {
+      let existing = '';
+      try {
+        existing = await readFile(path, 'utf8');
+      } catch (e) {
+        if ((e as NodeJS.ErrnoException).code !== 'ENOENT') throw e;
+      }
+      const text = next(existing);
+      const tmp = `${path}.tmp`;
+      await writeFile(tmp, text, 'utf8');
+      await rename(tmp, path);
+      return text;
+    });
   }
 
   private async loadState(): Promise<void> {

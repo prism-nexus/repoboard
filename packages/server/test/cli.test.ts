@@ -2327,6 +2327,111 @@ describe('repoboard state --trim-landings (RCB-92)', () => {
   });
 });
 
+describe('repoboard state --trim-landings --archive (RCB-132)', () => {
+  const TWO_ENTRIES = ['1. Newest landing here', '', '0. Oldest landing here'].join('\n');
+  const ARCHIVE_PATH = 'docs/archive/STATE-LANDINGS-2026-09-02.md';
+
+  it(
+    'archives to <path> instead of the log — header on first use, appended (never overwritten) ' +
+      'on the second, log untouched, pointer names <path>',
+    async () => {
+      const root = await freshRepo({});
+      await repoboard(root, 'init', '--practices');
+      await repoboardStdin(root, TWO_ENTRIES, 'state', '--set-section', 'LAST-LANDINGS', '--stdin');
+
+      const res = await repoboard(
+        root,
+        'state',
+        '--trim-landings',
+        '0',
+        '--archive',
+        ARCHIVE_PATH,
+        '--as',
+        'tester',
+      );
+      expect(res.code).toBe(0);
+      expect(res.out).toBe(`trimmed LAST LANDINGS: kept 0, archived 2 → ${ARCHIVE_PATH}\n`);
+
+      const archivePath = join(root, ARCHIVE_PATH);
+      const archived = await readFile(archivePath, 'utf8');
+      expect(archived.startsWith('# LAST LANDINGS archive\n\n')).toBe(true);
+      expect(archived).toContain(
+        '##### TESTER 2026-09-02T22:41:10Z: LAST LANDINGS archived: 2 entries beyond the newest 0',
+      );
+      expect(archived).toContain('1. Newest landing here');
+      expect(archived).toContain('0. Oldest landing here');
+
+      // No log block at all is written when --archive is given. `init --practices` already
+      // scaffolded today's log (header only), so the check is "zero blocks", not "no file".
+      const logShown = await repoboard(root, 'log', 'show', '--json');
+      expect(JSON.parse(logShown.out).blocks).toEqual([]);
+
+      const printed = await repoboard(root, 'state');
+      expect(printed.out).toContain(
+        `_(older entries: ${ARCHIVE_PATH} "LAST LANDINGS archived", 2 moved`,
+      );
+
+      // A second trim appends to the SAME file rather than overwriting the header or the first
+      // archive's entries — C3's own perturbation shape (a rewrite that keeps only the newest
+      // block would still pass every assertion above).
+      await repoboardStdin(
+        root,
+        '2. Another landing',
+        'state',
+        '--set-section',
+        'LAST-LANDINGS',
+        '--stdin',
+      );
+      const res2 = await repoboard(
+        root,
+        'state',
+        '--trim-landings',
+        '0',
+        '--archive',
+        ARCHIVE_PATH,
+        '--as',
+        'tester2',
+      );
+      expect(res2.code).toBe(0);
+      const archived2 = await readFile(archivePath, 'utf8');
+      expect(archived2.startsWith(archived.replace(/\n+$/, ''))).toBe(true);
+      expect(archived2).toContain('2. Another landing');
+      expect(archived2).toContain('##### TESTER2');
+    },
+  );
+
+  it('--archive without --trim-landings is a user error', async () => {
+    const root = await freshRepo({});
+    await repoboard(root, 'init', '--practices');
+    const res = await repoboard(root, 'state', '--archive', ARCHIVE_PATH);
+    expect(res.code).toBe(1);
+    expect(res.err).toMatch(/--archive is only valid with --trim-landings/);
+  });
+
+  it('--archive outside the repo is refused: nothing created, STATE.md untouched', async () => {
+    const root = await freshRepo({});
+    await repoboard(root, 'init', '--practices');
+    await repoboardStdin(root, TWO_ENTRIES, 'state', '--set-section', 'LAST-LANDINGS', '--stdin');
+    const stateBefore = await readFile(join(root, '.repoboard', 'STATE.md'), 'utf8');
+    const outsideName = `${basename(root)}-outside.md`;
+
+    const res = await repoboard(
+      root,
+      'state',
+      '--trim-landings',
+      '0',
+      '--archive',
+      `../${outsideName}`,
+      '--as',
+      'tester',
+    );
+    expect(res.code).toBe(1);
+    expect(res.err).toMatch(/--archive must name a file inside the repo/);
+    expect(existsSync(join(dirname(root), outsideName))).toBe(false);
+    expect(await readFile(join(root, '.repoboard', 'STATE.md'), 'utf8')).toBe(stateBefore);
+  });
+});
+
 describe('repoboard log', () => {
   it('append creates the day file, then appends a second block', async () => {
     const root = await freshRepo({});
@@ -2409,6 +2514,130 @@ describe('repoboard log', () => {
     const res = await repoboard(root, 'log', 'show', '--date', '2020-01-01');
     expect(res.code).toBe(0);
     expect(res.out).toContain('no log for that date');
+  });
+
+  describe('show --tail/--since (RCB-132)', () => {
+    async function logAt(root: string, at: Date, seat: string, text: string): Promise<void> {
+      const stdout = new Sink();
+      const stderr = new Sink();
+      const code = await run(['log', '--as', seat, text], {
+        cwd: root,
+        stdout,
+        stderr,
+        now: () => at,
+      });
+      expect(code, stderr.text).toBe(0);
+    }
+
+    it('--tail n prints only the last n blocks, formatted like --seat', async () => {
+      const root = await freshRepo({});
+      await logAt(root, new Date('2026-09-02T08:00:00Z'), 'ops', 'first entry');
+      await logAt(root, new Date('2026-09-02T09:00:00Z'), 'ops', 'second entry');
+      await logAt(root, new Date('2026-09-02T10:00:00Z'), 'ops', 'third entry');
+      const shown = await repoboard(root, 'log', 'show', '--tail', '2');
+      expect(shown.code).toBe(0);
+      expect(shown.out).not.toContain('first entry');
+      expect(shown.out).toContain('second entry');
+      expect(shown.out).toContain('third entry');
+    });
+
+    it("--tail n greater than the day's block count returns every block, never an error", async () => {
+      const root = await freshRepo({});
+      await logAt(root, new Date('2026-09-02T08:00:00Z'), 'ops', 'only entry');
+      const shown = await repoboard(root, 'log', 'show', '--tail', '50');
+      expect(shown.code).toBe(0);
+      expect(shown.out).toContain('only entry');
+    });
+
+    it('--tail 0 prints the empty-result message, not an error', async () => {
+      const root = await freshRepo({});
+      await logAt(root, new Date('2026-09-02T08:00:00Z'), 'ops', 'only entry');
+      const shown = await repoboard(root, 'log', 'show', '--tail', '0');
+      expect(shown.code).toBe(0);
+      expect(shown.out).toBe('(no matching log entries)\n');
+    });
+
+    it('a negative --tail is a user error naming the flag', async () => {
+      const root = await freshRepo({});
+      // `=` for the same node:util parseArgs reason `state --trim-landings=-1` uses it above.
+      const res = await repoboard(root, 'log', 'show', '--tail=-1');
+      expect(res.code).toBe(1);
+      expect(res.err).toMatch(/--tail must be a non-negative integer/);
+    });
+
+    it('a non-integer --tail is a user error naming the flag', async () => {
+      const root = await freshRepo({});
+      const res = await repoboard(root, 'log', 'show', '--tail', 'abc');
+      expect(res.code).toBe(1);
+      expect(res.err).toMatch(/--tail must be a non-negative integer/);
+    });
+
+    it("--since HH:MMZ keeps blocks at/after that UTC time on --date's day (default today)", async () => {
+      const root = await freshRepo({});
+      await logAt(root, new Date('2026-09-02T08:00:00Z'), 'ops', 'before cutoff');
+      await logAt(root, new Date('2026-09-02T10:00:00Z'), 'ops', 'at cutoff');
+      await logAt(root, new Date('2026-09-02T12:00:00Z'), 'ops', 'after cutoff');
+      const shown = await repoboard(root, 'log', 'show', '--since', '10:00Z');
+      expect(shown.code).toBe(0);
+      expect(shown.out).not.toContain('before cutoff');
+      expect(shown.out).toContain('at cutoff');
+      expect(shown.out).toContain('after cutoff');
+    });
+
+    it('--since as a full ISO-8601 datetime works the same as the equivalent HH:MMZ', async () => {
+      const root = await freshRepo({});
+      await logAt(root, new Date('2026-09-02T08:00:00Z'), 'ops', 'before cutoff');
+      await logAt(root, new Date('2026-09-02T10:00:00Z'), 'ops', 'at cutoff');
+      const shown = await repoboard(root, 'log', 'show', '--since', '2026-09-02T10:00:00Z');
+      expect(shown.out).not.toContain('before cutoff');
+      expect(shown.out).toContain('at cutoff');
+    });
+
+    it('a bad --since value is a user error naming the flag', async () => {
+      const root = await freshRepo({});
+      await logAt(root, new Date('2026-09-02T08:00:00Z'), 'ops', 'entry');
+      const res = await repoboard(root, 'log', 'show', '--since', 'nonsense');
+      expect(res.code).toBe(1);
+      expect(res.err).toMatch(/^repoboard: --since /);
+      expect(res.err).toMatch(/not a full ISO-8601 datetime or HH:MMZ/);
+    });
+
+    it('--seat, --since and --tail compose in that fixed order', async () => {
+      const root = await freshRepo({});
+      await logAt(root, new Date('2026-09-02T08:00:00Z'), 'ops', 'ops early');
+      await logAt(root, new Date('2026-09-02T09:00:00Z'), 'builder', 'builder mid');
+      await logAt(root, new Date('2026-09-02T10:00:00Z'), 'ops', 'ops mid');
+      await logAt(root, new Date('2026-09-02T11:00:00Z'), 'ops', 'ops late');
+      // seat=ops -> [early(08), mid(10), late(11)]; since>=09:30 -> [mid, late]; tail=1 -> [late].
+      const shown = await repoboard(
+        root,
+        'log',
+        'show',
+        '--seat',
+        'ops',
+        '--since',
+        '09:30Z',
+        '--tail',
+        '1',
+      );
+      expect(shown.code).toBe(0);
+      expect(shown.out).not.toContain('ops early');
+      expect(shown.out).not.toContain('builder mid');
+      expect(shown.out).not.toContain('ops mid');
+      expect(shown.out).toContain('ops late');
+    });
+
+    it('--json with --tail/--since gives {date, blocks} filtered the same way as text', async () => {
+      const root = await freshRepo({});
+      await logAt(root, new Date('2026-09-02T08:00:00Z'), 'ops', 'first');
+      await logAt(root, new Date('2026-09-02T09:00:00Z'), 'ops', 'second');
+      const shown = await repoboard(root, 'log', 'show', '--json', '--tail', '1');
+      expect(shown.code).toBe(0);
+      const parsed = JSON.parse(shown.out) as { date: string; blocks: Array<{ text: string }> };
+      expect(parsed.date).toBe('2026-09-02');
+      expect(parsed.blocks).toHaveLength(1);
+      expect(parsed.blocks[0]?.text).toBe('second');
+    });
   });
 
   it('empty text with no --stdin is a user error', async () => {

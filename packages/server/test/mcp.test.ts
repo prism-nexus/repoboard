@@ -182,7 +182,8 @@ describe('repoboard mcp: handshake and tool list', () => {
     const { tools } = await r.client.listTools();
     const byName = new Map(tools.map((t) => [t.name, t]));
     const ceilings: Record<string, number> = {
-      get_log: 800,
+      // RCB-132: since/tail measured 1114 B (was 749 B at RCB-146).
+      get_log: 1200,
       get_seat: 700,
       record_gate: 1450,
       get_gate: 700,
@@ -1215,6 +1216,45 @@ describe('repoboard mcp: get_log (RCB-146)', () => {
       expect(textOf(res)).toBe('last is exclusive with date/seat');
     },
   );
+
+  it(
+    'RCB-132: tail keeps the last N blocks; seat and tail compose (the SAME filterLogBlocks ' +
+      '`log show --tail/--seat` calls)',
+    async () => {
+      const r = await rig();
+      await r.json('append_repo_log', { seat: 'ops', text: 'first' });
+      await r.json('append_repo_log', { seat: 'ops', text: 'second' });
+      await r.json('append_repo_log', { seat: 'ops', text: 'third' });
+
+      const tailOnly = await r.json<{ blocks: Array<{ text: string }> }>('get_log', { tail: 1 });
+      expect(tailOnly.blocks.map((b) => b.text)).toEqual(['third']);
+
+      const seatAndTail = await r.json<{ blocks: Array<{ text: string }> }>('get_log', {
+        seat: 'ops',
+        tail: 2,
+      });
+      expect(seatAndTail.blocks.map((b) => b.text)).toEqual(['second', 'third']);
+
+      // n > count: every block, never an error.
+      const tailOverCount = await r.json<{ blocks: unknown[] }>('get_log', { tail: 99 });
+      expect(tailOverCount.blocks).toHaveLength(3);
+    },
+  );
+
+  it('RCB-132: last is exclusive with since/tail (a separate check from date/seat above)', async () => {
+    const r = await rig();
+    const res = await r.call('get_log', { last: 'claude/p8-3', tail: 1 });
+    expect(res.isError).toBe(true);
+    expect(textOf(res)).toBe('last is exclusive with since/tail');
+  });
+
+  it('RCB-132: a bad `since` fails with filterLogBlocks own error, prefixed `since: `', async () => {
+    const r = await rig();
+    await r.json('append_repo_log', { seat: 'ops', text: 'entry' });
+    const res = await r.call('get_log', { since: 'nonsense' });
+    expect(res.isError).toBe(true);
+    expect(textOf(res)).toBe('since: "nonsense" is not a full ISO-8601 datetime or HH:MMZ');
+  });
 });
 
 describe('repoboard mcp: get_seat (RCB-146)', () => {

@@ -139,3 +139,79 @@ export function lastBlockFor(
   }
   return null;
 }
+
+/**
+ * RCB-132: `filterLogBlocks`'s options — every field left `undefined` is "no restriction" (an
+ * empty config yields everything, never silently nothing). `seat` matches `log show --seat`'s
+ * own rule exactly (uppercased, exact match against the heading). `since` is a full ISO-8601
+ * datetime, or `HH:MMZ` resolved against the caller's `day`. `tail` is the last N blocks of
+ * whatever `seat`/`since` left — the caller (cli.ts's own flag parse, mcp.ts's zod schema)
+ * validates the raw flag is a non-negative integer; this is a contract on the value, not a
+ * second parse of it.
+ */
+export interface LogFilterOptions {
+  seat?: string;
+  since?: string;
+  tail?: number;
+}
+
+export type LogFilterResult = { ok: true; blocks: LogBlock[] } | { ok: false; error: string };
+
+const SHORT_TIME = /^(\d{2}):(\d{2})Z$/;
+
+/**
+ * RCB-132: resolves `--since`'s raw string against `day` (`YYYY-MM-DD`, UTC) — a full ISO-8601
+ * datetime is taken as given; `HH:MMZ` (e.g. `14:05Z`) means that UTC time on `day`. Pure: `day`
+ * is the caller's already-resolved day (`log show`'s `--date`, defaulting to today), never
+ * `Date.now()` here.
+ */
+function resolveSince(
+  spec: string,
+  day: string,
+): { ok: true; iso: string } | { ok: false; error: string } {
+  const short = SHORT_TIME.exec(spec);
+  const iso = short ? `${day}T${short[1]}:${short[2]}:00Z` : spec;
+  if (Number.isNaN(Date.parse(iso))) {
+    return { ok: false, error: `"${spec}" is not a full ISO-8601 datetime or HH:MMZ` };
+  }
+  return { ok: true, iso };
+}
+
+/**
+ * RCB-132: the ONE filter `log show --seat/--since/--tail` and MCP `get_log`'s matching args
+ * share — CLI and MCP call this, never their own copy. Fixed order — seat, then since, then
+ * tail — so `--since s --tail 3` means "the last 3 of the ones at or after `s`", never "the 3
+ * most recent, then keep whichever of those are at or after `s`". A block whose `ts` fails to
+ * parse as a `Date` (RCB-54: a hand-written log's `ts` is not guaranteed parseable) is dropped
+ * by `--since` rather than kept on a guess — a missing answer stays out, never a plausible
+ * inclusion. `tail` beyond what's left after `seat`/`since` is every remaining block, never an
+ * error — a cold seat guessing a line count on the high side is the exact case `--tail` exists
+ * to make safe.
+ */
+export function filterLogBlocks(
+  blocks: readonly LogBlock[],
+  day: string,
+  opts: LogFilterOptions,
+): LogFilterResult {
+  let result: readonly LogBlock[] = blocks;
+  if (opts.seat !== undefined) {
+    const wanted = opts.seat.toUpperCase();
+    result = result.filter((b) => b.seat === wanted);
+  }
+  if (opts.since !== undefined) {
+    const since = resolveSince(opts.since, day);
+    if (!since.ok) return since;
+    const sinceMs = Date.parse(since.iso);
+    result = result.filter((b) => {
+      const ms = Date.parse(b.ts);
+      return !Number.isNaN(ms) && ms >= sinceMs;
+    });
+  }
+  if (opts.tail !== undefined) {
+    if (!Number.isInteger(opts.tail) || opts.tail < 0) {
+      throw new Error(`filterLogBlocks: tail must be a non-negative integer (got ${opts.tail})`);
+    }
+    result = result.slice(Math.max(0, result.length - opts.tail));
+  }
+  return { ok: true, blocks: [...result] };
+}

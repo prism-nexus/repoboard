@@ -142,10 +142,17 @@ export type {
   RepoHealth,
 } from './repo-health.js';
 export { byWho, latestChecks, parseCommitLog, parseGateLedger, perDay } from './repo-health.js';
-export type { DatedLogBlocks, LogBlock, LogBlockInput } from './repolog.js';
+export type {
+  DatedLogBlocks,
+  LogBlock,
+  LogBlockInput,
+  LogFilterOptions,
+  LogFilterResult,
+} from './repolog.js';
 export {
   appendLogBlock,
   dailyLogHeader,
+  filterLogBlocks,
   formatLogBlock,
   lastBlockFor,
   parseLogBlocks,

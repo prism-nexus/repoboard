@@ -52,7 +52,8 @@ published). It finds `.repoboard/` by walking up from the current directory.
 | `repoboard columns [--json]` | `repoboard columns` — table `ID TITLE FLAGS COUNT`; `--json` prints the raw list |
 | `repoboard columns set (--stdin \| "<text>") [--as actor]` | `repoboard columns set --stdin < new-columns.yml` — replaces the whole column list (docs/REFERENCE.md §6) |
 | `repoboard state [--set-section s (<text>\|--stdin)] [--json]` | `repoboard state` — prints the rendered STATE.md; `--json` is read-only (docs/REFERENCE.md §3) |
-| `repoboard log --as <seat> [--title t] (<text>\|--stdin)` / `log show [--date d] [--seat s] [--json]` / `log --last <seat>` | `repoboard log --as claude/ops "armed the fires"` (docs/REFERENCE.md §3) |
+| `repoboard state --trim-landings <n> [--archive <path>] [--as a]` | keeps the newest `<n>` LAST LANDINGS entries, archiving the rest to today's log — or, with `--archive <path>` (RCB-132), to `<path>` instead, and no log block at all (docs/REFERENCE.md §3) |
+| `repoboard log --as <seat> [--title t] (<text>\|--stdin)` / `log show [--date d] [--seat s] [--since ts] [--tail n] [--json]` / `log --last <seat>` | `repoboard log --as claude/ops "armed the fires"` — a cold seat guessing at a line count wants `--tail n` (last n blocks) or `--since ts` (blocks at/after `ts`, full ISO or `HH:MMZ`) instead of guessing (docs/REFERENCE.md §3) |
 | `repoboard seat <name> [--json]` | `repoboard seat claude/builder` — the cold-start bundle (docs/REFERENCE.md §3, §6) |
 | `repoboard check [--json] [--strict]` | `repoboard check` — exit 0 `ok`, or 1 with findings (docs/REFERENCE.md §3) |
 | `repoboard cost [--root <dir>] [--budget <bytes>] [--json]` | `repoboard cost --root /path/to/other/repo` — "cold context" bytes vs budget (docs/REFERENCE.md §4, §6) |
@@ -63,9 +64,15 @@ published). It finds `.repoboard/` by walking up from the current directory.
 | `repoboard mcp [--root <dir>]` | `repoboard mcp` — the MCP server on stdio (section 3) |
 
 `log` has three forms: append (`log --as <seat> [--title t] (<text>|--stdin)`), read one
-day (`log show [--date d] [--seat s]`), and cold-start read (`log --last <seat>`, the seat a
-positional after the flag). The grammar is kept as is through 0.x; unifying it is a post-1.0
-change.
+day (`log show [--date d] [--seat s] [--since ts] [--tail n]`), and cold-start read (`log --last
+<seat>`, the seat a positional after the flag). The grammar is kept as is through 0.x; unifying it
+is a post-1.0 change.
+
+`log show`'s `--since`/`--tail` (RCB-132) replace guessing a line count cold: `--tail n` is the
+last `n` blocks, `--since ts` is every block at/after `ts` (a full ISO-8601 datetime, or `HH:MMZ`
+for that UTC time on `--date`'s day, default today) — composed with `--seat` in that fixed order
+(seat, then since, then tail) if more than one is given. MCP `get_log` takes the same `since`/`tail`
+args, through the SAME filter core exposes (`filterLogBlocks`).
 
 `systems show <id>` resolves every pointer's text — 33,770 B for a 4-pointer row; run `systems`
 (631 B) first.

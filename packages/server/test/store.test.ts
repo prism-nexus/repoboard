@@ -2007,6 +2007,7 @@ describe('K10 structure of store.ts', () => {
     expect(decls.map((d) => d[1]).sort()).toEqual([
       'addNote',
       'addWindow',
+      'appendArchiveText',
       'appendLog',
       'appendRepoLog',
       'appendSeatLog',
@@ -2042,6 +2043,7 @@ describe('K10 structure of store.ts', () => {
       'mutate', // updateSeatBullet
       'mutate', // appendRepoLog
       'mutate', // appendSeatLog (RCB-127)
+      'mutate', // appendArchiveText (RCB-132)
       'mutate', // appendLog
       'mutate', // addNote
       'mutate', // closeSynced
@@ -2075,6 +2077,7 @@ describe('K10 structure of store.ts', () => {
       'private async writeLeases',
       'private async writeState',
       'private async writeLog',
+      'private async writeArchive',
     ]) {
       const [start, end] = methodRange(decl);
       const first = SRC.slice(start, end).split('\n')[1]?.trim();
@@ -2100,6 +2103,7 @@ describe('K10 structure of store.ts', () => {
       methodRange('private async writeLeases'),
       methodRange('private async writeState'),
       methodRange('private async writeLog'),
+      methodRange('private async writeArchive'),
       // RCB-34/P7.3: `setColumns` is the sixth write site, guarded inline rather than through a
       // private `writeXxx` — see its doc comment in store.ts for why.
       methodRange('setColumns(columns: Column[]'),

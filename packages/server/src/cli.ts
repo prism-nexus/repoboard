@@ -22,6 +22,7 @@ import {
   type DecisionOption,
   dailyLogHeader,
   defaultBoardConfig,
+  filterLogBlocks,
   findSeatLine,
   formatCostTable,
   formatDetectReport,
@@ -192,11 +193,13 @@ Usage:
                                         null
   repoboard state --set-section LIVE|LAST-LANDINGS|SEATS (<text> | --stdin) [--as a]
                                         replace one section's body and restamp
-  repoboard state --trim-landings <n> [--as a]
-                                        keep the newest <n> LAST LANDINGS entries in STATE.md,
-                                        archive the rest verbatim to today's log —
-                                        "nothing to trim" and no write when there is nothing
-                                        beyond <n>
+  repoboard state --trim-landings <n> [--archive <path>] [--as a]
+                                        keep the newest <n> LAST LANDINGS entries in STATE.md;
+                                        with --archive, append the rest verbatim to <path>
+                                        (relative to root, created with a header if absent,
+                                        never overwritten) instead of today's log — the SEATS
+                                        pointer names <path> either way; "nothing to trim" and
+                                        no write when there is nothing beyond <n>
   repoboard log --as <seat> [--title "…"] (<text> | --stdin)
                                         append one block to today's log — board.yml logDir when
                                         set, else .repoboard/local/log/, else .repoboard/log/;
@@ -204,10 +207,15 @@ Usage:
                                         an UP bullet in SEATS right now, printing " · STATE
                                         restamped (<seat> is UP)" on the same line — a DOWN or
                                         unknown seat just logs, and still needs \`seat --update\`
-  repoboard log show [--date YYYY-MM-DD] [--seat s] [--json]
-                                        print a day's log (default today), optionally one seat's
-                                        blocks; --json prints {date, blocks: [{seat, ts, title,
-                                        text}]}; no log for that date: {date, blocks: []} exit 0
+  repoboard log show [--date YYYY-MM-DD] [--seat s] [--since ts] [--tail n] [--json]
+                                        print a day's log (default today); --seat narrows to one
+                                        seat, --since to blocks whose ts >= ts (full ISO-8601, or
+                                        HH:MMZ for that UTC time on --date), --tail to the last n
+                                        blocks — applied in that order, seat then since then tail;
+                                        with any of the three, text output is the formatted
+                                        blocks, same as --seat alone; --json prints {date, blocks:
+                                        [{seat, ts, title, text}]}; no log for that date: {date,
+                                        blocks: []} exit 0
   repoboard log --last <seat>           print that seat's newest block, searching back across days
                                         (cold-start: your own seat's last block, then the coordinator's)
   repoboard seat <name> | list [--json]  the cold-start bundle for one seat: its SEATS line, its
@@ -1307,6 +1315,7 @@ async function cmdState(args: string[], io: CliIO): Promise<number> {
   const { values, positionals } = parse('state', args, {
     'set-section': { type: 'string' },
     'trim-landings': { type: 'string' },
+    archive: { type: 'string' },
     stdin: { type: 'boolean', default: false },
     as: { type: 'string' },
     json: { type: 'boolean', default: false },
@@ -1319,6 +1328,10 @@ async function cmdState(args: string[], io: CliIO): Promise<number> {
     (values['set-section'] !== undefined || values['trim-landings'] !== undefined)
   ) {
     throw new UserError('state --json is read-only: not valid with --set-section/--trim-landings');
+  }
+  // RCB-132: --archive only means anything alongside --trim-landings.
+  if (values.archive !== undefined && values['trim-landings'] === undefined) {
+    throw new UserError('state --archive is only valid with --trim-landings');
   }
   const root = await requireRoot(io);
   const store = await openStore(root, { watch: false, now: io.now });
@@ -1363,14 +1376,29 @@ async function cmdState(args: string[], io: CliIO): Promise<number> {
       );
     }
     const title = `LAST LANDINGS archived: ${archived.length} entries beyond the newest ${n}`;
-    // Log FIRST — `check` reads the log's timestamp against STATE.md's stamp, and the state
-    // rewrite below restamps to "now"; writing the log after would leave a window where the
-    // newest log entry postdates the stamp that is supposed to cover it (stale-state).
-    const logRes = await store.appendRepoLog(actor, archived.join('\n\n'), title);
-    if (!logRes.ok) throw new UserError(logRes.error);
-    const logDirRel = relative(root, store.logDir);
+    // RCB-132: --archive sends the archived entries to a plain file instead of today's log — no
+    // log block is written at all in that case. Log FIRST still holds for the no-archive path —
+    // `check` reads the log's timestamp against STATE.md's stamp, and the state rewrite below
+    // restamps to "now"; writing the log after would leave a window where the newest log entry
+    // postdates the stamp that is supposed to cover it (stale-state). Either way, STATE's
+    // restamp (`setStateSection` below) is the LAST write.
+    let pointerLocation: string;
+    if (values.archive !== undefined) {
+      const archiveRes = await store.appendArchiveText(
+        values.archive,
+        actor,
+        archived.join('\n\n'),
+        title,
+      );
+      if (!archiveRes.ok) throw new UserError(archiveRes.error);
+      pointerLocation = archiveRes.path;
+    } else {
+      const logRes = await store.appendRepoLog(actor, archived.join('\n\n'), title);
+      if (!logRes.ok) throw new UserError(logRes.error);
+      pointerLocation = `${relative(root, store.logDir)}/${logRes.date}.md`;
+    }
     const pointer =
-      `_(older entries: ${logDirRel}/${logRes.date}.md "LAST LANDINGS archived", ` +
+      `_(older entries: ${pointerLocation} "LAST LANDINGS archived", ` +
       `${archived.length} moved ${toIso(store.clock)})_`;
     const stateRes = await store.setStateSection('lastLandings', `${kept}\n\n${pointer}`, actor);
     if (!stateRes.ok) throw new UserError(stateRes.error);
@@ -1383,7 +1411,7 @@ async function cmdState(args: string[], io: CliIO): Promise<number> {
       }
     }
     io.stdout.write(
-      `trimmed LAST LANDINGS: kept ${n}, archived ${archived.length} → ${logDirRel}/${logRes.date}.md\n`,
+      `trimmed LAST LANDINGS: kept ${n}, archived ${archived.length} → ${pointerLocation}\n`,
     );
     return 0;
   }
@@ -1466,8 +1494,21 @@ async function cmdLogShow(args: string[], io: CliIO): Promise<number> {
   const { values } = parse('log', args, {
     date: { type: 'string' },
     seat: { type: 'string' },
+    since: { type: 'string' },
+    tail: { type: 'string' },
     json: { type: 'boolean', default: false },
   });
+  // RCB-132: --tail is parsed here (a non-negative integer), same style as --trim-landings —
+  // filterLogBlocks takes the already-validated number, not a second parse of the raw flag.
+  let tail: number | undefined;
+  if (values.tail !== undefined) {
+    const raw = values.tail;
+    const n = Number.parseInt(raw, 10);
+    if (!Number.isInteger(n) || n < 0 || String(n) !== raw.trim()) {
+      throw new UserError(`--tail must be a non-negative integer (got "${raw}")`);
+    }
+    tail = n;
+  }
   const root = await requireRoot(io);
   const store = await openStore(root, { watch: false, now: io.now });
   const log = await store.log(values.date);
@@ -1480,18 +1521,29 @@ async function cmdLogShow(args: string[], io: CliIO): Promise<number> {
     io.stdout.write('(no log for that date)\n');
     return 0;
   }
-  if (values.seat !== undefined) {
-    const wanted = values.seat.toUpperCase();
-    const blocks = log.blocks.filter((b) => b.seat === wanted);
+  // RCB-132: --since/--tail widen --seat's own filter-then-format shape rather than add a
+  // second code path — filterLogBlocks does seat, then since, then tail, in that order, and a
+  // plain --seat (neither --since nor --tail) keeps its own original empty-result message.
+  if (values.seat !== undefined || values.since !== undefined || tail !== undefined) {
+    const filtered = filterLogBlocks(log.blocks, log.date, {
+      seat: values.seat,
+      since: values.since,
+      tail,
+    });
+    if (!filtered.ok) throw new UserError(`--since ${filtered.error}`);
     if (values.json) {
-      io.stdout.write(`${JSON.stringify({ date: log.date, blocks }, null, 2)}\n`);
+      io.stdout.write(`${JSON.stringify({ date: log.date, blocks: filtered.blocks }, null, 2)}\n`);
       return 0;
     }
-    if (blocks.length === 0) {
-      io.stdout.write('(no entries for that seat on that date)\n');
+    if (filtered.blocks.length === 0) {
+      io.stdout.write(
+        values.since === undefined && tail === undefined
+          ? '(no entries for that seat on that date)\n'
+          : '(no matching log entries)\n',
+      );
       return 0;
     }
-    io.stdout.write(`${blocks.map((b) => formatLogBlock(b)).join('\n\n')}\n`);
+    io.stdout.write(`${filtered.blocks.map((b) => formatLogBlock(b)).join('\n\n')}\n`);
     return 0;
   }
   if (values.json) {

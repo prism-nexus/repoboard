@@ -9,6 +9,7 @@ import {
   appendLogBlock,
   type DatedLogBlocks,
   dailyLogHeader,
+  filterLogBlocks,
   formatLogBlock,
   type LogBlock,
   lastBlockFor,
@@ -336,5 +337,90 @@ describe('parseLogBlocks: sibling log heading shapes (RCB-54)', () => {
     expect(oldBlocks).toHaveLength(1);
     expect(oldBlocks[0]?.[1]).toBe('COORDINATOR');
     expect(oldBlocks.length).not.toBe(headingLineCount);
+  });
+});
+
+/**
+ * RCB-132: the ONE filter `log show --seat/--since/--tail` and MCP `get_log`'s matching args
+ * share. Order is fixed: seat, then since, then tail.
+ */
+describe('filterLogBlocks', () => {
+  function block(seat: string, ts: string, text = seat): LogBlock {
+    return { seat: seat.toUpperCase(), ts, title: text, text };
+  }
+
+  const DAY = '2026-09-24';
+  // Deliberately NOT alternating strictly OPS/BUILDER/OPS/BUILDER/OPS — the raw LAST block is
+  // BUILDER, so a wrong implementation that slices `tail` before filtering `seat` is caught: it
+  // would grab a BUILDER block that then matches nothing under seat=OPS (see the order test).
+  const blocks: LogBlock[] = [
+    block('OPS', '2026-09-24T09:00:00Z', 'ops 09'),
+    block('BUILDER', '2026-09-24T10:00:00Z', 'builder 10'),
+    block('OPS', '2026-09-24T11:00:00Z', 'ops 11'),
+    block('OPS', '2026-09-24T12:00:00Z', 'ops 12'),
+    block('BUILDER', '2026-09-24T13:00:00Z', 'builder 13'),
+  ];
+
+  it('seat narrows to one seat, same rule as `log show --seat` (uppercased, exact match)', () => {
+    const res = filterLogBlocks(blocks, DAY, { seat: 'ops' });
+    expect(res).toEqual({ ok: true, blocks: [blocks[0], blocks[2], blocks[3]] });
+  });
+
+  it('since (full ISO-8601) keeps blocks whose ts >= since', () => {
+    const res = filterLogBlocks(blocks, DAY, { since: '2026-09-24T11:00:00Z' });
+    expect(res).toEqual({ ok: true, blocks: [blocks[2], blocks[3], blocks[4]] });
+  });
+
+  it('since (HH:MMZ) resolves against `day`, same UTC instant as the equivalent full ISO', () => {
+    const short = filterLogBlocks(blocks, DAY, { since: '11:00Z' });
+    const full = filterLogBlocks(blocks, DAY, { since: '2026-09-24T11:00:00Z' });
+    expect(short).toEqual(full);
+    expect(short).toEqual({ ok: true, blocks: [blocks[2], blocks[3], blocks[4]] });
+  });
+
+  it('tail n > count returns every remaining block, never an error', () => {
+    const res = filterLogBlocks(blocks, DAY, { tail: 999 });
+    expect(res).toEqual({ ok: true, blocks });
+  });
+
+  it('tail n = 0 returns no blocks', () => {
+    const res = filterLogBlocks(blocks, DAY, { tail: 0 });
+    expect(res).toEqual({ ok: true, blocks: [] });
+  });
+
+  it(
+    'composition order is seat, then since, then tail — CONTROL: applying tail to the ' +
+      'unfiltered blocks FIRST (the bug this pins against) would keep the raw last block ' +
+      '(BUILDER 13:00), and seat=OPS would then find nothing at all',
+    () => {
+      const res = filterLogBlocks(blocks, DAY, { seat: 'ops', since: '10:30Z', tail: 1 });
+      // seat=OPS -> [09,11,12]; since>=10:30 -> [11,12]; tail=1 -> [12].
+      expect(res).toEqual({ ok: true, blocks: [blocks[3]] });
+
+      // The control: tail-before-seat would grab the raw last block (BUILDER 13:00, not OPS),
+      // which then matches nothing under seat=OPS — a different, and wrong, final answer.
+      const wrongOrder = blocks.slice(-1).filter((b) => b.seat === 'OPS');
+      expect(wrongOrder).toEqual([]);
+      expect(res.ok && res.blocks).not.toEqual(wrongOrder);
+    },
+  );
+
+  it('a block whose ts fails to parse (RCB-54: a hand-written log) is dropped by --since, never kept on a guess', () => {
+    const withBad = [block('OPS', '2026-09-18 0x:xxZ', 'unparseable'), ...blocks];
+    const res = filterLogBlocks(withBad, DAY, { since: '00:00Z' });
+    expect(res.ok).toBe(true);
+    if (res.ok) expect(res.blocks.some((b) => b.text === 'unparseable')).toBe(false);
+  });
+
+  it('a bad --since value is ok:false, naming what was rejected', () => {
+    const res = filterLogBlocks(blocks, DAY, { since: 'not-a-time' });
+    expect(res).toEqual({
+      ok: false,
+      error: '"not-a-time" is not a full ISO-8601 datetime or HH:MMZ',
+    });
+  });
+
+  it('every field absent is inert: the whole day, unfiltered', () => {
+    expect(filterLogBlocks(blocks, DAY, {})).toEqual({ ok: true, blocks });
   });
 });

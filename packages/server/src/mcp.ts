@@ -13,6 +13,7 @@ import {
   type CardPatch,
   type Column,
   computeBoardSummary,
+  filterLogBlocks,
   isStale,
   type Lease,
   needsDecision,
@@ -806,31 +807,38 @@ export function createMcpServer(opts: McpServerOptions): McpServer {
       title: "Read a day's log, or one seat's newest block",
       description:
         "Reads a day's log (default today): {date, blocks: [{seat, ts, title, text}]} — same " +
-        'object `log show --json` prints. `last` (a seat name, exclusive with date/seat) ' +
-        "instead returns that seat's NEWEST block anywhere in the log: {date, block}, or nulls " +
-        'when it has none.',
+        'object `log show --json` prints. `seat` narrows to one seat; `since` (full ISO-8601, ' +
+        'or HH:MMZ for that UTC time on `date`) and `tail` (last N) narrow further, applied in ' +
+        'that order. `last` (a seat name, exclusive with date/seat/since/tail) instead returns ' +
+        "that seat's NEWEST block anywhere in the log: {date, block}, or nulls when it has none.",
       inputSchema: {
         date: z.string().optional().describe('YYYY-MM-DD. Default: today.'),
         seat: z.string().optional().describe("Only this seat's blocks."),
-        last: z.string().optional().describe('A seat name; exclusive with date/seat.'),
+        since: z.string().optional().describe('Full ISO-8601 datetime, or HH:MMZ for `date`.'),
+        tail: z.number().int().min(0).optional().describe('Only the last N blocks.'),
+        last: z.string().optional().describe('A seat name; exclusive with date/seat/since/tail.'),
       },
       annotations: { readOnlyHint: true },
     },
-    async ({ date, seat, last }) => {
+    async ({ date, seat, last, since, tail }) => {
       if (last !== undefined) {
         if (date !== undefined || seat !== undefined) {
           return fail('last is exclusive with date/seat');
+        }
+        if (since !== undefined || tail !== undefined) {
+          return fail('last is exclusive with since/tail');
         }
         const res = await store.lastRepoLogBlock(last);
         return ok(res ? { date: res.date, block: res.block } : { date: null, block: null });
       }
       const log = await store.log(date);
       if (!log) return ok({ date: date ?? toIso(now()).slice(0, 10), blocks: [] });
-      if (seat !== undefined) {
-        const wanted = seat.toUpperCase();
-        return ok({ date: log.date, blocks: log.blocks.filter((b) => b.seat === wanted) });
+      if (seat === undefined && since === undefined && tail === undefined) {
+        return ok({ date: log.date, blocks: log.blocks });
       }
-      return ok({ date: log.date, blocks: log.blocks });
+      const filtered = filterLogBlocks(log.blocks, log.date, { seat, since, tail });
+      if (!filtered.ok) return fail(`since: ${filtered.error}`);
+      return ok({ date: log.date, blocks: filtered.blocks });
     },
   );
 

@@ -457,10 +457,10 @@ async function mcpRig(): Promise<McpRig> {
 }
 
 describe('MCP: list_systems / get_system (RCB-97)', () => {
-  it('MCP_TOOL_NAMES gains exactly two tools (base 23 -> 25)', () => {
+  it('MCP_TOOL_NAMES gains exactly two tools (base 23 -> 25 at RCB-97; 29 after RCB-146)', () => {
     expect(MCP_TOOL_NAMES).toContain('list_systems');
     expect(MCP_TOOL_NAMES).toContain('get_system');
-    expect(MCP_TOOL_NAMES.length).toBe(25);
+    expect(MCP_TOOL_NAMES.length).toBe(29);
   });
 
   it('list_systems: rows trimmed to five keys; empty/errors reflect exists+errors', async () => {

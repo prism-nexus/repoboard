@@ -52,6 +52,7 @@ shows `!` for a task instead of `?`.
 | `repoboard card list --needs-decision` | filters to cards with an OPEN decision; the table gains a `DECISION` column (a `?` marker, `!` for a task) only when at least one listed card has one — see the bytes below |
 | `repoboard card show <id> --resolve` | each `refs:` entry as a fenced block headed `path:start-end`; RCB-106: overlapping or touching spans of the SAME file print once as one block headed `path:start-end — satisfies: <spec>, <spec>` (`mergeResolvedRefs`, server `refs.ts`); a single-spec block and an unresolved line are byte-identical to before |
 | `repoboard card list --parent <id> [--unblocked]` | `--parent` lists that card's steps in phase order (ID PHASE STATUS ASSIGNEE GATE BLOCKED TITLE); `--unblocked` keeps the not-done, not-blocked ones (RCB-104) |
+| `repoboard card list --size S\|M\|L\|XL` | filters to cards of that size |
 | `repoboard card show <id> --steps` | `--steps` appends a `## Steps` table of its children (RCB-104) |
 | `repoboard card show <id> --json [--resolve] [--steps]` | the same card object `card list --json --full` emits for one row (RCB-144); `steps`/`refs` added only with `--steps`/`--resolve`; an archived id: `{"archived": "<path>"}`; unknown id: unchanged error |
 
@@ -77,7 +78,9 @@ board) instead of staying, once `decide` answers it.
 `ask_owner(id, question, options?, replace?, kind?)` and `record_decision(id, letter?, words?)`,
 plus `list_cards(needsDecision: true)` for the owner queue. `get_card` returns `decision` for free
 — nothing extra to ask for. `kind: "task"` on `ask_owner` files an owner WORK item (no options; a
-bare `record_decision(id)` closes it, no letter or words needed).
+bare `record_decision(id)` closes it, no letter or words needed). RCB-146: `list_cards` gained
+`size`/`parent`/`unblocked`, the same filters as `card list`, so an agent no longer has to pull
+`full: true` to filter — all through one shared `filterCards` (`card-query.ts`).
 
 ### HTTP
 
@@ -289,6 +292,14 @@ meaning of `--strict` cannot drift between surfaces.
 options}], text}` (nulls before any STATE.md exists), `set_state_section(section, body, actor?)`,
 `append_repo_log(seat, text, title?)`, `check(strict?)` → `{findings, exitCode}`. All four are
 terse (no `CARD_INTRO`, matching P8.2's five lease tools) and each measures under 700 B.
+`ownerQueue` (both here and in `repoboard state --json`) is computed by one shared function
+(`card-query.ts`, RCB-146) — the CLI and MCP can no longer disagree about which cards are open.
+
+RCB-146 rounds out the read side: `get_log({date?, seat?, last?})` → `{date, blocks}` (same as
+`log show --json`, `seat` upper-cased the way the CLI does), or, with `last` (exclusive with
+`date`/`seat`), that seat's newest block anywhere in the log: `{date, block}`, nulls when it has
+none. `get_seat({name})` → the SAME cold-start bundle `seat <name> --json` prints; read only —
+`--up`/`--down`/`--update` stay CLI-only for now.
 
 ### HTTP
 
@@ -737,7 +748,11 @@ call); `sha` defaults to `git rev-parse --short HEAD` (null outside a repo); no 
 `repoboard gate show [--json]` prints the newest result per check (`tests`, `typecheck`, `lint`,
 `build`), ordering by each record's `at` — not file position, so an older passing line after a
 newer failing one still reports the failure, and a tie on `at` (same-second precision) goes to the
-later line in the ledger (RCB-116) — and `no gate recorded` for a check with no line yet. **`commits`** is read live from git (never stored): the last 10 on `HEAD`
+later line in the ledger (RCB-116) — and `no gate recorded` for a check with no line yet. RCB-146
+gives MCP the same pair: `record_gate({as, passed?, skipped?, failed?, files?, typecheck?, lint?,
+build?, sha?, note?})` calls the SAME `recordGate` (`repo-health.ts`) the CLI's flag parsing now
+delegates to — one validation, one ledger writer — and returns the `GateRecord`; `get_gate()`
+returns `loadGateHealth(root)`, the object `gate show --json` prints. **`commits`** is read live from git (never stored): the last 10 on `HEAD`
 and on `origin/main` (null when that ref does not resolve), plus a 14-UTC-day commit count and a
 per-`agent ?? author` count from `git log --since=<UTC midnight 13 days ago>`; `agent` is a
 commit's first `Co-Authored-By` trailer name, email stripped. **`coverage`** is RCB-110 A's

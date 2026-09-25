@@ -81,9 +81,12 @@ const SYSTEMS_TOOLS = ['list_systems', 'get_system'];
 const ISSUE_TOOLS = ['archive_cards', 'sync_issues'];
 /** RCB-56: the one board/config write tool, terse like the lease/window tools (no CARD_INTRO). */
 const CONFIG_TOOLS = ['set_columns'];
+/** RCB-146: the MCP-parity read of the log, the cold-start seat bundle and the gate ledger, plus
+ * the gate ledger's own write — same terse-description budget as P8.2/P8.3. */
+const LOG_SEAT_GATE_TOOLS = ['get_log', 'get_seat', 'record_gate', 'get_gate'];
 
 describe('repoboard mcp: handshake and tool list', () => {
-  it('lists exactly the twenty-five tools of the brief', async () => {
+  it('lists exactly the twenty-nine tools of the brief', async () => {
     const r = await rig();
     const { tools } = await r.client.listTools();
     expect(tools.map((t) => t.name).sort()).toEqual([...MCP_TOOL_NAMES].sort());
@@ -94,7 +97,8 @@ describe('repoboard mcp: handshake and tool list', () => {
         COST_TOOLS.length +
         SYSTEMS_TOOLS.length +
         ISSUE_TOOLS.length +
-        CONFIG_TOOLS.length,
+        CONFIG_TOOLS.length +
+        LOG_SEAT_GATE_TOOLS.length,
     );
     const list = tools.find((t) => t.name === 'list_cards');
     expect(list?.description).toMatch(/backlog, decide, todo, doing, done/);
@@ -163,6 +167,32 @@ describe('repoboard mcp: handshake and tool list', () => {
       expect(t, name).toBeDefined();
       bytes[name] = Buffer.byteLength(JSON.stringify(t));
       expect(bytes[name], name).toBeLessThanOrEqual(700);
+    }
+    expect(Object.values(bytes).every((b) => b > 0)).toBe(true);
+  });
+
+  /**
+   * RCB-146: the four log/seat/gate tools measured 749 / 561 / 1375 / 400 B at landing —
+   * `record_gate` alone carries ten fields (the gate ledger's whole shape), so it gets its own
+   * higher ceiling rather than the LEASE_TOOLS/STATE_TOOLS 700 B convention; each ceiling below
+   * has some headroom over the measured byte count, not the measured count itself.
+   */
+  it('RCB-146: the four log/seat/gate tools stay within their measured ceilings', async () => {
+    const r = await rig();
+    const { tools } = await r.client.listTools();
+    const byName = new Map(tools.map((t) => [t.name, t]));
+    const ceilings: Record<string, number> = {
+      get_log: 800,
+      get_seat: 700,
+      record_gate: 1450,
+      get_gate: 700,
+    };
+    const bytes: Record<string, number> = {};
+    for (const name of LOG_SEAT_GATE_TOOLS) {
+      const t = byName.get(name);
+      expect(t, name).toBeDefined();
+      bytes[name] = Buffer.byteLength(JSON.stringify(t));
+      expect(bytes[name], name).toBeLessThanOrEqual(ceilings[name] as number);
     }
     expect(Object.values(bytes).every((b) => b > 0)).toBe(true);
   });
@@ -979,4 +1009,299 @@ describe('repoboard mcp: set_columns (RCB-56)', () => {
     const after = await readFile(join(r.repo.root, '.repoboard', 'board.yml'), 'utf8');
     expect(after).toBe(before);
   });
+});
+
+/**
+ * RCB-146: `list_cards`'s three new filters, all going through the shared `filterCards`
+ * (card-query.ts) — the exact fixture cli.test.ts's `card list --parent/--unblocked` describe
+ * block builds, rebuilt here through MCP tool calls instead of the CLI.
+ */
+describe('repoboard mcp: list_cards size/parent/unblocked filters (RCB-146)', () => {
+  async function buildStepsFixture(
+    r: Rig,
+  ): Promise<{ parent: string; ph0: string; ph1: string; ph2: string; other: string }> {
+    const parent = (
+      await r.json<{ id: string }>('create_card', { title: 'Parent', status: 'doing' })
+    ).id;
+    // PH.2 added FIRST (lower id than PH.0/PH.1) so id order != phase order.
+    const ph2 = (
+      await r.json<{ id: string }>('create_card', {
+        title: 'Step two',
+        parent,
+        phase: 'PH.2',
+        gate: 'wait for step one',
+      })
+    ).id;
+    const ph0 = (
+      await r.json<{ id: string }>('create_card', { title: 'Step zero', parent, phase: 'PH.0' })
+    ).id;
+    await r.json('move_card', { id: ph0, status: 'done' });
+    const ph1 = (
+      await r.json<{ id: string }>('create_card', {
+        title: 'Step one',
+        parent,
+        phase: 'PH.1',
+        gate: ph0,
+      })
+    ).id;
+    await r.json('update_card', { id: ph2, gate: ph1 });
+    const other = (await r.json<{ id: string }>('create_card', { title: 'Unrelated' })).id;
+    return { parent, ph0, ph1, ph2, other };
+  }
+
+  it(
+    'size filters to an exact match ' +
+      '(pins card-query.ts filterCards: `if (size !== undefined) cards = cards.filter(...)`; ' +
+      'reverted, both cards would come back)',
+    async () => {
+      const r = await rig();
+      const small = await r.json<{ id: string }>('create_card', { title: 'small', size: 'S' });
+      await r.json('create_card', { title: 'medium', size: 'M' });
+      const rows = await r.json<Array<{ id: string }>>('list_cards', { size: 'S' });
+      expect(rows.map((c) => c.id)).toEqual([small.id]);
+    },
+  );
+
+  it(
+    'parent lists that card’s steps in PHASE order, not id order ' +
+      '(pins card-query.ts filterCards: `if (parent === undefined) { cards = cards.slice().sort(...) }`; ' +
+      'reverted to sort unconditionally, this would come back id-ordered: ph2, ph0, ph1)',
+    async () => {
+      const r = await rig();
+      const { parent, ph0, ph1, ph2, other } = await buildStepsFixture(r);
+      const rows = await r.json<Array<{ id: string }>>('list_cards', { parent });
+      expect(rows.map((c) => c.id)).toEqual([ph0, ph1, ph2]);
+      expect(rows.some((c) => c.id === other)).toBe(false);
+    },
+  );
+
+  it(
+    'unblocked (with parent) keeps only the not-done, not-blocked step ' +
+      '(pins card-query.ts filterCards: `findColumn(config, c.status)?.done !== true && ' +
+      'blockedReason(c, all, config) === null`; reverted to always true, all three steps would ' +
+      'come back)',
+    async () => {
+      const r = await rig();
+      const { parent, ph1 } = await buildStepsFixture(r);
+      const rows = await r.json<Array<{ id: string }>>('list_cards', { parent, unblocked: true });
+      expect(rows.map((c) => c.id)).toEqual([ph1]);
+    },
+  );
+
+  it(
+    'unblocked without parent is refused, in MCP’s OWN wording (no CLI --flags) ' +
+      '(pins card-query.ts filterCards: `if (f.unblocked && f.parent === undefined) throw new ' +
+      'Error(...)`; reverted, this call would not error)',
+    async () => {
+      const r = await rig();
+      const res = await r.call('list_cards', { unblocked: true });
+      expect(res.isError).toBe(true);
+      expect(textOf(res)).toBe('unblocked requires parent');
+    },
+  );
+
+  it(
+    'parent naming an unknown card is refused with the raw "unknown card" message ' +
+      '(pins card-query.ts filterCards: `if (!all.some((c) => c.id === parent)) throw new ' +
+      'Error(...)`; reverted, this call would return an empty array instead of erroring)',
+    async () => {
+      const r = await rig();
+      const res = await r.call('list_cards', { parent: 'NOPE-1' });
+      expect(res.isError).toBe(true);
+      expect(textOf(res)).toBe('unknown card "NOPE-1"');
+    },
+  );
+});
+
+describe('repoboard mcp: get_log (RCB-146)', () => {
+  it(
+    "reads a day's log, the same shape `log show --json` prints " +
+      '(pins mcp.ts get_log: the final `return ok({ date: log.date, blocks: log.blocks })`; ' +
+      'reverted to `blocks: []`, this would come back empty)',
+    async () => {
+      const r = await rig();
+      await r.json('append_repo_log', {
+        seat: 'claude/p8-3',
+        text: 'first entry',
+        title: 'kickoff',
+      });
+      await r.json('append_repo_log', { seat: 'ops', text: 'second entry' });
+      const log = await r.json<{ date: string; blocks: Array<{ seat: string; title: string }> }>(
+        'get_log',
+        {},
+      );
+      expect(log.date).toBe('2026-09-02');
+      expect(log.blocks.map((b) => b.seat)).toEqual(['CLAUDE/P8-3', 'OPS']);
+      expect(log.blocks[0]?.title).toBe('kickoff');
+    },
+  );
+
+  it(
+    'seat narrows AND upper-cases, same as the CLI ' +
+      '(pins mcp.ts get_log: `const wanted = seat.toUpperCase();`; reverted to the raw `seat`, ' +
+      'this lowercase `ops` would match nothing — blocks are stored upper-cased)',
+    async () => {
+      const r = await rig();
+      await r.json('append_repo_log', { seat: 'claude/p8-3', text: 'first entry' });
+      await r.json('append_repo_log', { seat: 'ops', text: 'second entry' });
+      const log = await r.json<{ blocks: Array<{ seat: string }> }>('get_log', { seat: 'ops' });
+      expect(log.blocks.map((b) => b.seat)).toEqual(['OPS']);
+    },
+  );
+
+  it(
+    'no log yet for the date: {date, blocks: []}, date defaulted to today ' +
+      '(pins mcp.ts get_log: `date ?? toIso(now()).slice(0, 10)`; reverted to `date ?? null`, ' +
+      '`date` would come back null instead of today)',
+    async () => {
+      const r = await rig();
+      const log = await r.json<{ date: string | null; blocks: unknown[] }>('get_log', {});
+      expect(log).toEqual({ date: '2026-09-02', blocks: [] });
+    },
+  );
+
+  it(
+    "last returns that seat's NEWEST block anywhere in the log, or nulls when it has none " +
+      '(pins mcp.ts get_log: `const res = await store.lastRepoLogBlock(last);`; reverted to ' +
+      'always null, the second call below would still come back {date: null, block: null})',
+    async () => {
+      const r = await rig();
+      const miss = await r.json<{ date: null; block: null }>('get_log', { last: 'ghost' });
+      expect(miss).toEqual({ date: null, block: null });
+      await r.json('append_repo_log', { seat: 'claude/p8-3', text: 'landed' });
+      const found = await r.json<{ date: string; block: { text: string } }>('get_log', {
+        last: 'claude/p8-3',
+      });
+      expect(found.date).toBe('2026-09-02');
+      expect(found.block.text).toBe('landed');
+    },
+  );
+
+  it(
+    'last is exclusive with date/seat ' +
+      '(pins mcp.ts get_log: `if (date !== undefined || seat !== undefined) { return fail(...) }`; ' +
+      'reverted, this call would not error)',
+    async () => {
+      const r = await rig();
+      const res = await r.call('get_log', { last: 'claude/p8-3', date: '2026-09-02' });
+      expect(res.isError).toBe(true);
+      expect(textOf(res)).toBe('last is exclusive with date/seat');
+    },
+  );
+});
+
+describe('repoboard mcp: get_seat (RCB-146)', () => {
+  it(
+    'returns the same cold-start bundle `seat <name> --json` prints ' +
+      '(pins mcp.ts get_seat: `async ({ name }) => ok(await store.seatBundle(name))`; reverted ' +
+      'to a bare `ok({})`, every field below would be missing)',
+    async () => {
+      const r = await rig({ 'RB-1.md': cardText('RB-1', 'todo') });
+      const bundle = await r.json<{
+        name: string;
+        nextCard: { id: string } | null;
+        solo: boolean;
+        openDecisions: unknown[];
+      }>('get_seat', { name: 'claude/builder' });
+      expect(bundle.name).toBe('claude/builder');
+      expect(bundle.nextCard?.id).toBe('RB-1');
+      expect(bundle.solo).toBe(true); // no SEATS section written yet
+      expect(bundle.openDecisions).toEqual([]);
+    },
+  );
+});
+
+describe('repoboard mcp: record_gate / get_gate (RCB-146)', () => {
+  it(
+    'get_gate before anything is recorded: every check null, same shape `gate show --json` prints ' +
+      '(pins mcp.ts get_gate: `async () => ok(await loadGateHealth(store.root))`; reverted to a ' +
+      'bare `ok({})`, `checks` below would be missing, not null)',
+    async () => {
+      const r = await rig();
+      const gate = await r.json<{
+        checks: Record<string, unknown>;
+        ledger: string | null;
+        errors: unknown[];
+      }>('get_gate');
+      expect(gate.checks).toEqual({ tests: null, typecheck: null, lint: null, build: null });
+      expect(gate.ledger).toBeNull();
+      expect(gate.errors).toEqual([]);
+    },
+  );
+
+  it(
+    'record_gate appends one JSONL line; get_gate then reflects the newest result per check ' +
+      '(pins repo-health.ts recordGate: `await appendFile(path, ...)`; reverted to a no-op, ' +
+      'gate.jsonl below would stay absent and get_gate would still report null)',
+    async () => {
+      const r = await rig();
+      const rec = await r.json<{ as: string; sha: string | null }>('record_gate', {
+        as: 'claude/builder',
+        typecheck: 0,
+        lint: 0,
+      });
+      expect(rec.as).toBe('claude/builder');
+      expect(rec.sha).toBeNull(); // the temp fixture root is not a git repo
+      const ledgerText = await readFile(join(r.repo.root, '.repoboard', 'gate.jsonl'), 'utf8');
+      expect(ledgerText.trim().split('\n')).toHaveLength(1);
+      const gate = await r.json<{
+        checks: { typecheck: { ok: boolean; value: string } | null; tests: unknown };
+      }>('get_gate');
+      expect(gate.checks.typecheck).toMatchObject({ ok: true, value: 'exit 0' });
+      expect(gate.checks.tests).toBeNull();
+    },
+  );
+
+  it(
+    'passed/skipped without failed is refused (RCB-116 parity), nothing written ' +
+      '(pins repo-health.ts recordGate: `if (testsGiven && input.failed === undefined) throw ' +
+      'new Error(...)`; reverted, this call would succeed and write a line)',
+    async () => {
+      const r = await rig();
+      const res = await r.call('record_gate', { as: 'claude/builder', passed: 5, skipped: 1 });
+      expect(res.isError).toBe(true);
+      expect(textOf(res)).toContain('--failed <n>');
+      const ledger = await readFile(join(r.repo.root, '.repoboard', 'gate.jsonl'), 'utf8').catch(
+        () => null,
+      );
+      expect(ledger).toBeNull();
+    },
+  );
+
+  it(
+    'no check given at all is refused ' +
+      '(pins repo-health.ts recordGate: the final `if (!hasTests && input.typecheck === ' +
+      'undefined && ...) throw new Error(...)`; reverted, this call would succeed with an ' +
+      'all-null record)',
+    async () => {
+      const r = await rig();
+      const res = await r.call('record_gate', { as: 'claude/builder' });
+      expect(res.isError).toBe(true);
+      expect(textOf(res)).toContain('at least one check');
+    },
+  );
+});
+
+describe('repoboard mcp: get_state ownerQueue, now card-query.ts’s shared function (RCB-146)', () => {
+  it(
+    'ownerQueue still filters to only OPEN decisions — a DECIDED card never reappears ' +
+      '(pins card-query.ts ownerQueue: `.filter((c) => needsDecision(c))`; reverted to no ' +
+      'filter, RB-2 — asked AND already decided — would reappear in ownerQueue below)',
+    async () => {
+      const r = await rig({
+        'RB-1.md': cardText('RB-1', 'todo'),
+        'RB-2.md': cardText('RB-2', 'todo'),
+      });
+      await r.json('set_state_section', { section: 'LIVE', body: 'x' });
+      await r.json('ask_owner', {
+        id: 'RB-1',
+        question: 'ship?',
+        options: [{ letter: 'A', text: 'yes' }],
+      });
+      await r.json('ask_owner', { id: 'RB-2', question: 'merge?' });
+      await r.json('record_decision', { id: 'RB-2', words: 'later' });
+      const state = await r.json<{ ownerQueue: Array<{ id: string }> }>('get_state');
+      expect(state.ownerQueue.map((q) => q.id)).toEqual(['RB-1']);
+    },
+  );
 });

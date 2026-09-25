@@ -25,7 +25,7 @@ docs/REFERENCE.md §7, §8.
 Use the surfaces in the order below. Per-operation costs measured 2026-09-03, standing costs
 re-measured 2026-09-22 (bytes on the wire, ≈4 bytes per token): the CLI costs ~40 B in and 33 B
 out per move with no standing cost beyond reading this page once (20.9 KB); MCP
-costs 22.2 KB (25 tools, 2026-09-24, RCB-137) of tool schema per turn where the harness loads it, ~80 B per call and
+costs 26.2 KB (29 tools, 2026-09-25, RCB-146) of tool schema per turn where the harness loads it, ~80 B per call and
 ~200 B per result; a direct `sed` is ~60 B but a correct move also bumps `updated` and appends a
 log line. The CLI is cheapest per operation; MCP pays off when you have no shell or your harness
 loads schemas on demand; the file edit always works.
@@ -141,11 +141,14 @@ launched from somewhere else. Tools: `list_cards`, `get_card`, `create_card`, `m
 (P8.1, docs/REFERENCE.md §1), `take_lease`, `release_lease`, `list_leases`, `add_window`, `check_window`
 (P8.2, docs/REFERENCE.md §2),
 `get_state`, `set_state_section`, `append_repo_log`, `check` (P8.3, docs/REFERENCE.md §3),
+`get_log`, `get_seat`, `record_gate`, `get_gate` (RCB-146: MCP parity with `log show`/`log --last`,
+`seat <name>`, `gate record`/`gate show`; the seat read is read only, seat writes stay CLI-only),
 `cost` (P8.4, docs/REFERENCE.md §4), `list_systems`, `get_system` (RCB-97, docs/REFERENCE.md §7),
 `archive_cards`, `sync_issues` (P8.5, docs/REFERENCE.md §5).
-All 25 tools' schema, via client.listTools() summing each tool's own JSON.stringify: **22,769 B** (this repo's board, seat re-measure)
-(2026-09-24, RCB-137: CARD_INTRO moved out of tool descriptions into the server instructions alone; was
-31,301 B, 2026-09-22, RCB-100; before that 26,401 B for 23 tools, RCB-70).
+All 29 tools' schema, via client.listTools() summing each tool's own JSON.stringify: **26,155 B**
+(2026-09-25, RCB-146, `repoboard mcp` against a fresh init and against this repo's board, the same bytes; was 22,769 B for 25 tools, 2026-09-24,
+RCB-137 — CARD_INTRO moved out of tool descriptions into the server instructions alone; 31,301 B,
+2026-09-22, RCB-100; before that 26,401 B for 23 tools, RCB-70).
 Call `list_cards` or `board_summary` first: they
 are cheap and return the column ids. `list_cards` takes optional `status`, `assignee`, `label`
 filters (exact match, AND) and `full: true` to include bodies; without it, rows are the same

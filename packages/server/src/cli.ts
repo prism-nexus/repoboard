@@ -5,7 +5,7 @@
  */
 import { spawn } from 'node:child_process';
 import { realpathSync } from 'node:fs';
-import { appendFile, mkdir, readFile, stat, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, stat, writeFile } from 'node:fs/promises';
 import { dirname, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { type ParseArgsConfig, parseArgs } from 'node:util';
@@ -22,7 +22,6 @@ import {
   type DecisionOption,
   dailyLogHeader,
   defaultBoardConfig,
-  findColumn,
   findSeatLine,
   formatCostTable,
   formatDetectReport,
@@ -59,6 +58,7 @@ import {
   trimLandings,
 } from '@repoboard/core';
 import * as YAML from 'yaml';
+import { filterCards, ownerQueue } from './card-query.js';
 import { gatherCost } from './cost.js';
 import { distStaleness } from './dist-stale.js';
 import { type RunningServer, startServer } from './http.js';
@@ -75,8 +75,7 @@ import {
 } from './mcp.js';
 import { formatResolvedRefs, resolveCardRefs, resolveRefSpec } from './refs.js';
 import { assignRepoKeys, hasBoardDir } from './repo-context.js';
-import { gateLedgerPath, loadGateHealth } from './repo-health.js';
-import { git } from './scanner.js';
+import { loadGateHealth, recordGate } from './repo-health.js';
 import { openStore } from './store.js';
 import { runDetect } from './systems-detect.js';
 import { systemTests } from './systems-tests.js';
@@ -874,11 +873,6 @@ async function cmdCardNote(args: string[], io: CliIO): Promise<number> {
   return 0;
 }
 
-function idNumber(id: string): number {
-  const m = /-(\d+)$/.exec(id);
-  return m?.[1] ? Number.parseInt(m[1], 10) : Number.MAX_SAFE_INTEGER;
-}
-
 /**
  * Fixed-width table: id, status, assignee, [size,] [decision,] [blocked,] title. The `DECISION`
  * column (a `?` for an open decision) only appears when at least one listed card has one, and
@@ -965,24 +959,16 @@ async function cmdCardList(args: string[], io: CliIO): Promise<number> {
   const all = store.list();
   const parentId = values.parent;
   let cards: Card[];
-  if (parentId !== undefined) {
-    if (!all.some((c) => c.id === parentId)) throw new UserError(`unknown card "${parentId}"`);
-    cards = stepsOf(parentId, all); // RCB-104: phase order — never re-sorted below
-  } else {
-    cards = all;
-  }
-  if (values.status !== undefined) cards = cards.filter((c) => c.status === values.status);
-  if (size !== undefined) cards = cards.filter((c) => c.size === size);
-  if (values['needs-decision']) cards = cards.filter((c) => needsDecision(c));
-  if (values.unblocked) {
-    cards = cards.filter(
-      (c) =>
-        findColumn(store.config, c.status)?.done !== true &&
-        blockedReason(c, all, store.config) === null,
-    );
-  }
-  if (parentId === undefined) {
-    cards = cards.slice().sort((a, b) => idNumber(a.id) - idNumber(b.id) || (a.id < b.id ? -1 : 1));
+  try {
+    cards = filterCards(all, store.config, {
+      status: values.status,
+      size,
+      needsDecision: values['needs-decision'],
+      parent: parentId,
+      unblocked: values.unblocked,
+    });
+  } catch (e) {
+    throw new UserError((e as Error).message);
   }
   if (values.json) {
     // Compact rows by default (K6): bodies only with --full. Same shape as MCP list_cards.
@@ -1391,16 +1377,19 @@ async function cmdState(args: string[], io: CliIO): Promise<number> {
     return 0;
   }
   if (values.json) {
-    // RCB-144: OWNER QUEUE is generated, not stored — same computation as MCP's get_state
-    // (mcp.ts), reused here as data rather than parsed back out of rendered text.
-    const openCards = store.list().filter((c) => needsDecision(c));
-    const ownerQueue = openCards.map((c) => ({
-      id: c.id,
-      question: c.decision?.question ?? '',
-      options: c.decision?.options ?? [],
-    }));
+    // RCB-144/RCB-146: OWNER QUEUE is generated, not stored — same `ownerQueue` (card-query.ts)
+    // MCP's get_state calls, reused here as data rather than parsed back out of rendered text.
     io.stdout.write(
-      `${JSON.stringify({ stamp: doc.stamp, actor: doc.actor, sections: doc.sections, ownerQueue }, null, 2)}\n`,
+      `${JSON.stringify(
+        {
+          stamp: doc.stamp,
+          actor: doc.actor,
+          sections: doc.sections,
+          ownerQueue: ownerQueue(store.list()),
+        },
+        null,
+        2,
+      )}\n`,
     );
     return 0;
   }
@@ -1717,14 +1706,12 @@ function parseTestsFlag(v: string | undefined): { passed: number | null; skipped
 
 /**
  * RCB-112 A: `repoboard gate record --as <seat> [--tests p|s --failed n] [--files n]
- * [--typecheck n] [--lint n] [--build n] [--sha s] [--note t]` — one JSONL line appended to the
- * gate ledger (`gateLedgerPath`). `sha` defaults to `git rev-parse --short HEAD` (null outside a
- * git repo, or with no commits); CLAUDE.md non-negotiable 2: this NEVER runs the checks it
- * records — it only writes down a number the caller already produced. No check given (none of
- * `--tests`/`--typecheck`/`--lint`/`--build`) is a usage error: exit 1, nothing written.
- * `--tests` without `--failed` is also a usage error (RCB-116): a recorded run with an unstated
- * failed count reads as `tests: FAIL` (null = unknown = not ok), which is not what the caller
- * meant to write down.
+ * [--typecheck n] [--lint n] [--build n] [--sha s] [--note t]` — flag parsing only; the append
+ * itself (validation, `sha` default, the JSONL line) is `recordGate` (RCB-146, `repo-health.ts`),
+ * shared with MCP `record_gate`. No check given (none of `--tests`/`--typecheck`/`--lint`/
+ * `--build`) is a usage error: exit 1, nothing written. `--tests` without `--failed` is also a
+ * usage error (RCB-116): a recorded run with an unstated failed count reads as `tests: FAIL`
+ * (null = unknown = not ok), which is not what the caller meant to write down.
  */
 async function cmdGateRecord(args: string[], io: CliIO): Promise<number> {
   const { values } = parse('gate', args, {
@@ -1744,47 +1731,33 @@ async function cmdGateRecord(args: string[], io: CliIO): Promise<number> {
   const failed = parseIntFlag('failed', values.failed);
   const files = parseIntFlag('files', values.files);
   const { passed, skipped } = parseTestsFlag(values.tests);
-  if (values.tests !== undefined && failed === null) {
-    throw new UserError('gate record --tests needs --failed <n> (0 means a clean run)');
-  }
-  const hasTests = values.tests !== undefined || failed !== null || files !== null;
   const typecheck = parseIntFlag('typecheck', values.typecheck);
   const lint = parseIntFlag('lint', values.lint);
   const build = parseIntFlag('build', values.build);
 
-  if (!hasTests && typecheck === null && lint === null && build === null) {
-    throw new UserError(
-      'gate record needs at least one check: --tests, --typecheck, --lint or --build',
-    );
-  }
-
   const root = await requireRoot(io);
-  let sha = values.sha ?? null;
-  if (sha === null) {
-    try {
-      const out = await git(root, ['rev-parse', '--short', 'HEAD']);
-      const trimmed = out.trim();
-      sha = trimmed.length > 0 ? trimmed : null;
-    } catch {
-      sha = null;
-    }
+  let record: GateRecord;
+  try {
+    record = await recordGate(
+      root,
+      {
+        as: values.as,
+        passed: passed ?? undefined,
+        skipped: skipped ?? undefined,
+        failed: failed ?? undefined,
+        files: files ?? undefined,
+        typecheck: typecheck ?? undefined,
+        lint: lint ?? undefined,
+        build: build ?? undefined,
+        sha: values.sha,
+        note: values.note,
+      },
+      io.now?.() ?? new Date(),
+    );
+  } catch (e) {
+    throw new UserError((e as Error).message);
   }
-
-  const record: GateRecord = {
-    at: toIso(io.now?.() ?? new Date()),
-    sha,
-    as: values.as,
-    tests: hasTests ? { passed, skipped, failed, files } : null,
-    typecheck,
-    lint,
-    build,
-    note: values.note ?? null,
-  };
-
-  const path = await gateLedgerPath(root);
-  await mkdir(dirname(path), { recursive: true });
-  await appendFile(path, `${JSON.stringify(record)}\n`, 'utf8');
-  io.stdout.write(`recorded ${values.as} @ ${record.at}${sha ? ` (${sha})` : ''}\n`);
+  io.stdout.write(`recorded ${values.as} @ ${record.at}${record.sha ? ` (${record.sha})` : ''}\n`);
   return 0;
 }
 

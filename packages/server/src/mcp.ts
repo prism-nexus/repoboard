@@ -22,11 +22,14 @@ import {
   renderState,
   resolveOlderThan,
   type StateSectionName,
+  toIso,
   type Window,
 } from '@repoboard/core';
 import { z } from 'zod';
+import { filterCards, ownerQueue } from './card-query.js';
 import { applySyncPlan, computeSyncPlan } from './issues.js';
 import { resolveCardRefs, resolveRefSpec } from './refs.js';
+import { loadGateHealth, recordGate } from './repo-health.js';
 import { type CardStore, openStore } from './store.js';
 import { systemTests } from './systems-tests.js';
 import { VERSION } from './version.js';
@@ -51,6 +54,10 @@ export const MCP_TOOL_NAMES = [
   'get_state',
   'set_state_section',
   'append_repo_log',
+  'get_log',
+  'get_seat',
+  'record_gate',
+  'get_gate',
   'check',
   'cost',
   'list_systems',
@@ -228,12 +235,21 @@ export function createMcpServer(opts: McpServerOptions): McpServer {
           .describe(`Only cards in this column id (one of: ${columnIds()}).`),
         assignee: z.string().optional().describe('Only cards whose assignee equals this string.'),
         label: z.string().optional().describe('Only cards whose labels include this label.'),
+        size: SIZE.optional().describe('Only cards of this size.'),
         needsDecision: z
           .boolean()
           .optional()
           .describe(
             'Only cards with an OPEN decision (asked, not yet answered) — the owner queue.',
           ),
+        parent: z
+          .string()
+          .optional()
+          .describe("RCB-68: only that card's STEPS, in phase order (not id order)."),
+        unblocked: z
+          .boolean()
+          .optional()
+          .describe('With parent: keep only its not-done, not-blocked steps.'),
         full: z
           .boolean()
           .optional()
@@ -241,13 +257,31 @@ export function createMcpServer(opts: McpServerOptions): McpServer {
       },
       annotations: { readOnlyHint: true },
     },
-    ({ status, assignee, label, needsDecision: needsDecisionFilter, full }) => {
-      let cards = store.list();
-      if (status !== undefined) cards = cards.filter((c) => c.status === status);
-      if (assignee !== undefined) cards = cards.filter((c) => c.assignee === assignee);
-      if (label !== undefined) cards = cards.filter((c) => (c.labels ?? []).includes(label));
-      if (needsDecisionFilter) cards = cards.filter((c) => needsDecision(c));
+    ({
+      status,
+      assignee,
+      label,
+      size,
+      needsDecision: needsDecisionFilter,
+      parent,
+      unblocked,
+      full,
+    }) => {
       const all = store.list();
+      let cards: Card[];
+      try {
+        cards = filterCards(all, store.config, {
+          status,
+          assignee,
+          label,
+          size,
+          needsDecision: needsDecisionFilter,
+          parent,
+          unblocked,
+        });
+      } catch (e) {
+        return fail((e as Error).message);
+      }
       const rows: readonly unknown[] = full ? cards : cards.map((c) => toRow(c, all, store.config));
       return { content: [{ type: 'text', text: formatRows(rows) }] };
     },
@@ -709,17 +743,19 @@ export function createMcpServer(opts: McpServerOptions): McpServer {
     () => {
       const doc = store.state();
       if (!doc) return ok({ stamp: null, actor: null, sections: null, ownerQueue: [], text: null });
-      const openCards = store.list().filter((c) => needsDecision(c));
-      const ownerQueue = openCards.map((c) => ({
-        id: c.id,
-        question: c.decision?.question ?? '',
-        options: c.decision?.options ?? [],
-      }));
+      const all = store.list();
+      const openCards = all.filter((c) => needsDecision(c));
       const text = renderState(doc.sections, openCards, {
         now: new Date(Date.parse(doc.stamp)),
         actor: doc.actor,
       });
-      return ok({ stamp: doc.stamp, actor: doc.actor, sections: doc.sections, ownerQueue, text });
+      return ok({
+        stamp: doc.stamp,
+        actor: doc.actor,
+        sections: doc.sections,
+        ownerQueue: ownerQueue(all),
+        text,
+      });
     },
   );
 
@@ -764,6 +800,105 @@ export function createMcpServer(opts: McpServerOptions): McpServer {
       if (!res.ok) return fail(res.error);
       return ok({ date: res.date, block: res.block });
     },
+  );
+
+  server.registerTool(
+    'get_log',
+    {
+      title: "Read a day's log, or one seat's newest block",
+      description:
+        "Reads a day's log (default today): {date, blocks: [{seat, ts, title, text}]} — same " +
+        'object `log show --json` prints. `last` (a seat name, exclusive with date/seat) ' +
+        "instead returns that seat's NEWEST block anywhere in the log: {date, block}, or nulls " +
+        'when it has none.',
+      inputSchema: {
+        date: z.string().optional().describe('YYYY-MM-DD. Default: today.'),
+        seat: z.string().optional().describe("Only this seat's blocks."),
+        last: z.string().optional().describe('A seat name; exclusive with date/seat.'),
+      },
+      annotations: { readOnlyHint: true },
+    },
+    async ({ date, seat, last }) => {
+      if (last !== undefined) {
+        if (date !== undefined || seat !== undefined) {
+          return fail('last is exclusive with date/seat');
+        }
+        const res = await store.lastRepoLogBlock(last);
+        return ok(res ? { date: res.date, block: res.block } : { date: null, block: null });
+      }
+      const log = await store.log(date);
+      if (!log) return ok({ date: date ?? toIso(now()).slice(0, 10), blocks: [] });
+      if (seat !== undefined) {
+        const wanted = seat.toUpperCase();
+        return ok({ date: log.date, blocks: log.blocks.filter((b) => b.seat === wanted) });
+      }
+      return ok({ date: log.date, blocks: log.blocks });
+    },
+  );
+
+  server.registerTool(
+    'get_seat',
+    {
+      title: "Get one seat's cold-start bundle",
+      description:
+        'The cold-start bundle `seat <name> --json` prints: its SEATS line, its last log ' +
+        "block, the coordinator's, its next todo card and the open decisions. Read only — " +
+        '--up/--down/--update stay CLI-only.',
+      inputSchema: {
+        name: z.string().min(1).describe('Seat name, e.g. claude/web-agent.'),
+      },
+      annotations: { readOnlyHint: true },
+    },
+    async ({ name }) => ok(await store.seatBundle(name)),
+  );
+
+  server.registerTool(
+    'record_gate',
+    {
+      title: 'Record a gate check result',
+      description:
+        "Appends one line to the gate ledger — the SEAT'S OWN RECORD of a check it already " +
+        'ran, never a re-run. Needs at least one of tests (passed/skipped/failed/files), ' +
+        'typecheck, lint, build; passed/skipped needs failed too (0 means a clean run). sha ' +
+        'defaults to `git rev-parse --short HEAD` (null outside a git repo).',
+      inputSchema: {
+        as: z.string().min(1).describe('Who ran it, e.g. claude/web-agent.'),
+        passed: z.number().int().optional(),
+        skipped: z.number().int().optional(),
+        failed: z.number().int().optional().describe('Required with passed/skipped; 0 = clean.'),
+        files: z.number().int().optional(),
+        typecheck: z.number().int().optional(),
+        lint: z.number().int().optional(),
+        build: z.number().int().optional(),
+        sha: z.string().optional().describe('Default: git rev-parse --short HEAD.'),
+        note: z.string().optional(),
+      },
+    },
+    async ({ as, passed, skipped, failed, files, typecheck, lint, build, sha, note }) => {
+      try {
+        const record = await recordGate(
+          store.root,
+          { as, passed, skipped, failed, files, typecheck, lint, build, sha, note },
+          now(),
+        );
+        return ok(record);
+      } catch (e) {
+        return fail((e as Error).message);
+      }
+    },
+  );
+
+  server.registerTool(
+    'get_gate',
+    {
+      title: 'Get the gate ledger',
+      description:
+        'The newest recorded result per check (tests, typecheck, lint, build) — the same ' +
+        'object `gate show --json` prints. A check with nothing recorded yet is null.',
+      inputSchema: {},
+      annotations: { readOnlyHint: true },
+    },
+    async () => ok(await loadGateHealth(store.root)),
   );
 
   server.registerTool(

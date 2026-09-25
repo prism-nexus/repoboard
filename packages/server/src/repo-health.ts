@@ -7,11 +7,12 @@
  * RCB-113: each coverage band line gains `· <measured.line>` — source B (the gate's own coverage
  * report) beside source A (the static test-file count), same corpus, same null-state discipline.
  */
-import { readFile } from 'node:fs/promises';
-import { join, relative, sep } from 'node:path';
+import { appendFile, mkdir, readFile } from 'node:fs/promises';
+import { dirname, join, relative, sep } from 'node:path';
 import {
   byWho,
   type CommitRow,
+  type GateRecord,
   latestChecks,
   parseCommitLog,
   parseGateLedger,
@@ -33,6 +34,91 @@ import { loadTestCorpus, systemTests } from './systems-tests.js';
 export async function gateLedgerPath(root: string): Promise<string> {
   const dir = (await hasLocal(root)) ? localDir(root) : join(root, '.repoboard');
   return join(dir, 'gate.jsonl');
+}
+
+/** RCB-146: `gate record`'s own input — the same shape both the CLI's already-parsed flags and
+ * MCP `record_gate`'s arguments boil down to. `undefined` means "not given"; the distinction
+ * between `--tests` given and `--failed`/`--files` given alone matters for the validation below
+ * (only `passed`/`skipped` — `--tests` — requires `failed`), so it is kept explicit rather than
+ * folded into one `tests` object. */
+export interface GateRecordInput {
+  as: string;
+  passed?: number;
+  skipped?: number;
+  failed?: number;
+  files?: number;
+  typecheck?: number;
+  lint?: number;
+  build?: number;
+  sha?: string;
+  note?: string;
+}
+
+/**
+ * RCB-146: `cmdGateRecord`'s body, moved here after flag parsing — the SAME function MCP's
+ * `record_gate` calls, so a CLI-recorded line and an MCP-recorded line can never disagree about
+ * what counts as a valid one. CLAUDE.md non-negotiable 2: this NEVER runs the checks it
+ * records — it only writes down a number the caller already produced. `sha` defaults to `git
+ * rev-parse --short HEAD` (null outside a git repo, or with no commits). Throws a plain `Error`
+ * (never a CLI `UserError`) with the CLI's own wording — unchanged from `cmdGateRecord` before
+ * this move, since no other wording was asked for: "needs at least one check" when none of
+ * tests/typecheck/lint/build is given; "needs --failed <n>" when `passed`/`skipped` (`--tests`) is
+ * given without `failed`. Appends one JSONL line to `gateLedgerPath` and returns it.
+ */
+export async function recordGate(
+  root: string,
+  input: GateRecordInput,
+  now: Date,
+): Promise<GateRecord> {
+  const testsGiven = input.passed !== undefined || input.skipped !== undefined;
+  if (testsGiven && input.failed === undefined) {
+    throw new Error('gate record --tests needs --failed <n> (0 means a clean run)');
+  }
+  const hasTests = testsGiven || input.failed !== undefined || input.files !== undefined;
+  if (
+    !hasTests &&
+    input.typecheck === undefined &&
+    input.lint === undefined &&
+    input.build === undefined
+  ) {
+    throw new Error(
+      'gate record needs at least one check: --tests, --typecheck, --lint or --build',
+    );
+  }
+
+  let sha = input.sha ?? null;
+  if (sha === null) {
+    try {
+      const out = await git(root, ['rev-parse', '--short', 'HEAD']);
+      const trimmed = out.trim();
+      sha = trimmed.length > 0 ? trimmed : null;
+    } catch {
+      sha = null;
+    }
+  }
+
+  const record: GateRecord = {
+    at: toIso(now),
+    sha,
+    as: input.as,
+    tests: hasTests
+      ? {
+          passed: input.passed ?? null,
+          skipped: input.skipped ?? null,
+          failed: input.failed ?? null,
+          files: input.files ?? null,
+        }
+      : null,
+    typecheck: input.typecheck ?? null,
+    lint: input.lint ?? null,
+    build: input.build ?? null,
+    note: input.note ?? null,
+  };
+
+  const path = await gateLedgerPath(root);
+  await mkdir(dirname(path), { recursive: true });
+  await appendFile(path, `${JSON.stringify(record)}\n`, 'utf8');
+  return record;
 }
 
 function repoRelative(root: string, path: string): string {

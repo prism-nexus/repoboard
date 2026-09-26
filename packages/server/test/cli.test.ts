@@ -5,6 +5,7 @@ import { basename, dirname, join } from 'node:path';
 import { promisify } from 'node:util';
 import {
   type AnsweredDecisionRow,
+  boardDisplayName,
   type Card,
   defaultBoardConfig,
   parseBoard,
@@ -59,6 +60,13 @@ async function freshRepo(cards: Record<string, string> = {}): Promise<string> {
   const repo = await makeTempRepoboard(cards);
   dirs.push(repo.root);
   return repo.root;
+}
+
+/** RCB-160: `freshRepo`'s board.yml has no `name:`, so every producer prefixes its output with
+ *  `boardDisplayName`'s OWN fallback — the temp dir's own random basename. Tests that pin a
+ *  producer's exact text compute it with this ONE call. */
+function repoTagFor(root: string): string {
+  return boardDisplayName(null, root);
 }
 
 describe('repoboard init', () => {
@@ -2238,6 +2246,7 @@ describe('repoboard state --trim-landings (RCB-92)', () => {
 
   it("keeps the newest n, archives the rest to today's log, and check stays clean", async () => {
     const root = await freshRepo({});
+    const repoTag = repoTagFor(root);
     await repoboard(root, 'init', '--practices');
     await repoboardStdin(root, THREE_ENTRIES, 'state', '--set-section', 'LAST-LANDINGS', '--stdin');
 
@@ -2282,7 +2291,7 @@ describe('repoboard state --trim-landings (RCB-92)', () => {
 
     const shown = await repoboard(root, 'log', 'show');
     expect(shown.out).toContain(
-      '##### TESTER 2026-09-02T22:41:10Z: LAST LANDINGS archived: 2 entries beyond the newest 1',
+      `##### [${repoTag}] TESTER 2026-09-02T22:41:10Z: LAST LANDINGS archived: 2 entries beyond the newest 1`,
     );
     expect(shown.out).toContain('1. Middle landing here');
     expect(shown.out).toContain('0. Oldest landing here');
@@ -2290,7 +2299,7 @@ describe('repoboard state --trim-landings (RCB-92)', () => {
     // The archived block's TEXT, verbatim — entries 2-3 exactly, not just present somewhere.
     const lastBlock = await repoboard(root, 'log', '--last', 'tester');
     expect(lastBlock.out).toBe(
-      '##### TESTER 2026-09-02T22:41:10Z: LAST LANDINGS archived: 2 entries beyond the newest 1' +
+      `##### [${repoTag}] TESTER 2026-09-02T22:41:10Z: LAST LANDINGS archived: 2 entries beyond the newest 1` +
         '\n\n1. Middle landing here\n\n0. Oldest landing here\n',
     );
 
@@ -2435,6 +2444,7 @@ describe('repoboard state --trim-landings --archive (RCB-132)', () => {
       'on the second, log untouched, pointer names <path>',
     async () => {
       const root = await freshRepo({});
+      const repoTag = repoTagFor(root);
       await repoboard(root, 'init', '--practices');
       await repoboardStdin(root, TWO_ENTRIES, 'state', '--set-section', 'LAST-LANDINGS', '--stdin');
 
@@ -2455,7 +2465,7 @@ describe('repoboard state --trim-landings --archive (RCB-132)', () => {
       const archived = await readFile(archivePath, 'utf8');
       expect(archived.startsWith('# LAST LANDINGS archive\n\n')).toBe(true);
       expect(archived).toContain(
-        '##### TESTER 2026-09-02T22:41:10Z: LAST LANDINGS archived: 2 entries beyond the newest 0',
+        `##### [${repoTag}] TESTER 2026-09-02T22:41:10Z: LAST LANDINGS archived: 2 entries beyond the newest 0`,
       );
       expect(archived).toContain('1. Newest landing here');
       expect(archived).toContain('0. Oldest landing here');
@@ -2495,7 +2505,7 @@ describe('repoboard state --trim-landings --archive (RCB-132)', () => {
       const archived2 = await readFile(archivePath, 'utf8');
       expect(archived2.startsWith(archived.replace(/\n+$/, ''))).toBe(true);
       expect(archived2).toContain('2. Another landing');
-      expect(archived2).toContain('##### TESTER2');
+      expect(archived2).toContain(`##### [${repoTag}] TESTER2`);
     },
   );
 
@@ -2534,6 +2544,7 @@ describe('repoboard state --trim-landings --archive (RCB-132)', () => {
 describe('repoboard log', () => {
   it('append creates the day file, then appends a second block', async () => {
     const root = await freshRepo({});
+    const repoTag = repoTagFor(root);
     const first = await repoboard(
       root,
       'log',
@@ -2546,16 +2557,16 @@ describe('repoboard log', () => {
     expect(first.code).toBe(0);
     expect(first.out).toBe('logged 2026-09-02 claude/p8-3\n');
     const shown = await repoboard(root, 'log', 'show');
-    expect(shown.out).toContain('##### CLAUDE/P8-3 2026-09-02T22:41:10Z: kickoff');
+    expect(shown.out).toContain(`##### [${repoTag}] CLAUDE/P8-3 2026-09-02T22:41:10Z: kickoff`);
     expect(shown.out).toContain('first entry');
 
     await repoboard(root, 'log', '--as', 'ops', 'second entry');
     const shown2 = await repoboard(root, 'log', 'show');
-    expect(shown2.out).toContain('##### OPS');
+    expect(shown2.out).toContain(`##### [${repoTag}] OPS`);
     expect(shown2.out).toContain('second entry');
     // The FIRST block must still be there — an append that rewrote the file with only the new
     // block would still pass every assertion above (C3's own perturbation shape).
-    expect(shown2.out).toContain('##### CLAUDE/P8-3');
+    expect(shown2.out).toContain(`##### [${repoTag}] CLAUDE/P8-3`);
     expect(shown2.out).toContain('kickoff');
     expect(shown2.out).toContain('first entry');
   });
@@ -2577,7 +2588,7 @@ describe('repoboard log', () => {
     expect(opsOnly.out).not.toContain('builder entry');
   });
 
-  it('show --json prints {date, blocks: [{seat, ts, title, text}]}; no log for the date is {date, blocks: []} (RCB-144)', async () => {
+  it('show --json prints {date, blocks: [{repo, seat, ts, title, text}]}; no log for the date is {date, blocks: []} (RCB-144)', async () => {
     const root = await freshRepo({});
     await repoboard(root, 'log', '--as', 'ops', '--title', 'kickoff', 'ops entry');
     await repoboard(root, 'log', '--as', 'builder', 'builder entry');
@@ -2588,7 +2599,9 @@ describe('repoboard log', () => {
     // Pins: `io.stdout.write(`${JSON.stringify({ date: log.date, blocks: log.blocks }, ...)`.
     expect(parsed.date).toBe('2026-09-02');
     expect(parsed.blocks).toHaveLength(2);
+    // RCB-160: a written block carries its board's name, so the JSON carries it as `repo`.
     expect(parsed.blocks[0]).toEqual({
+      repo: repoTagFor(root),
       seat: 'OPS',
       ts: '2026-09-02T22:41:10Z',
       title: 'kickoff',
@@ -2778,12 +2791,13 @@ describe('repoboard log', () => {
 
   it('--last prints the SECOND builder block, not the first, and not an ops block after it', async () => {
     const root = await freshRepo({});
+    const repoTag = repoTagFor(root);
     await repoboard(root, 'log', '--as', 'builder', 'first builder entry');
     await repoboard(root, 'log', '--as', 'builder', 'second builder entry');
     await repoboard(root, 'log', '--as', 'ops', 'ops entry after both');
     const res = await repoboard(root, 'log', '--last', 'builder');
     expect(res.code).toBe(0);
-    expect(res.out.startsWith('##### BUILDER 2026-09-02T22:41:10Z: ')).toBe(true);
+    expect(res.out.startsWith(`##### [${repoTag}] BUILDER 2026-09-02T22:41:10Z: `)).toBe(true);
     expect(res.out).toContain('second builder entry');
     expect(res.out).not.toContain('first builder entry');
     expect(res.out).not.toContain('ops entry after both');
@@ -2969,6 +2983,7 @@ describe('repoboard seat', () => {
         'openDecisions',
         'owes',
         'ownBlock',
+        'repo',
         'rig',
         'seatsLine',
         'solo',
@@ -3100,6 +3115,7 @@ describe('repoboard seat --up/--down (RCB-58)', () => {
       const root = await freshRepo({});
       await repoboard(root, 'state', '--set-section', 'LIVE', 'x', '--as', 'coordinator');
       await repoboard(root, 'log', '--as', 'builder', 'holding RCB-58');
+      const repoTag = repoTagFor(root);
 
       // Pin the log file's mtime strictly after the STATE.md stamp (`NOW`), deterministically —
       // same technique as store.test.ts's "check aggregates findings" test.
@@ -3126,7 +3142,9 @@ describe('repoboard seat --up/--down (RCB-58)', () => {
       const shown = await repoboard(root, 'seat', 'builder');
       expect(shown.code).toBe(0);
       expect(shown.out).toContain('## SEATS line');
-      expect(shown.out).toContain('- **builder: UP 2026-09-02 22:43Z.** holding RCB-58');
+      expect(shown.out).toContain(
+        `- **[${repoTag}] builder: UP 2026-09-02 22:43Z.** holding RCB-58`,
+      );
 
       const okCheck = await repoboard(root, 'check');
       expect(okCheck.code).toBe(0);
@@ -3136,6 +3154,7 @@ describe('repoboard seat --up/--down (RCB-58)', () => {
 
   it('appends the bullet when the seat has none yet, on a board with no STATE.md at all', async () => {
     const root = await freshRepo({});
+    const repoTag = repoTagFor(root);
     const res = await repoboard(
       root,
       'seat',
@@ -3146,11 +3165,14 @@ describe('repoboard seat --up/--down (RCB-58)', () => {
     expect(res.code).toBe(0);
     expect(res.out).toBe('restamped SEATS ops: DOWN 2026-09-02 22:41Z\n');
     const shown = await repoboard(root, 'seat', 'ops');
-    expect(shown.out).toContain('- **ops: DOWN 2026-09-02 22:41Z.** stood down for the night');
+    expect(shown.out).toContain(
+      `- **[${repoTag}] ops: DOWN 2026-09-02 22:41Z.** stood down for the night`,
+    );
   });
 
   it('--json prints {name, status, stamp, bullet}', async () => {
     const root = await freshRepo({});
+    const repoTag = repoTagFor(root);
     const res = await repoboard(root, 'seat', 'ops', '--json', '--up', 'watching things');
     expect(res.code).toBe(0);
     const parsed = JSON.parse(res.out) as Record<string, unknown>;
@@ -3159,7 +3181,7 @@ describe('repoboard seat --up/--down (RCB-58)', () => {
       name: 'ops',
       status: 'UP',
       stamp: '2026-09-02 22:41Z',
-      bullet: '- **ops: UP 2026-09-02 22:41Z.** watching things',
+      bullet: `- **[${repoTag}] ops: UP 2026-09-02 22:41Z.** watching things`,
     });
   });
 
@@ -3180,6 +3202,7 @@ describe('repoboard seat --up/--down (RCB-58)', () => {
   describe('--up refuses a second UP inside activeWindowMinutes (RCB-87)', () => {
     it('(7) a second --up 5 min later is refused; STATE.md still carries the first bullet', async () => {
       const root = await freshRepo({});
+      const repoTag = repoTagFor(root);
       const first = await repoboardWithClock(root, NOW, 'seat', 'ops', '--up', 'a');
       expect(first.code).toBe(0);
 
@@ -3190,7 +3213,7 @@ describe('repoboard seat --up/--down (RCB-58)', () => {
 
       const state = await readFile(join(root, '.repoboard', 'STATE.md'), 'utf8');
       expect(state).toContain('a');
-      expect(state).not.toContain('- **ops: UP 2026-09-02 22:46Z.** b');
+      expect(state).not.toContain(`- **[${repoTag}] ops: UP 2026-09-02 22:46Z.** b`);
     });
 
     it('(8) a second --up 31 min later is accepted (stale UP, no guard)', async () => {
@@ -3208,6 +3231,7 @@ describe('repoboard seat --up/--down (RCB-58)', () => {
 
     it('(9) --force over a standing UP: accepted, restamps, and audits the old bullet in the log', async () => {
       const root = await freshRepo({});
+      const repoTag = repoTagFor(root);
       const first = await repoboardWithClock(root, NOW, 'seat', 'ops', '--up', 'a');
       expect(first.code).toBe(0);
 
@@ -3224,16 +3248,17 @@ describe('repoboard seat --up/--down (RCB-58)', () => {
       expect(second.code).toBe(0);
 
       const state = await readFile(join(root, '.repoboard', 'STATE.md'), 'utf8');
-      expect(state).toContain('- **ops: UP 2026-09-02 22:46Z.** b');
+      expect(state).toContain(`- **[${repoTag}] ops: UP 2026-09-02 22:46Z.** b`);
 
       const last = await repoboardWithClock(root, fiveLater, 'log', '--last', 'ops');
       expect(last.code).toBe(0);
       expect(last.out).toContain('seat --up --force over a standing UP bullet');
-      expect(last.out).toContain('- **ops: UP 2026-09-02 22:41Z.** a');
+      expect(last.out).toContain(`- **[${repoTag}] ops: UP 2026-09-02 22:41Z.** a`);
     });
 
     it('(10) --down right after an UP is accepted — --down is never guarded', async () => {
       const root = await freshRepo({});
+      const repoTag = repoTagFor(root);
       const up = await repoboardWithClock(root, NOW, 'seat', 'ops', '--up', 'a');
       expect(up.code).toBe(0);
 
@@ -3248,13 +3273,14 @@ describe('repoboard seat --up/--down (RCB-58)', () => {
       expect(down.code).toBe(0);
 
       const state = await readFile(join(root, '.repoboard', 'STATE.md'), 'utf8');
-      expect(state).toContain('- **ops: DOWN 2026-09-02 22:41Z.** x');
+      expect(state).toContain(`- **[${repoTag}] ops: DOWN 2026-09-02 22:41Z.** x`);
     });
   });
 
   describe('--update keeps the stamp (RCB-88)', () => {
     it('(11) --update rewrites the body, keeps the UP stamp byte-for-byte', async () => {
       const root = await freshRepo({});
+      const repoTag = repoTagFor(root);
       const up = await repoboardWithClock(root, NOW, 'seat', 'ops', '--up', 'a');
       expect(up.code).toBe(0);
 
@@ -3264,7 +3290,7 @@ describe('repoboard seat --up/--down (RCB-58)', () => {
       expect(res.out).toBe('updated SEATS ops: UP 2026-09-02 22:41Z kept\n');
 
       const state = await readFile(join(root, '.repoboard', 'STATE.md'), 'utf8');
-      expect(state).toContain('- **ops: UP 2026-09-02 22:41Z.** b');
+      expect(state).toContain(`- **[${repoTag}] ops: UP 2026-09-02 22:41Z.** b`);
       expect(state).not.toContain('22:46Z');
     });
 
@@ -3287,6 +3313,7 @@ describe('repoboard seat --up/--down (RCB-58)', () => {
 
     it('(14) --json --update prints {bullet, name, stamp, status}', async () => {
       const root = await freshRepo({});
+      const repoTag = repoTagFor(root);
       const up = await repoboardWithClock(root, NOW, 'seat', 'ops', '--up', 'a');
       expect(up.code).toBe(0);
 
@@ -3307,7 +3334,7 @@ describe('repoboard seat --up/--down (RCB-58)', () => {
         name: 'ops',
         status: 'UP',
         stamp: '2026-09-02 22:41Z',
-        bullet: '- **ops: UP 2026-09-02 22:41Z.** b',
+        bullet: `- **[${repoTag}] ops: UP 2026-09-02 22:41Z.** b`,
       });
     });
 

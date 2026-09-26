@@ -264,7 +264,8 @@ Usage:
                                         blocks — applied in that order, seat then since then tail;
                                         with any of the three, text output is the formatted
                                         blocks, same as --seat alone; --json prints {date, blocks:
-                                        [{seat, ts, title, text}]}; no log for that date: {date,
+                                        [{repo, seat, ts, title, text}]} (repo null on an
+                                        unprefixed block); no log for that date: {date,
                                         blocks: []} exit 0
   repoboard log --last <seat>           print that seat's newest block, searching back across days
                                         (cold-start: your own seat's last block, then the coordinator's)

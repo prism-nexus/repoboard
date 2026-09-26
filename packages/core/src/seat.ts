@@ -47,6 +47,10 @@ export interface SeatBundleInput {
    *  every `blockedReason`/`gateState` call below defaults to `[]` on its own too, so this whole
    *  card's wiring is a no-op for any caller that never touches it. */
   members?: readonly GateMemberFacts[];
+  /** RCB-160: `boardDisplayName(config, root)`, gathered by the caller (core stays I/O-free) —
+   *  written as a `[repo] ` prefix on the bundle's own header. `null`/absent (a caller that
+   *  gathers none, or every existing test) is inert: the header prints exactly as it does today. */
+  repo?: string | null;
 }
 
 /** Which rule picked `nextCard`, so the render (and a reader) can say so instead of guessing. */
@@ -106,6 +110,8 @@ export interface SeatBundle {
    *  had a second agent on it, so the cold-start bundle drops the sections that are pure noise on
    *  a solo board instead of printing five placeholders in a row. */
   solo: boolean;
+  /** RCB-160: `input.repo ?? null` — never re-derived. `null` prints the header exactly as before. */
+  repo: string | null;
 }
 
 const escapeRegExp = (s: string): string => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -122,14 +128,27 @@ function isCoordinatorSeat(name: string): boolean {
 const LEADING_BOLD = /^\*\*(.+?)\*\*/;
 
 /**
+ * RCB-160: a `[repo] ` prefix written by `formatSeatBullet`/`rewriteSeatBulletBody` right after
+ * `- ` or `- **`, when the board's name is known. Stripped before any label/name match, so a repo
+ * prefix can never be mistaken for the seat's own name — `seat repoboard` must not match a bullet
+ * merely PREFIXED `[repoboard]`.
+ */
+const BULLET_REPO_PREFIX_RE = /^(- (?:\*\*)?)\[[^\]]+\]\s+/;
+
+function stripBulletRepoPrefix(firstLine: string): string {
+  return firstLine.replace(BULLET_REPO_PREFIX_RE, '$1');
+}
+
+/**
  * A bullet's LABEL: the leading `**…**` span of its first line when present (a bullet is almost
  * always written `- **<seat name…>**: …`), else the first line up to the first `:` (so a plain
  * `- ops: watching` still has a label). This is what a human means by "the ops bullet" — the
  * seat's own name at the HEAD of its own bullet — as opposed to any bullet whose prose merely
- * mentions another seat's name in passing.
+ * mentions another seat's name in passing. RCB-160: `stripBulletRepoPrefix` runs FIRST, so a
+ * `[repo] ` prefix (see above) is never part of the label this returns.
  */
 function bulletLabel(firstLine: string): string {
-  const content = firstLine.replace(/^- /, '');
+  const content = stripBulletRepoPrefix(firstLine).replace(/^- /, '');
   const bold = LEADING_BOLD.exec(content);
   if (bold?.[1] !== undefined) return bold[1];
   const colon = content.indexOf(':');
@@ -205,7 +224,7 @@ function locateSeatBullet(bullets: readonly (readonly string[])[], name: string)
     if (wordRe.test(bulletLabel(bullets[i]?.[0] ?? ''))) return i;
   }
   for (let i = 0; i < bullets.length; i++) {
-    if (wordRe.test(bullets[i]?.[0] ?? '')) return i;
+    if (wordRe.test(stripBulletRepoPrefix(bullets[i]?.[0] ?? ''))) return i;
   }
   return -1;
 }
@@ -273,17 +292,23 @@ function formatSeatBulletBody(text: string): string {
  * carries the redacted stamp if it wants one. The label `**<name>: …**` is exactly what
  * `findSeatLine`'s label pass matches on the next call (see the round-trip test), so a bullet
  * written by this function is always found again by it.
+ *
+ * RCB-160: `repo` (the board's `boardDisplayName`) is written as a `[repo] ` prefix right before
+ * `name`, INSIDE the bold span — `undefined`/empty (the default) omits it, so every existing
+ * caller keeps writing exactly today's bullet.
  */
 export function formatSeatBullet(
   name: string,
   status: 'UP' | 'DOWN',
   text: string,
   now: Date,
+  repo?: string,
 ): string {
   const iso = toIso(now);
   const stamp = `${iso.slice(0, 10)} ${iso.slice(11, 16)}Z`;
   const body = formatSeatBulletBody(text);
-  return `- **${name}: ${status} ${stamp}.** ${body}`;
+  const prefix = repo !== undefined && repo.trim().length > 0 ? `[${repo}] ` : '';
+  return `- **${prefix}${name}: ${status} ${stamp}.** ${body}`;
 }
 
 /**
@@ -292,21 +317,29 @@ export function formatSeatBullet(
  * that fails to parse (`18:0xZ`) survives verbatim. `null` when the first line is not a seat
  * bullet at all (same shape check as `parseSeatStamp`) — there is nothing to keep. Pure, no I/O,
  * no clock: this function never restamps.
+ *
+ * RCB-160: `repo` writes that `[repo] ` prefix — given, it REPLACES whatever prefix (if any) the
+ * bullet already carried; omitted (`undefined`), the bullet's own existing prefix (if any) is kept
+ * byte-for-byte, same as the label/status/stamp.
  */
 export function rewriteSeatBulletBody(
   bullet: string,
   text: string,
+  repo?: string,
 ): { bullet: string; status: 'UP' | 'DOWN'; stamp: string } | null {
   const firstLine = bullet.split('\n')[0] ?? '';
   const m = SEAT_BULLET_RE.exec(firstLine);
   if (!m) return null;
-  const label = m[1] ?? '';
-  const status = m[2] as 'UP' | 'DOWN';
-  const date = m[3] ?? '';
-  const time = m[4] ?? '';
+  const existingRepo = m[1];
+  const label = m[2] ?? '';
+  const status = m[3] as 'UP' | 'DOWN';
+  const date = m[4] ?? '';
+  const time = m[5] ?? '';
   const body = formatSeatBulletBody(text);
+  const nextRepo = repo !== undefined ? repo : existingRepo;
+  const prefix = nextRepo !== undefined && nextRepo.trim().length > 0 ? `[${nextRepo}] ` : '';
   return {
-    bullet: `- **${label}: ${status} ${date} ${time}Z.** ${body}`,
+    bullet: `- **${prefix}${label}: ${status} ${date} ${time}Z.** ${body}`,
     status,
     stamp: `${date} ${time}Z`,
   };
@@ -319,8 +352,13 @@ export function rewriteSeatBulletBody(
  * digits (`18:0xZ`), since that shape has to be recognised as "a stamp that fails to parse", not
  * "not a seat bullet at all". No `$`/end anchor: everything after the stamp (the bullet's prose)
  * is irrelevant to the match.
+ *
+ * RCB-160: an optional `[<repo>] ` — its OWN capture group (1) — right after the opening `**`, so
+ * a repo prefix is never absorbed into the label group (2). Groups: (1) repo, (2) label, (3)
+ * status, (4) date, (5) time.
  */
-const SEAT_BULLET_RE = /^-\s+\*\*([^*:]+):\s+(UP|DOWN)\s+(\S+)\s+(\S+?)Z\.?\*{0,2}/;
+const SEAT_BULLET_RE =
+  /^-\s+\*\*(?:\[([^\]]+)\]\s+)?([^*:]+):\s+(UP|DOWN)\s+(\S+)\s+(\S+?)Z\.?\*{0,2}/;
 const SEAT_STAMP_DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 const SEAT_STAMP_TIME_RE = /^\d{2}:\d{2}$/;
 
@@ -335,9 +373,9 @@ export function parseSeatStamp(bullet: string): { status: 'UP' | 'DOWN'; at: Dat
   const firstLine = bullet.split('\n')[0] ?? '';
   const m = SEAT_BULLET_RE.exec(firstLine);
   if (!m) return null;
-  const status = m[2] as 'UP' | 'DOWN';
-  const date = m[3] ?? '';
-  const time = m[4] ?? '';
+  const status = m[3] as 'UP' | 'DOWN';
+  const date = m[4] ?? '';
+  const time = m[5] ?? '';
   if (!SEAT_STAMP_DATE_RE.test(date) || !SEAT_STAMP_TIME_RE.test(time)) {
     return { status, at: null };
   }
@@ -486,7 +524,7 @@ export function listSeats(seatsSection: string): SeatRow[] {
     if (!parsed) continue;
     const firstLine = bulletLines[0] ?? '';
     const m = SEAT_BULLET_RE.exec(firstLine);
-    const stamp = m ? `${m[3]} ${m[4]}Z` : '';
+    const stamp = m ? `${m[4]} ${m[5]}Z` : '';
     const { inFlight } = parseSeatFields(bulletText);
     rows.push({ name: bulletName(firstLine), status: parsed.status, stamp, inFlight });
   }
@@ -650,6 +688,7 @@ export function seatBundle(input: SeatBundleInput): SeatBundle {
     leases: liveLeases(input.leases ?? { leases: [], windows: [] }, input.now),
     // Any bullet counts, stamped or not — `listSeats` keeps only stamped ones.
     solo: bulletSpans((input.seatsSection ?? '').split('\n')).length === 0,
+    repo: input.repo ?? null,
   };
 }
 
@@ -672,7 +711,10 @@ export function renderSeatBundle(b: SeatBundle, now: Date): string {
   const isCoordinator = isCoordinatorSeat(b.name);
   const lines: string[] = [];
 
-  lines.push(`# seat ${b.name} — ${toIso(now)}`, '');
+  // RCB-160: `b.repo` null (no board name gathered, or every existing caller/test) prints exactly
+  // today's header.
+  const repoPrefix = b.repo !== null && b.repo.trim().length > 0 ? `[${b.repo}] ` : '';
+  lines.push(`# seat ${repoPrefix}${b.name} — ${toIso(now)}`, '');
 
   if (b.solo) {
     lines.push(

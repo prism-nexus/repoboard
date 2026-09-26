@@ -6,6 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import type { BoardConfig, Card } from '@repoboard/core';
 import {
+  boardDisplayName,
   defaultBoardConfig,
   parseBoard,
   parseCard,
@@ -66,6 +67,16 @@ async function repoWith(cards: Record<string, string>): Promise<TempRepo> {
   const repo = await makeTempRepoboard(cards);
   repos.push(repo);
   return repo;
+}
+
+/**
+ * RCB-160: `repoWith`'s fixture writes `defaultBoardConfig()` (no `name:`), so every producer
+ * (`setSeatBullet`, `appendRepoLog`, …) prefixes its output with `boardDisplayName`'s OWN fallback
+ * — the temp dir's own random basename, never a fixed literal. Tests that pin a producer's exact
+ * text compute it with this ONE call, so they can never drift from what the store itself uses.
+ */
+function repoName(repo: TempRepo): string {
+  return boardDisplayName(null, repo.root);
 }
 
 describe('openStore: load', () => {
@@ -665,12 +676,13 @@ describe('state and log (P8.3)', () => {
   it('appendRepoLog creates the header on the first call, appends after', async () => {
     const repo = await repoWith({});
     const store = await open(repo, false);
+    const repoTag = repoName(repo);
     const first = await store.appendRepoLog('claude/p8-3', 'first entry', 'kickoff');
     expect(first.ok).toBe(true);
     if (!first.ok) return;
     expect(first.date).toBe('2026-09-02');
     expect(first.text).toBe(
-      '# Log — 2026-09-02\n\n##### CLAUDE/P8-3 2026-09-02T22:41:10Z: kickoff\n\nfirst entry\n',
+      `# Log — 2026-09-02\n\n##### [${repoTag}] CLAUDE/P8-3 2026-09-02T22:41:10Z: kickoff\n\nfirst entry\n`,
     );
     const onDisk = await readFile(join(repo.root, '.repoboard', 'log', '2026-09-02.md'), 'utf8');
     expect(onDisk).toBe(first.text);
@@ -678,8 +690,8 @@ describe('state and log (P8.3)', () => {
     const second = await store.appendRepoLog('ops', 'second entry', undefined);
     expect(second.ok).toBe(true);
     if (!second.ok) return;
-    expect(second.text).toContain('##### CLAUDE/P8-3');
-    expect(second.text).toContain('##### OPS 2026-09-02T22:41:10Z: second entry');
+    expect(second.text).toContain(`##### [${repoTag}] CLAUDE/P8-3`);
+    expect(second.text).toContain(`##### [${repoTag}] OPS 2026-09-02T22:41:10Z: second entry`);
     const log = await readFile(join(repo.root, '.repoboard', 'log', '2026-09-02.md'), 'utf8');
     expect(log).toBe(second.text);
   });
@@ -927,6 +939,7 @@ describe('setSeatBullet (RCB-58)', () => {
   it("replaces ONLY the builder's own bullet, restamps as the seat, leaves LIVE/LAST LANDINGS untouched", async () => {
     const repo = await repoWith({});
     const store = await open(repo, false);
+    const repoTag = repoName(repo);
     await store.setStateSection('live', 'Tree is dev.', 'claude/p8-3');
     await store.setStateSection('lastLandings', 'RCB-1 landed.', 'claude/p8-3');
     await store.setStateSection('seats', SEATS, 'coordinator');
@@ -946,11 +959,12 @@ describe('setSeatBullet (RCB-58)', () => {
     expect(res.doc.stamp).toBe('2026-09-02T22:41:10Z');
     expect(res.doc.actor).toBe('builder');
 
-    // SEATS: the other two bullets untouched, byte for byte, plus the new one in the builder's place.
+    // SEATS: the other two bullets untouched, byte for byte, plus the new one — automatically
+    // carrying the board's own name (RCB-160) — in the builder's place.
     expect(res.doc.sections.seats).toBe(
       [
         '- **coordinator**: routes work',
-        '- **builder: UP 2026-09-02 22:41Z.** held: RCB-58',
+        `- **[${repoTag}] builder: UP 2026-09-02 22:41Z.** held: RCB-58`,
         '- **ops**: watching things',
       ].join('\n'),
     );
@@ -959,7 +973,7 @@ describe('setSeatBullet (RCB-58)', () => {
     expect(onDisk).toContain('**Written 2026-09-02T22:41:10Z by builder.**');
     expect(onDisk).toContain('Tree is dev.');
     expect(onDisk).toContain('RCB-1 landed.');
-    expect(onDisk).toContain('- **builder: UP 2026-09-02 22:41Z.** held: RCB-58');
+    expect(onDisk).toContain(`- **[${repoTag}] builder: UP 2026-09-02 22:41Z.** held: RCB-58`);
     expect(onDisk).toContain('- **coordinator**: routes work');
     expect(onDisk).toContain('- **ops**: watching things');
   });
@@ -967,6 +981,7 @@ describe('setSeatBullet (RCB-58)', () => {
   it('a missing STATE.md is scaffolded first, then the bullet is appended (no bullet to replace yet)', async () => {
     const repo = await repoWith({});
     const store = await open(repo, false);
+    const repoTag = repoName(repo);
     expect(store.state()).toBeNull();
 
     const res = await store.setSeatBullet('ops', 'DOWN', 'stood down for the night');
@@ -974,12 +989,14 @@ describe('setSeatBullet (RCB-58)', () => {
     if (!res.ok) return;
     expect(res.doc.sections.live).toBe('_(nothing recorded yet)_');
     expect(res.doc.sections.seats).toBe(
-      '- **ops: DOWN 2026-09-02 22:41Z.** stood down for the night',
+      `- **[${repoTag}] ops: DOWN 2026-09-02 22:41Z.** stood down for the night`,
     );
     expect(res.doc.actor).toBe('ops');
 
     const onDisk = await readFile(join(repo.root, '.repoboard', 'STATE.md'), 'utf8');
-    expect(onDisk).toContain('- **ops: DOWN 2026-09-02 22:41Z.** stood down for the night');
+    expect(onDisk).toContain(
+      `- **[${repoTag}] ops: DOWN 2026-09-02 22:41Z.** stood down for the night`,
+    );
   });
 
   // RCB-58 Control B: skip the replace inside `store.setSeatBullet` (pass `parsed.doc.sections.seats`
@@ -996,6 +1013,7 @@ describe('updateSeatBullet (RCB-88)', () => {
 
   it("(a) rewrites ONLY the builder bullet's body, keeps the standing stamp; STATE line 3 restamps as builder; every other bullet byte-identical", async () => {
     const repo = await repoWith({});
+    const repoTag = repoName(repo);
     let clock = NOW;
     const store = await openStore(repo.root, { watch: false, now: () => clock });
     opened.push(store);
@@ -1014,7 +1032,7 @@ describe('updateSeatBullet (RCB-88)', () => {
     expect(res.doc.sections.seats).toBe(
       [
         '- **coordinator**: routes work',
-        '- **builder: UP 2026-09-02 22:41Z.** b',
+        `- **[${repoTag}] builder: UP 2026-09-02 22:41Z.** b`,
         '- **ops**: watching things',
       ].join('\n'),
     );
@@ -1024,7 +1042,7 @@ describe('updateSeatBullet (RCB-88)', () => {
 
     const onDisk = await readFile(join(repo.root, '.repoboard', 'STATE.md'), 'utf8');
     expect(onDisk).toContain('**Written 2026-09-02T22:46:10Z by builder.**');
-    expect(onDisk).toContain('- **builder: UP 2026-09-02 22:41Z.** b');
+    expect(onDisk).toContain(`- **[${repoTag}] builder: UP 2026-09-02 22:41Z.** b`);
     expect(onDisk).toContain('- **coordinator**: routes work');
     expect(onDisk).toContain('- **ops**: watching things');
   });
@@ -1145,6 +1163,7 @@ describe('appendSeatLog (RCB-127): log --as <seat> restamps STATE.md when that s
 
   it("every STATE.md byte outside line 3 (the stamp) is unchanged — including the builder's own SEATS bullet", async () => {
     const repo = await repoWith({});
+    const repoTag = repoName(repo);
     let clock = NOW;
     const store = await openStore(repo.root, { watch: false, now: () => clock });
     opened.push(store);
@@ -1170,7 +1189,7 @@ describe('appendSeatLog (RCB-127): log --as <seat> restamps STATE.md when that s
     }
     expect(afterLines[2]).not.toBe(beforeLines[2]);
     expect(after).toContain('**Written 2026-09-02T22:46:10Z by builder.**');
-    expect(after).toContain('- **builder: UP 2026-09-02 22:41Z.** holding RCB-127'); // builder's own bullet, byte-identical
+    expect(after).toContain(`- **[${repoTag}] builder: UP 2026-09-02 22:41Z.** holding RCB-127`); // builder's own bullet, byte-identical
   });
 
   // RCB-127 control: in `appendSeatLog`'s restamp step, drop the

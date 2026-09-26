@@ -715,6 +715,7 @@ describe('renderSeatBundle: placeholders for every missing part', () => {
       systems: null,
       leases: [],
       solo: false,
+      repo: null,
     };
     const rendered = renderSeatBundle(bundle, NOW);
     expect(rendered).not.toContain('solo board');
@@ -754,6 +755,7 @@ describe('renderSeatBundle: placeholders for every missing part', () => {
       systems: null,
       leases: [],
       solo: false,
+      repo: null,
     };
     const rendered = renderSeatBundle(bundle, NOW);
     expect(rendered).toContain('RCB-1  todo  do this');
@@ -818,6 +820,7 @@ describe('renderSeatBundle: a solo board drops the placeholder sections (RCB-140
       systems: null,
       leases: [],
       solo: true,
+      repo: null,
     };
     const rendered = renderSeatBundle(bundle, NOW);
     expect(rendered).toContain(
@@ -866,6 +869,7 @@ describe('renderSeatBundle: a solo board drops the placeholder sections (RCB-140
       systems: null,
       leases: [],
       solo: true,
+      repo: null,
     };
     const rendered = renderSeatBundle(bundle, NOW);
     expect(rendered).toContain(
@@ -1625,5 +1629,63 @@ describe('leases surfaced in seat <name> (RCB-131)', () => {
     const rendered = renderSeatBundle(bundle, NOW);
     expect(rendered).toContain('## Leases');
     expect(rendered).toContain('dev-server · claude/ops · since 20:00Z · until —');
+  });
+});
+
+/**
+ * RCB-160: automatic from the board — `formatSeatBullet`/`rewriteSeatBulletBody` write a
+ * `[repo] ` prefix INSIDE the bold span, ahead of the seat name; every reader that derives a
+ * label/name (`findSeatLine`'s `locateSeatBullet`, `parseSeatStamp`, `listSeats`) must strip it
+ * back out, so a repo name can never be mistaken for a seat's own name.
+ */
+describe('RCB-160: the [repo] prefix on a SEATS bullet', () => {
+  it('(1) formatSeatBullet writes a `[repo] ` prefix inside the bold span, ahead of the name', () => {
+    const bullet = formatSeatBullet('builder', 'UP', 'holding RCB-160', NOW, 'repoboard');
+    expect(bullet).toBe('- **[repoboard] builder: UP 2026-09-18 21:00Z.** holding RCB-160');
+  });
+
+  it('(2) an old, unprefixed bullet still parses exactly as before — findSeatLine finds it, parseSeatStamp reads it', () => {
+    const seats = [
+      '- **coordinator**: routes work',
+      '- **builder: UP 2026-09-18 21:00Z.** holding RCB-1',
+    ].join('\n');
+    const line = findSeatLine(seats, 'builder');
+    expect(line).toBe('- **builder: UP 2026-09-18 21:00Z.** holding RCB-1');
+    expect(parseSeatStamp(line ?? '')).toEqual({
+      status: 'UP',
+      at: new Date('2026-09-18T21:00:00Z'),
+    });
+  });
+
+  it('(3) `seat repoboard` does not match a bullet merely PREFIXED `[repoboard]` — the label is stripped before the match', () => {
+    const seats = [
+      '- **coordinator**: routes work',
+      '- **[repoboard] builder: UP 2026-09-18 21:00Z.** holding RCB-160',
+    ].join('\n');
+    expect(findSeatLine(seats, 'repoboard')).toBeNull();
+    // The real seat still matches, prefix and all.
+    expect(findSeatLine(seats, 'builder')).toBe(
+      '- **[repoboard] builder: UP 2026-09-18 21:00Z.** holding RCB-160',
+    );
+  });
+
+  it("a prefixed bullet's NAME (listSeats) is the bare seat name, never the repo", () => {
+    const seats = '- **[repoboard] builder: UP 2026-09-18 21:00Z.** holding RCB-160';
+    const rows = listSeats(seats);
+    expect(rows).toEqual([
+      { name: 'builder', status: 'UP', stamp: '2026-09-18 21:00Z', inFlight: null },
+    ]);
+  });
+
+  it("rewriteSeatBulletBody: omitting `repo` keeps the bullet's own existing prefix byte-for-byte", () => {
+    const bullet = '- **[repoboard] builder: UP 2026-09-18 21:00Z.** a';
+    const res = rewriteSeatBulletBody(bullet, 'b');
+    expect(res?.bullet).toBe('- **[repoboard] builder: UP 2026-09-18 21:00Z.** b');
+  });
+
+  it('rewriteSeatBulletBody: passing `repo` replaces whatever prefix (if any) was there', () => {
+    const bullet = '- **builder: UP 2026-09-18 21:00Z.** a';
+    const res = rewriteSeatBulletBody(bullet, 'b', 'repoboard');
+    expect(res?.bullet).toBe('- **[repoboard] builder: UP 2026-09-18 21:00Z.** b');
   });
 });

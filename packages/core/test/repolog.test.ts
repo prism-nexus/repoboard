@@ -131,6 +131,7 @@ describe('parseLogBlocks', () => {
     const blocks = parseLogBlocks(text);
     expect(blocks).toHaveLength(3);
     expect(blocks[0]).toEqual({
+      repo: null,
       seat: 'OPS',
       ts: '2026-09-17T18:00:00Z',
       title: 'armed the fires',
@@ -138,6 +139,7 @@ describe('parseLogBlocks', () => {
     });
     expect(blocks[1]?.seat).toBe('BUILDER');
     expect(blocks[2]).toEqual({
+      repo: null,
       seat: 'COORDINATOR',
       ts: '2026-09-17T19:00:00Z',
       title: 'triage',
@@ -165,6 +167,7 @@ describe('parseLogBlocks', () => {
     const blocks = parseLogBlocks(file);
     expect(blocks).toEqual([
       {
+        repo: null,
         seat: 'CLAUDE/P8-3',
         ts: '2026-09-17T21:00:00Z',
         title: 'built P8.3',
@@ -422,5 +425,100 @@ describe('filterLogBlocks', () => {
 
   it('every field absent is inert: the whole day, unfiltered', () => {
     expect(filterLogBlocks(blocks, DAY, {})).toEqual({ ok: true, blocks });
+  });
+});
+
+/**
+ * RCB-160: `formatLogBlock`'s `repo` writes a `[repo] ` prefix right after `##### `, before the
+ * seat; `BLOCK_HEADING`'s matching optional group means the READER splits it back out into its
+ * own field rather than folding it into `seat` (which would break `lastBlockFor`/`--seat`, whose
+ * whole rule is matching `seat` alone).
+ */
+describe('RCB-160: the [repo] prefix on a log block header', () => {
+  it('(1) formatLogBlock writes a `[repo] ` prefix right after `##### `, before the seat', () => {
+    const block = formatLogBlock({
+      seat: 'builder',
+      ts: '2026-09-26T16:00:00Z',
+      title: 'holding RCB-160',
+      text: 'holding RCB-160',
+      repo: 'repoboard',
+    });
+    expect(block).toBe(
+      '##### [repoboard] BUILDER 2026-09-26T16:00:00Z: holding RCB-160\n\nholding RCB-160',
+    );
+  });
+
+  it('(2) an old, unprefixed heading still parses exactly as before — `repo` is null', () => {
+    const text = [
+      '# Log — 2026-09-26',
+      '',
+      '##### BUILDER 2026-09-26T16:00:00Z: no repo here',
+      '',
+      'body text',
+      '',
+    ].join('\n');
+    const blocks = parseLogBlocks(text);
+    expect(blocks).toEqual([
+      {
+        repo: null,
+        seat: 'BUILDER',
+        ts: '2026-09-26T16:00:00Z',
+        title: 'no repo here',
+        text: 'body text',
+      },
+    ]);
+  });
+
+  it('a prefixed heading splits the repo OUT of `seat` — `seat` is the bare token, `repo` the bracket text', () => {
+    const text = [
+      '# Log — 2026-09-26',
+      '',
+      '##### [repoboard] BUILDER 2026-09-26T16:00:00Z: holding RCB-160',
+      '',
+      'body text',
+      '',
+    ].join('\n');
+    const blocks = parseLogBlocks(text);
+    expect(blocks).toEqual([
+      {
+        repo: 'repoboard',
+        seat: 'BUILDER',
+        ts: '2026-09-26T16:00:00Z',
+        title: 'holding RCB-160',
+        text: 'body text',
+      },
+    ]);
+  });
+
+  it("(4) lastBlockFor('builder') finds a block headed `##### [repoboard] BUILDER …` — matching is on `seat` alone", () => {
+    const text = [
+      '# Log — 2026-09-26',
+      '',
+      '##### [repoboard] BUILDER 2026-09-26T16:00:00Z: holding RCB-160',
+      '',
+      'body text',
+      '',
+    ].join('\n');
+    const days: DatedLogBlocks[] = [{ date: '2026-09-26', blocks: parseLogBlocks(text) }];
+    const res = lastBlockFor('builder', days);
+    expect(res?.block.seat).toBe('BUILDER');
+    expect(res?.block.repo).toBe('repoboard');
+  });
+
+  it("(5) formatLogBlock round-trips a parsed block's prefix with no conversion at the call site", () => {
+    const written = formatLogBlock({
+      seat: 'builder',
+      ts: '2026-09-26T16:00:00Z',
+      title: 'holding RCB-160',
+      text: 'holding RCB-160',
+      repo: 'repoboard',
+    });
+    const file = appendLogBlock(`${dailyLogHeader('2026-09-26')}\n\n`, written);
+    const parsed = parseLogBlocks(file)[0];
+    if (!parsed) throw new Error('expected one block');
+    // `parsed` is a `LogBlock` (repo: string | null), passed straight back into `formatLogBlock`
+    // (which takes `LogBlockInput`, repo?: string | null) — the SAME re-emission `cli.ts`'s
+    // `log show`/`log --last` and `seat.ts`'s `renderSeatBundle` do.
+    expect(formatLogBlock(parsed)).toBe(written);
   });
 });

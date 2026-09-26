@@ -17,6 +17,7 @@ import {
   appendLogLine,
   askDecision,
   type BoardConfig,
+  boardDisplayName,
   type Card,
   type CardPatch,
   type CheckResourceResult,
@@ -708,7 +709,7 @@ export class CardStore extends EventEmitter<StoreEvents> {
         const newSeats = replaceSeatBullet(
           parsed.doc.sections.seats,
           name,
-          formatSeatBullet(name, status, text, now),
+          formatSeatBullet(name, status, text, now, boardDisplayName(this.cfg, this.root)),
         );
         const res = setStateSectionCore(raw, 'seats', newSeats, { now, actor: name });
         if (!res.ok) return { ok: false as const, error: res.error };
@@ -757,7 +758,7 @@ export class CardStore extends EventEmitter<StoreEvents> {
         // `checkFieldCounts`, the same function, so the rule can never drift between the two.
         const countErr = checkFieldCounts(text);
         if (countErr) return { ok: false as const, error: countErr };
-        const rewrite = rewriteSeatBulletBody(line, text);
+        const rewrite = rewriteSeatBulletBody(line, text, boardDisplayName(this.cfg, this.root));
         if (rewrite === null) {
           return {
             ok: false as const,
@@ -826,7 +827,8 @@ export class CardStore extends EventEmitter<StoreEvents> {
     }
     const base = existing.length > 0 ? existing : `${dailyLogHeader(date)}\n\n`;
     const ts = toIso(now);
-    const block = formatLogBlock({ seat, ts, title, text: line });
+    const repo = boardDisplayName(this.cfg, this.root);
+    const block = formatLogBlock({ seat, ts, title, text: line, repo });
     const next = appendLogBlock(base, block);
     await this.writeLog(date, next);
     const parsedBlocks = parseLogBlocks(next);
@@ -835,7 +837,13 @@ export class CardStore extends EventEmitter<StoreEvents> {
       ok: true as const,
       date,
       text: next,
-      block: parsedBlock ?? { seat: seat.toUpperCase(), ts, title: title ?? line, text: line },
+      block: parsedBlock ?? {
+        seat: seat.toUpperCase(),
+        ts,
+        title: title ?? line,
+        text: line,
+        repo,
+      },
     };
   }
 
@@ -916,7 +924,8 @@ export class CardStore extends EventEmitter<StoreEvents> {
         };
       }
       const ts = toIso(this.now());
-      const block = formatLogBlock({ seat, ts, title, text: line });
+      const repo = boardDisplayName(this.cfg, this.root);
+      const block = formatLogBlock({ seat, ts, title, text: line, repo });
       const next = await this.writeArchive(path, (existing) =>
         appendLogBlock(existing.length > 0 ? existing : `${ARCHIVE_HEADER}\n\n`, block),
       );
@@ -925,7 +934,13 @@ export class CardStore extends EventEmitter<StoreEvents> {
       return {
         ok: true as const,
         path: relative(this.root, path),
-        block: parsedBlock ?? { seat: seat.toUpperCase(), ts, title: title ?? line, text: line },
+        block: parsedBlock ?? {
+          seat: seat.toUpperCase(),
+          ts,
+          title: title ?? line,
+          text: line,
+          repo,
+        },
       };
     });
   }
@@ -1047,6 +1062,9 @@ export class CardStore extends EventEmitter<StoreEvents> {
       // RCB-131: `.repoboard/leases.yml`'s doc — `seatBundleCore` keeps only the live ones.
       leases: this.leasesDoc,
       members,
+      // RCB-160: automatic from the board — never typed, so a `seat <name>` bundle carries the
+      // SAME repo prefix `setSeatBullet`/`doAppendRepoLog` are now writing into SEATS/the log.
+      repo: boardDisplayName(this.cfg, this.root),
     });
   }
 

@@ -19,6 +19,12 @@ export interface LogBlockInput {
   /** Defaults to the first line of `text` when omitted or empty. */
   title?: string;
   text: string;
+  /** RCB-160: `boardDisplayName(config, root)`, written as a `[repo] ` prefix right after
+   *  `##### `. `undefined`/`null`/empty (the default) omits it — unprefixed history's own shape,
+   *  unchanged. `string | null` (not just `string | undefined`) so a parsed `LogBlock` (whose own
+   *  `repo` is `string | null`) can be re-emitted through this function with no conversion at the
+   *  call site — that IS the round-trip `cli.ts`'s and `seat.ts`'s re-emitters rely on. */
+  repo?: string | null;
 }
 
 function firstLine(text: string): string {
@@ -32,13 +38,19 @@ function firstLine(text: string): string {
  * (`parseLogBlocks`/`BLOCK_HEADING`) to also accept shapes a hand-written log produces.
  * No trailing blank line here — `appendLogBlock` owns all inter-block spacing, so a block's own
  * shape is stable regardless of where it lands in the file.
+ *
+ * RCB-160: `input.repo` (trimmed, non-empty) is written as a `[repo] ` prefix right after
+ * `##### `, before the seat — `undefined`/`null`/empty omits it, so a caller that never gathers a
+ * repo name writes exactly today's heading.
  */
 export function formatLogBlock(input: LogBlockInput): string {
   const title =
     input.title !== undefined && input.title.trim().length > 0
       ? input.title.trim()
       : firstLine(input.text);
-  return `##### ${input.seat.toUpperCase()} ${input.ts}: ${title}\n\n${input.text}`;
+  const repo = input.repo?.trim();
+  const prefix = repo !== undefined && repo.length > 0 ? `[${repo}] ` : '';
+  return `##### ${prefix}${input.seat.toUpperCase()} ${input.ts}: ${title}\n\n${input.text}`;
 }
 
 /**
@@ -66,6 +78,12 @@ export interface LogBlock {
   ts: string;
   title: string;
   text: string;
+  /** RCB-160: the `[repo]` prefix parsed off right after `##### `, verbatim (not uppercased,
+   *  unlike `seat`) — `null` when the heading carries none, unprefixed history's own default.
+   *  Optional (not just nullable) so a `LogBlock` built by hand before this field existed (a
+   *  fixture predating RCB-160) still satisfies the type; `parseLogBlocks` itself always sets it,
+   *  never omits it. */
+  repo?: string | null;
 }
 
 /**
@@ -78,8 +96,13 @@ export interface LogBlock {
  * FIRST `: ` (colon-space) — so a title containing `: ` (our own ISO shape's "stand-up HH:MxZ: …")
  * does not get absorbed into `ts`; `title` is the rest of the line. `ts` is no longer guaranteed
  * to be a parseable ISO `Date` — a hand-written block's `ts` can be `2026-09-18 0x:xxZ`.
+ *
+ * RCB-160: an optional `[<repo>] ` — its OWN group (1), matched GREEDILY so it is preferred over
+ * folding into the (lazy) seat group (2) whenever the heading does start with `[…] ` — right after
+ * `##### `. Groups: (1) repo, (2) seat, (3) ts, (4) title. A heading with no bracket there (every
+ * existing log) leaves group 1 `undefined`, unchanged from before this group was added.
  */
-const BLOCK_HEADING = /^##### (.+?) (\d{4}-\d{2}-\d{2}.*?): (.*)$/gm;
+const BLOCK_HEADING = /^##### (?:\[([^\]]+)\] )?(.+?) (\d{4}-\d{2}-\d{2}.*?): (.*)$/gm;
 
 /** Every `#####`-headed block in a daily log file, in file order (oldest first). */
 export function parseLogBlocks(fileText: string): LogBlock[] {
@@ -92,7 +115,7 @@ export function parseLogBlocks(fileText: string): LogBlock[] {
     const next = matches[i + 1];
     const end = next?.index ?? fileText.length;
     const text = fileText.slice(start, end).replace(/^\n+/, '').replace(/\s+$/, '');
-    blocks.push({ seat: m[1] ?? '', ts: m[2] ?? '', title: m[3] ?? '', text });
+    blocks.push({ repo: m[1] ?? null, seat: m[2] ?? '', ts: m[3] ?? '', title: m[4] ?? '', text });
   }
   return blocks;
 }

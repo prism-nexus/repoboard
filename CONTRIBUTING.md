@@ -8,9 +8,10 @@ pnpm build
 node packages/server/dist/cli.js serve --open
 ```
 
-`pnpm dev` runs the server and web app together with hot reload. CI runs on Node 20 and 22; use
-either. This repo's pnpm version is pinned in `package.json`'s `packageManager` field
-(`"pnpm@11.18.0"`) — use that version.
+`pnpm dev` runs the server and web app together with hot reload. CI runs on Node 22 and 24; use
+either (the pinned pnpm needs Node >= 22.13 to develop; the published package itself runs on Node
+20 and up, which CI's pack-smoke job covers). This repo's pnpm version is pinned in
+`package.json`'s `packageManager` field (`"pnpm@11.18.0"`) — use that version.
 
 ## Layout
 

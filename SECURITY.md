@@ -2,7 +2,7 @@
 
 ## Supported versions
 
-`0.1.x` — this project is pre-1.0; there is only one supported line.
+`0.2.x` — this project is pre-1.0; there is only one supported line.
 
 ## Threat model
 

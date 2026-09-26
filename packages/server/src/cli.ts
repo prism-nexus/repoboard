@@ -53,6 +53,7 @@ import {
   resolveSince,
   resolveTimeSpec,
   SECTION_PLACEHOLDER,
+  type SeatRow,
   type Sibling,
   type Size,
   type StateSectionName,
@@ -69,6 +70,7 @@ import {
   type WorkspaceRepo,
   workspaceLeaseLines,
   workspaceOwnerQueueLines,
+  workspaceSeatLines,
 } from '@repoboard/core';
 import * as YAML from 'yaml';
 import { filterCards, type OwnerQueueRow, ownerQueue } from './card-query.js';
@@ -1876,7 +1878,10 @@ async function cmdState(args: string[], io: CliIO): Promise<number> {
       sections: typeof doc.sections;
       ownerQueue: OwnerQueueRow[];
       leases: LeaseRow[];
-      repos?: Record<string, { ownerQueue: OwnerQueueRow[]; leases: LeaseRow[]; missing?: true }>;
+      repos?: Record<
+        string,
+        { ownerQueue: OwnerQueueRow[]; leases: LeaseRow[]; seats: SeatRow[]; missing?: true }
+      >;
     } = {
       stamp: doc.stamp,
       actor: doc.actor,
@@ -1885,10 +1890,11 @@ async function cmdState(args: string[], io: CliIO): Promise<number> {
       leases: liveLeaseRows(store.leases(), now),
     };
     if (opened.length > 0) {
-      // RCB-153 W5/slice 3b: `--json` adds `repos: { <key>: { ownerQueue, leases, missing? } }` —
-      // one entry per configured member, in `repos:` order, `missing: true` (and empty rows) for
-      // one whose root has no `.repoboard/`. `memberStateRepos` (workspace.ts) is the SAME
-      // function MCP's `get_state` builds its own `repos:` field from.
+      // RCB-153 W5/slice 3b: `--json` adds `repos: { <key>: { ownerQueue, leases, seats, missing?
+      // } }` — one entry per configured member, in `repos:` order, `missing: true` (and empty
+      // rows, RCB-160 slice 2: `seats` too) for one whose root has no `.repoboard/`.
+      // `memberStateRepos` (workspace.ts) is the SAME function MCP's `get_state` builds its own
+      // `repos:` field from.
       payload.repos = memberStateRepos(opened, ownerQueue, liveLeaseRows, now);
     }
     io.stdout.write(`${JSON.stringify(payload, null, 2)}\n`);
@@ -1915,6 +1921,12 @@ async function cmdState(args: string[], io: CliIO): Promise<number> {
           .filter(({ store: memberStore }) => memberStore.hasBoard)
           .map(({ key, store: memberStore }) => ({ key, leases: memberStore.leases() })),
         now,
+      ),
+      seatLines: workspaceSeatLines(
+        opened.map(({ key, store: memberStore }) => ({
+          key,
+          seats: memberStore.hasBoard ? (memberStore.state()?.sections.seats ?? null) : null,
+        })),
       ),
     },
   );

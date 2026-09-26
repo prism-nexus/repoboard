@@ -185,18 +185,99 @@ describe('repoboard state — workspace aggregation (RCB-153 §4 control 1)', ()
   it('a plain board (no repos:) renders with no [key] lines and no repos field at all', async () => {
     const root = await boardRoot('RB');
     await addDecideCard(root, 'plain card', 'ship?');
+    // RCB-160 slice 2 control: `workspaceSeatLines` never runs at all for a plain board — the
+    // seat's own bullet (carrying only its own slice-1 prefix) appears exactly once.
+    expect((await repoboard(root, 'seat', 'builder', '--up', 'holding RB-1')).code).toBe(0);
 
     const printed = await repoboard(root, 'state');
     expect(printed.code).toBe(0);
     // The `[<key>] ` prefix always starts a line — anchored so this can never coincidentally
     // match an ordinary `[A B]` decision-letters bracket, which is never line-initial.
     expect(printed.out).not.toMatch(/^\[[a-z0-9][a-z0-9-]*\] /m);
+    expect(printed.out.match(/builder: UP/g)).toHaveLength(1);
 
     const json = JSON.parse((await repoboard(root, 'state', '--json')).out) as Record<
       string,
       unknown
     >;
     expect(json).not.toHaveProperty('repos');
+  });
+});
+
+describe('repoboard state — workspace SEATS aggregation (RCB-160 slice 2)', () => {
+  it(
+    "SEATS carries the workspace's own bullets first, then each member's [<key>]-prefixed — " +
+      "replacing a member's OWN (slice 1) [<name>] prefix when its board is named differently, " +
+      'inserting one where an old bullet has none at all',
+    async () => {
+      const { aaRoot, bbRoot } = await makeMembers();
+      // AA calls itself something other than the "aa" key the workspace uses for it.
+      await writeFile(
+        join(aaRoot, '.repoboard', 'board.yml'),
+        serializeBoard({ ...defaultBoardConfig(), prefix: 'AA', name: 'aa-board' }),
+      );
+      const wsRoot = await makeWorkspace(aaRoot, bbRoot);
+
+      // The workspace's own SEATS bullet, set directly (no boardDisplayName prefix noise).
+      expect(
+        (
+          await repoboard(
+            wsRoot,
+            'state',
+            '--set-section',
+            'SEATS',
+            '--',
+            '- **coordinator: UP 2026-09-25 10:00Z.** routing work',
+          )
+        ).code,
+      ).toBe(0);
+      // AA writes through `seat --up` — slice 1 prefixes it `[aa-board] `.
+      expect((await repoboard(aaRoot, 'seat', 'builder', '--up', 'holding AA-1')).code).toBe(0);
+      // BB carries an OLD, unprefixed bullet (pre-slice-1 / hand-typed).
+      expect(
+        (
+          await repoboard(
+            bbRoot,
+            'state',
+            '--set-section',
+            'SEATS',
+            '--',
+            '- **builder: UP 2026-09-25 12:00Z.** watching',
+          )
+        ).code,
+      ).toBe(0);
+
+      const printed = await repoboard(wsRoot, 'state');
+      expect(printed.code).toBe(0);
+      expect(printed.out).toContain('- **coordinator: UP 2026-09-25 10:00Z.** routing work');
+      expect(printed.out).toContain('- **[aa] builder: UP');
+      expect(printed.out).toContain('- **[bb] builder: UP 2026-09-25 12:00Z.** watching');
+      // Never the member's OWN name — only the workspace key.
+      expect(printed.out).not.toContain('aa-board');
+
+      const idxCoord = printed.out.indexOf('coordinator: UP 2026-09-25 10:00Z');
+      const idxAa = printed.out.indexOf('[aa] builder: UP');
+      const idxBb = printed.out.indexOf('[bb] builder: UP');
+      expect(idxCoord).toBeGreaterThanOrEqual(0);
+      expect(idxAa).toBeGreaterThan(idxCoord);
+      expect(idxBb).toBeGreaterThan(idxAa);
+    },
+  );
+
+  it('--json adds repos: { <key>: { seats } } rows (SeatRow[], bare names, never [key]-prefixed)', async () => {
+    const { aaRoot, bbRoot } = await makeMembers();
+    const wsRoot = await makeWorkspace(aaRoot, bbRoot);
+    expect((await repoboard(aaRoot, 'seat', 'builder', '--up', 'holding AA-1')).code).toBe(0);
+
+    const printed = await repoboard(wsRoot, 'state', '--json');
+    expect(printed.code).toBe(0);
+    const parsed = JSON.parse(printed.out) as {
+      repos: Record<string, { seats: Array<{ name: string; status: string }> }>;
+    };
+    expect(parsed.repos.aa?.seats).toEqual([
+      expect.objectContaining({ name: 'builder', status: 'UP' }),
+    ]);
+    expect(parsed.repos.bb?.seats).toEqual([]);
   });
 });
 
@@ -257,6 +338,66 @@ describe('repoboard check — workspace aggregation (RCB-153 §4 control 5)', ()
     const rechecked = await repoboard(wsRoot, 'check');
     expect(rechecked.code).toBe(0);
     expect(rechecked.out).not.toContain('workspace-member-missing');
+  });
+});
+
+describe('repoboard check — workspace key/name mismatch (RCB-160 slice 2)', () => {
+  it('a member whose board.yml name differs from its workspace key: warning, exit 0 without --strict, blocks WITH --strict; key == name -> no finding', async () => {
+    const aaRoot = await boardRoot('AA');
+    await writeFile(
+      join(aaRoot, '.repoboard', 'board.yml'),
+      serializeBoard({ ...defaultBoardConfig(), prefix: 'AA', name: 'aa-board' }),
+    );
+    const wsRoot = await makeTempDir('repoboard-ws-mismatch-');
+    dirs.push(wsRoot);
+    await mkdir(join(wsRoot, '.repoboard', 'cards'), { recursive: true });
+    await writeFile(
+      join(wsRoot, '.repoboard', 'board.yml'),
+      serializeBoard({
+        ...defaultBoardConfig(),
+        prefix: 'WS',
+        repos: [{ key: 'aa', root: relative(wsRoot, aaRoot) }],
+      }),
+    );
+    await writeStateMd(wsRoot);
+
+    const checked = await repoboard(wsRoot, 'check');
+    expect(checked.code).toBe(0);
+    expect(checked.out).toContain(
+      'workspace-key-name-mismatch: [aa] board name is "aa-board" (board.yml name, else ' +
+        'folder); its SEATS and log headers say [aa-board], workspace state says [aa]',
+    );
+
+    const strict = await repoboard(wsRoot, 'check', '--strict');
+    expect(strict.code).toBe(1);
+
+    // Control: key == name -> no finding at all, strict or not.
+    await writeFile(
+      join(aaRoot, '.repoboard', 'board.yml'),
+      serializeBoard({ ...defaultBoardConfig(), prefix: 'AA', name: 'aa' }),
+    );
+    const matchedStrict = await repoboard(wsRoot, 'check', '--strict');
+    expect(matchedStrict.code).toBe(0);
+    expect(matchedStrict.out).not.toContain('workspace-key-name-mismatch');
+  });
+
+  it('a missing member gets no workspace-key-name-mismatch finding of its own (only workspace-member-missing)', async () => {
+    const wsRoot = await makeTempDir('repoboard-ws-mismatch-missing-');
+    dirs.push(wsRoot);
+    await mkdir(join(wsRoot, '.repoboard', 'cards'), { recursive: true });
+    await writeFile(
+      join(wsRoot, '.repoboard', 'board.yml'),
+      serializeBoard({
+        ...defaultBoardConfig(),
+        prefix: 'WS',
+        repos: [{ key: 'ghost', root: 'ghost-member' }],
+      }),
+    );
+    await writeStateMd(wsRoot);
+
+    const checked = await repoboard(wsRoot, 'check');
+    expect(checked.out).toContain('workspace-member-missing: [ghost]');
+    expect(checked.out).not.toContain('workspace-key-name-mismatch');
   });
 });
 

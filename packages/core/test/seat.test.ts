@@ -10,6 +10,7 @@ import {
   checkFieldCounts,
   findSeatLine,
   formatSeatBullet,
+  keySeatBullets,
   listSeats,
   parseSeatFields,
   parseSeatStamp,
@@ -1687,5 +1688,55 @@ describe('RCB-160: the [repo] prefix on a SEATS bullet', () => {
     const bullet = '- **builder: UP 2026-09-18 21:00Z.** a';
     const res = rewriteSeatBulletBody(bullet, 'b', 'repoboard');
     expect(res?.bullet).toBe('- **[repoboard] builder: UP 2026-09-18 21:00Z.** b');
+  });
+});
+
+/**
+ * RCB-160 slice 2: `keySeatBullets` is what the WORKSPACE view uses to show a member's SEATS
+ * bullets under the `repos[].key` OWNER QUEUE/LEASES already print — never under whatever the
+ * member calls itself (slice 1's own `[repo] ` prefix).
+ */
+describe('keySeatBullets (RCB-160 slice 2)', () => {
+  it('replace: an existing `[x] ` prefix is REPLACED by `[key] `', () => {
+    const seats = '- **[repoboard] builder: UP 2026-09-18 21:00Z.** holding RCB-160';
+    expect(keySeatBullets(seats, 'aa')).toEqual([
+      '- **[aa] builder: UP 2026-09-18 21:00Z.** holding RCB-160',
+    ]);
+  });
+
+  it('insert: an unprefixed bold bullet gets `[key] ` right after `- **`', () => {
+    const seats = '- **builder: UP 2026-09-18 21:00Z.** holding RCB-160';
+    expect(keySeatBullets(seats, 'aa')).toEqual([
+      '- **[aa] builder: UP 2026-09-18 21:00Z.** holding RCB-160',
+    ]);
+  });
+
+  it('insert: an unprefixed, non-bold bullet gets `[key] ` right after `- `', () => {
+    expect(keySeatBullets('- ops: watching things', 'aa')).toEqual(['- [aa] ops: watching things']);
+  });
+
+  it('continuation lines: whole bullet text kept, only the FIRST line is re-prefixed', () => {
+    const seats = [
+      '- **builder: UP 2026-09-18 21:00Z.** on RCB-1',
+      '  continuation line here',
+    ].join('\n');
+    expect(keySeatBullets(seats, 'aa')).toEqual([
+      ['- **[aa] builder: UP 2026-09-18 21:00Z.** on RCB-1', '  continuation line here'].join('\n'),
+    ]);
+  });
+
+  it('one entry per top-level bullet, in section order', () => {
+    expect(keySeatBullets(SEATS, 'aa')).toEqual([
+      [
+        '- **[aa] repoboard builder (its own terminal, no autonomy)**: on RCB-1',
+        '  continuation line here',
+      ].join('\n'),
+      '- **[aa] ops**: watching things',
+      '- **[aa] coordinator**: routes work',
+    ]);
+  });
+
+  it('placeholder: a section with no "- " line -> []', () => {
+    expect(keySeatBullets(SECTION_PLACEHOLDER, 'aa')).toEqual([]);
   });
 });

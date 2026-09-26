@@ -8,6 +8,7 @@ import {
   type WorkspaceBoardRef,
   workspaceLeaseLines,
   workspaceOwnerQueueLines,
+  workspaceSeatLines,
 } from '../src/workspace.js';
 import { sampleCard } from './helpers.js';
 
@@ -124,5 +125,26 @@ describe('workspaceLeaseLines', () => {
 
   it('no live leases anywhere is an empty array, not a placeholder line', () => {
     expect(workspaceLeaseLines([{ key: 'aa', leases: leasesDoc([]) }], NOW)).toEqual([]);
+  });
+});
+
+describe('workspaceSeatLines (RCB-160 slice 2)', () => {
+  it('one line per member SEATS bullet, re-keyed, repos: order', () => {
+    const lines = workspaceSeatLines([
+      { key: 'aa', seats: '- **[repoboard] builder: UP 2026-09-18 21:00Z.** on RCB-1' },
+      { key: 'bb', seats: '- **ops: UP 2026-09-18 21:00Z.** watching' },
+    ]);
+    expect(lines).toEqual([
+      '- **[aa] builder: UP 2026-09-18 21:00Z.** on RCB-1',
+      '- **[bb] ops: UP 2026-09-18 21:00Z.** watching',
+    ]);
+  });
+
+  it('a missing member (seats: null) contributes nothing', () => {
+    expect(workspaceSeatLines([{ key: 'aa', seats: null }])).toEqual([]);
+  });
+
+  it('a placeholder SEATS section contributes nothing', () => {
+    expect(workspaceSeatLines([{ key: 'aa', seats: '_(nothing recorded yet)_' }])).toEqual([]);
   });
 });

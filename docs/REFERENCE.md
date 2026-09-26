@@ -333,6 +333,7 @@ values, subagent policy, the per-landing gate — live in one place, written onc
 | `future-stamp` | warning | a log block's `#####` header time is more than 60 s ahead of `now` — hand-typed or clock-skewed, and ignored for `stale-state` rather than letting it wedge every other seat's `check` — RCB-90 | only with `--strict` |
 | `seat-owner-queue-drift` | warning | a SEATS bullet's text hand-types `OWNER QUEUE =`/`OWNER QUEUE:` followed by a list of card ids, and that set differs from the GENERATED queue (`needsDecision` cards) — RCB-130; one per bullet | only with `--strict` |
 | `workspace-member-missing` | error | RCB-153: at a workspace root, a `repos:` entry whose root has no `.repoboard/` — names the key and the resolved path; one per missing member | yes |
+| `workspace-key-name-mismatch` | warning | RCB-160: at a workspace root, a member whose `boardDisplayName` (board.yml `name:`, else its folder) differs from the `repos[].key` the workspace uses for it — that member's OWN SEATS bullets and log headers are prefixed with its NAME (slice 1), while workspace `state` prefixes them with its KEY (slice 2); one per mismatched member, before that member's own findings | only with `--strict` |
 
 Findings are pure data (`{kind, level, message}`); `exitCodeForFindings(findings, strict)` is the
 one function every surface (CLI, HTTP, MCP) calls to turn them into the 0/1 contract, so the
@@ -434,17 +435,27 @@ false`, `openStore`'s existing map-only contract for any such root.
 as before, then each member's, `repos:` order, every member line prefixed `[<key>] ` — a member
 with nothing open contributes no line, a member whose root has no board contributes exactly one,
 `[<key>] (missing)`. LEASES does the same with each member's live leases, right after the
-workspace's own. `--json` adds `repos: { <key>: { ownerQueue, leases, missing? } }`, one entry per
-configured member — `ownerQueue`/`leases` the same row shapes `ownerQueue()`/`liveLeaseRows()`
-already produce for the workspace's own top-level fields, `missing: true` (with empty arrays)
-instead of either when the root has no board.
+workspace's own. RCB-160 slice 2: SEATS does the same with each member's OWN SEATS bullets, right
+after the workspace's own — every bullet re-keyed `[<key>] ` (`keySeatBullets`, `packages/core/src/
+seat.ts`), REPLACING whatever `[<name>] ` prefix the member's own board already writes on it
+(slice 1's `boardDisplayName`) rather than leaving both; a member's whole-word `seat <name>` match
+is unaffected (it strips any prefix before matching either way). A missing member contributes no
+SEATS line — its `(missing)` already shows once, under OWNER QUEUE. `--json` adds `repos: { <key>:
+{ ownerQueue, leases, seats, missing? } }`, one entry per configured member — `ownerQueue`/`leases`
+the same row shapes `ownerQueue()`/`liveLeaseRows()` already produce for the workspace's own
+top-level fields, `seats` the same `SeatRow[]` `seat list --json` produces (bare names, never
+`[key]`- or `[name]`-prefixed — that prefix is a `state`-text-only, `repoboard state`'s human page,
+concern), `missing: true` (with empty arrays, `seats` included) instead of either when the root has
+no board.
 
 **`check` aggregates.** The workspace's own `checkFindings` run first, then, for each member: a
 root with no `.repoboard/` is one error finding, `workspace-member-missing` (names the key and the
-resolved path); otherwise the member's own `check` runs (the SAME `checkFindings`/`store.check`
-every board runs) and every one of its findings is prefixed `[<key>] `. Exit code is one
-`exitCodeForFindings` call over the combined list — the worst of the workspace's own and every
-member's.
+resolved path); otherwise, RCB-160 slice 2: a member whose `boardDisplayName` differs from the
+`repos[].key` the workspace uses for it is one warning finding, `workspace-key-name-mismatch`
+(names both), BEFORE that member's own findings; then the member's own `check` runs (the SAME
+`checkFindings`/`store.check` every board runs) and every one of its findings is prefixed `[<key>]
+`. Exit code is one `exitCodeForFindings` call over the combined list — the worst of the
+workspace's own and every member's.
 
 **Card-id resolution (W4) — wired into `card show`/`list`, plus every write verb (RCB-153 slice
 2).** `resolveCardRef(ref, boards)` is pure and now lives in its own leaf module,
@@ -544,9 +555,9 @@ byte-identical, only the code moved.
 
 | Command | Example |
 |---|---|
-| `repoboard state` (workspace root) | OWNER QUEUE/LEASES aggregate every configured member, `[<key>] `-prefixed, after the workspace's own lines |
-| `repoboard state --json` (workspace root) | adds `repos: { <key>: { ownerQueue, leases, missing? } }` |
-| `repoboard check` (workspace root) | runs `check` on the workspace, then every member, `[<key>] `-prefixed; a missing member is `workspace-member-missing` (error); exit = the worst of all of them |
+| `repoboard state` (workspace root) | OWNER QUEUE/LEASES/SEATS aggregate every configured member, `[<key>] `-prefixed, after the workspace's own lines (SEATS: RCB-160 slice 2, replacing a member's own `[<name>] ` prefix) |
+| `repoboard state --json` (workspace root) | adds `repos: { <key>: { ownerQueue, leases, seats, missing? } }` |
+| `repoboard check` (workspace root) | runs `check` on the workspace, then every member, `[<key>] `-prefixed; a missing member is `workspace-member-missing` (error); a member whose board name differs from its key is `workspace-key-name-mismatch` (warning, RCB-160); exit = the worst of all of them |
 | `repoboard card show BB-1` (workspace root) | resolves to the member whose prefix is `BB`, reads its card |
 | `repoboard card move BB-1 done` (workspace root) | resolved the same way, written through `bb`'s own store — refused if `bb` has no `writes: cards` |
 | `repoboard card list --repo all` (workspace root) | every board's cards, `REPO ID STATUS ASSIGNEE … TITLE` |

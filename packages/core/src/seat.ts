@@ -554,6 +554,31 @@ export function seatBulletTexts(seatsSection: string): SeatBulletText[] {
 }
 
 /**
+ * RCB-160 slice 2: every top-level SEATS bullet (`bulletSpans`, the same split `seatBulletTexts`
+ * uses), whole text with continuation lines kept, its FIRST line re-prefixed `[<key>] ` — an
+ * existing `[x] ` prefix (`BULLET_REPO_PREFIX_RE`, written by `formatSeatBullet`/
+ * `rewriteSeatBulletBody` from the board's own `boardDisplayName`) is REPLACED, never left
+ * alongside a second one; an unprefixed bullet gets `[<key>] ` inserted right after `- ` or
+ * `- **`. Used by the WORKSPACE view (`workspaceSeatLines`, `workspace.ts`) so a member's SEATS
+ * bullets show under the `repos[].key` the workspace's OWN OWNER QUEUE/LEASES lines already print
+ * — a member may call its own board something else entirely (`workspace-key-name-mismatch`
+ * warns about exactly that mismatch) — never under whatever the member calls itself. A placeholder
+ * section (no `- ` line) -> `[]`.
+ */
+export function keySeatBullets(seatsSection: string, key: string): string[] {
+  const lines = seatsSection.split('\n');
+  const prefix = `[${key}] `;
+  return bulletSpans(lines).map((span) => {
+    const bulletLines = lines.slice(span.start, span.end);
+    const firstLine = bulletLines[0] ?? '';
+    const reprefixed = BULLET_REPO_PREFIX_RE.test(firstLine)
+      ? firstLine.replace(BULLET_REPO_PREFIX_RE, `$1${prefix}`)
+      : firstLine.replace(/^(- (?:\*\*)?)/, `$1${prefix}`);
+    return [reprefixed, ...bulletLines.slice(1)].join('\n');
+  });
+}
+
+/**
  * RCB-89: render `listSeats`' rows as a fixed-column table, `NAME  STATUS  STAMP  IN-FLIGHT`
  * header first, each column padded to its widest value (last column unpadded, trailing
  * whitespace trimmed — same convention as `formatTable` in `cli.ts`). `inFlight` prints as `-`

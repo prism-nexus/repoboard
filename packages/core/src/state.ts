@@ -201,6 +201,11 @@ function renderTemplate(
 export interface WorkspaceStateExtra {
   ownerQueueLines?: readonly string[];
   leaseLines?: readonly string[];
+  /** RCB-160 slice 2: already `[<key>] `-prefixed member SEATS bullets (`workspaceSeatLines`,
+   *  `workspace.ts`) — appended after the workspace's own SEATS body, replacing it when that body
+   *  is `SECTION_PLACEHOLDER`, same pattern as `ownerQueueLines`/`leaseLines`. Omitted, or `[]` (a
+   *  plain board, or a caller that gathered none), renders BYTE-IDENTICAL to before this card. */
+  seatLines?: readonly string[];
 }
 
 export function renderState(
@@ -229,7 +234,15 @@ export function renderState(
         ? extraLeases.join('\n')
         : [leasesBody, ...extraLeases].join('\n');
   }
-  return renderTemplate(sections, ownerQueueBody, opts, leasesBody);
+  let seatsBody = sections.seats;
+  const extraSeats = workspace?.seatLines ?? [];
+  if (extraSeats.length > 0) {
+    seatsBody =
+      seatsBody === SECTION_PLACEHOLDER
+        ? extraSeats.join('\n')
+        : [seatsBody, ...extraSeats].join('\n');
+  }
+  return renderTemplate({ ...sections, seats: seatsBody }, ownerQueueBody, opts, leasesBody);
 }
 
 /** The ON-DISK rendering: OWNER QUEUE is always the placeholder, never generated content. */
@@ -289,7 +302,8 @@ export interface Finding {
     | 'systems-stale'
     | 'untracked-cards'
     | 'seat-owner-queue-drift'
-    | 'workspace-member-missing';
+    | 'workspace-member-missing'
+    | 'workspace-key-name-mismatch';
   level: FindingLevel;
   message: string;
 }

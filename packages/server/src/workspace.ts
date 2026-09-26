@@ -17,10 +17,11 @@ import type {
   Finding,
   GateMemberFacts,
   LeasesDoc,
+  SeatRow,
   WorkspaceBoardRef,
   WorkspaceRepo,
 } from '@repoboard/core';
-import { resolveCardRef } from '@repoboard/core';
+import { boardDisplayName, listSeats, resolveCardRef } from '@repoboard/core';
 import { type CardStore, openStore } from './store.js';
 
 /** `~` alone, or `~/…`, expands to the user's home directory; anything else passes through
@@ -263,6 +264,22 @@ export async function checkMembers(
       });
       continue;
     }
+    // RCB-160 slice 2: the member's own display name (board.yml `name:`, else its folder — same
+    // rule its SEATS bullets and log headers already prefix themselves with, slice 1) can differ
+    // from the `key` the WORKSPACE uses for it — surfaced here, before that member's own findings,
+    // so a reader sees why `state`'s `[<key>] …` SEATS lines say something other than what the
+    // member itself calls itself.
+    const displayName = boardDisplayName(store.config, memberRoot);
+    if (displayName !== key) {
+      memberFindings.push({
+        kind: 'workspace-key-name-mismatch',
+        level: 'warning',
+        message:
+          `workspace-key-name-mismatch: [${key}] board name is "${displayName}" (board.yml ` +
+          `name, else folder); its SEATS and log headers say [${displayName}], workspace state ` +
+          `says [${key}]`,
+      });
+    }
     const members = await workspaceGateMembers(store, now);
     const outcome = await store.check(strict, members);
     for (const f of outcome.findings) {
@@ -285,12 +302,19 @@ export function memberStateRepos<Q, L>(
   toOwnerQueue: (cards: readonly Card[]) => Q[],
   toLeaseRows: (doc: LeasesDoc, now: Date) => L[],
   now: Date,
-): Record<string, { ownerQueue: Q[]; leases: L[]; missing?: true }> {
-  const out: Record<string, { ownerQueue: Q[]; leases: L[]; missing?: true }> = {};
+): Record<string, { ownerQueue: Q[]; leases: L[]; seats: SeatRow[]; missing?: true }> {
+  const out: Record<string, { ownerQueue: Q[]; leases: L[]; seats: SeatRow[]; missing?: true }> =
+    {};
   for (const { key, store } of opened) {
     out[key] = store.hasBoard
-      ? { ownerQueue: toOwnerQueue(store.list()), leases: toLeaseRows(store.leases(), now) }
-      : { ownerQueue: [], leases: [], missing: true };
+      ? {
+          ownerQueue: toOwnerQueue(store.list()),
+          leases: toLeaseRows(store.leases(), now),
+          // RCB-160 slice 2: the SAME `listSeats` `seat list` uses — bare names, never `[key]`- or
+          // `[repo]`-prefixed (this is the `--json` field, not the rendered SEATS text).
+          seats: listSeats(store.state()?.sections.seats ?? ''),
+        }
+      : { ownerQueue: [], leases: [], seats: [], missing: true };
   }
   return out;
 }

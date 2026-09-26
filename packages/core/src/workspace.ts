@@ -12,6 +12,7 @@
 import type { ResolveCardRefResult, WorkspaceBoardRef } from './card-ref.js';
 import { resolveCardRef } from './card-ref.js';
 import { formatLeaseLine, liveLeases } from './leases.js';
+import { keySeatBullets } from './seat.js';
 import { OWNER_QUEUE_PLACEHOLDER, renderOwnerQueue } from './state.js';
 import type { Card, LeasesDoc } from './types.js';
 
@@ -65,6 +66,29 @@ export function workspaceLeaseLines(
     for (const lease of liveLeases(leases, now)) {
       lines.push(`[${key}] ${formatLeaseLine(lease, now)}`);
     }
+  }
+  return lines;
+}
+
+/** One member's SEATS section for aggregation — `seats: null` marks a member with no board
+ * (`workspace-member-missing`), which contributes nothing here: its `(missing)` line already
+ * shows once, under OWNER QUEUE (W5 does not ask for a second one). */
+export interface WorkspaceSeatsMember {
+  key: string;
+  seats: string | null;
+}
+
+/**
+ * RCB-160 slice 2: the EXTRA (member) SEATS lines, one per member bullet, each re-prefixed
+ * `[<key>] ` by `keySeatBullets` (`seat.ts`) — REPLACING whatever prefix the member's own bullet
+ * already carries (its own `boardDisplayName`, slice 1), never leaving both — `repos:` order. What
+ * `renderState`'s `workspace.seatLines` takes alongside the workspace's own SEATS body.
+ */
+export function workspaceSeatLines(members: readonly WorkspaceSeatsMember[]): string[] {
+  const lines: string[] = [];
+  for (const { key, seats } of members) {
+    if (seats === null) continue;
+    lines.push(...keySeatBullets(seats, key));
   }
   return lines;
 }

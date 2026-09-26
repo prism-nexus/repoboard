@@ -33,6 +33,7 @@ import {
   type Window,
   workspaceLeaseLines,
   workspaceOwnerQueueLines,
+  workspaceSeatLines,
 } from '@repoboard/core';
 import { z } from 'zod';
 import { filterCards, ownerQueue } from './card-query.js';
@@ -1054,9 +1055,9 @@ export function createMcpServer(opts: McpServerOptions): McpServer {
     'after OWNER QUEUE — never stored on disk) are both generated fresh from current data — ' +
     'never trust stale text from a prior read.' +
     (isWorkspace
-      ? ' RCB-153: with no repo, OWNER QUEUE/LEASES aggregate every configured member ([<key>] ' +
-        'lines) and repos: {<key>: {ownerQueue, leases, missing?}} is added; repo (a member key) ' +
-        "reports that one board's own state instead, unaggregated."
+      ? ' RCB-153: with no repo, OWNER QUEUE/LEASES/SEATS (RCB-160) aggregate every configured ' +
+        'member ([<key>] lines) and repos: {<key>: {ownerQueue, leases, seats, missing?}} is ' +
+        "added; repo (a member key) reports that one board's own state instead, unaggregated."
       : '');
   const getStateHandler = async ({ repo }: { repo?: string } = {}): Promise<CallToolResult> => {
     const wsKey = workspaceKey();
@@ -1090,6 +1091,12 @@ export function createMcpServer(opts: McpServerOptions): McpServer {
             .filter(({ store: m }) => m.hasBoard)
             .map(({ key, store: m }) => ({ key, leases: m.leases() })),
           nowDate,
+        ),
+        seatLines: workspaceSeatLines(
+          ws.opened.map(({ key, store: m }) => ({
+            key,
+            seats: m.hasBoard ? (m.state()?.sections.seats ?? null) : null,
+          })),
         ),
       },
     );

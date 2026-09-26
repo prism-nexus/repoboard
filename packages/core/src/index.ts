@@ -187,6 +187,7 @@ export {
   checkFieldCounts,
   findSeatLine,
   formatSeatBullet,
+  keySeatBullets,
   listSeats,
   parseSeatFields,
   parseSeatStamp,
@@ -329,5 +330,9 @@ export type {
   Window,
   WorkspaceRepo,
 } from './types.js';
-export type { WorkspaceLeasesMember, WorkspaceOwnerQueueMember } from './workspace.js';
-export { workspaceLeaseLines, workspaceOwnerQueueLines } from './workspace.js';
+export type {
+  WorkspaceLeasesMember,
+  WorkspaceOwnerQueueMember,
+  WorkspaceSeatsMember,
+} from './workspace.js';
+export { workspaceLeaseLines, workspaceOwnerQueueLines, workspaceSeatLines } from './workspace.js';

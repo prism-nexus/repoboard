@@ -25,6 +25,8 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: pnpm test
+        env:
+          REPOBOARD_WATCH_DIAG: '1'
       - run: pnpm typecheck
       - run: pnpm lint
 

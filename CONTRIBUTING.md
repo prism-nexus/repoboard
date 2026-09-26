@@ -37,8 +37,10 @@ node packages/server/dist/cli.js check   # prints `ok`, or only `needs-decision:
 ```
 
 Run `pnpm test` **twice**. The suite has a filesystem-watcher test that is timing-sensitive; two
-green runs in a row is the bar, not one. `pnpm test` also runs the web bundle size check
-(`pnpm --filter @repoboard/web check:size`, limit 600 KB gzipped JS).
+green runs in a row is the bar, not one. CI sets `REPOBOARD_WATCH_DIAG=1` so a watcher-related
+failure prints its trace; set it locally (`REPOBOARD_WATCH_DIAG=1 pnpm test`) to get the same
+trace. `pnpm test` also runs the web bundle size check (`pnpm --filter @repoboard/web check:size`,
+limit 600 KB gzipped JS).
 
 `node packages/server/dist/cli.js check` must print `ok`, or only `needs-decision:` lines (that
 finding is informational and never fails) — anything else means the dogfood board

@@ -4,6 +4,7 @@ import { mkdir, mkdtemp, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { defaultBoardConfig, serializeBoard } from '@repoboard/core';
+import { getWatchDiag } from '../src/watch-diag.js';
 
 export const NOW = new Date('2026-09-02T22:41:10Z');
 
@@ -82,6 +83,11 @@ export function waitForEvent<T = unknown>(
   return new Promise<T>((resolve, reject) => {
     const timer = setTimeout(() => {
       emitter.off(event, handler);
+      // RCB-157: opt-in watcher trace (REPOBOARD_WATCH_DIAG=1) — print the timed-out store's
+      // recorded rows before rejecting, so a CI-only miss leaves a trace instead of a bare timeout.
+      const diag = getWatchDiag();
+      const root = (emitter as unknown as { root?: unknown }).root;
+      if (diag && typeof root === 'string') console.error(diag.dump(root));
       reject(new Error(`timed out after ${timeoutMs}ms waiting for "${event}"`));
     }, timeoutMs);
     // biome-ignore lint/suspicious/noExplicitAny: EventEmitter listener payloads are untyped here

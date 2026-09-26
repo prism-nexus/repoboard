@@ -86,6 +86,7 @@ import { gatherCost } from './cost.js';
 import { withFileLock } from './file-lock.js';
 import { localDir, localStatus } from './local.js';
 import { detectSystems } from './systems-detect.js';
+import { getWatchDiag } from './watch-diag.js';
 
 /** One line of `.repoboard/events.jsonl`: core's `Event` (K2). Kept as a name for the package index. */
 export type StoreEvent = Event;
@@ -1743,6 +1744,15 @@ export class CardStore extends EventEmitter<StoreEvents> {
     }
     const hash = sha1(text);
     const prev = this.byPath.get(path);
+    // RCB-157: opt-in watcher trace (REPOBOARD_WATCH_DIAG=1) — no-op when off.
+    getWatchDiag()?.record(
+      this.root,
+      'refresh',
+      origin,
+      path,
+      text.length,
+      prev ? prev.hash === hash : 'noprev',
+    );
     if (prev && prev.hash === hash) return; // our own write echoing back, or a no-op touch
     const prevCard = prev?.id ? this.cards.get(prev.id) : undefined;
 
@@ -1851,7 +1861,22 @@ export class CardStore extends EventEmitter<StoreEvents> {
       ignored: (p) => p.endsWith('.tmp') || p.endsWith('.lock') || p.split(sep).includes('.git'),
     });
     this.watcher = watcher;
+    // RCB-157: opt-in watcher trace (REPOBOARD_WATCH_DIAG=1) — `d` is `null` off, so every use
+    // below is a no-op and behaviour is unchanged.
+    const d = getWatchDiag();
+    if (d) {
+      watcher.on('raw', (ev, p, details) => {
+        d.record(
+          this.root,
+          'raw',
+          ev,
+          p,
+          (details as { watchedPath?: string } | undefined)?.watchedPath,
+        );
+      });
+    }
     watcher.on('all', (event, rawPath) => {
+      d?.record(this.root, 'all', event, rawPath);
       const path = resolve(rawPath);
       const rel = relative(this.repoboardDir, path).split(sep).join('/');
       // RCB-83: `this.statePath` moves to `local/STATE.md` when a local layer exists (set once,
@@ -1860,6 +1885,7 @@ export class CardStore extends EventEmitter<StoreEvents> {
       const stateRel = relative(this.repoboardDir, this.statePath).split(sep).join('/');
       const logRel = relative(this.repoboardDir, this.logDir).split(sep).join('/');
       const task = (): Promise<void> => {
+        d?.record(this.root, 'run', rel);
         if (rel === 'board.yml') {
           // RCB-34: `setColumns` already emitted `config` synchronously; skip the echo (see
           // `loadConfig`'s hash check) so one `setColumns` call produces exactly one emit.
@@ -1913,12 +1939,21 @@ export class CardStore extends EventEmitter<StoreEvents> {
         }
         return Promise.resolve();
       };
+      d?.record(this.root, 'enq', rel);
       this.enqueue(task).catch((e: unknown) => {
         this.emit('warning', `watcher: ${rel}: ${(e as Error).message}`);
       });
     });
-    watcher.on('error', (e) => this.emit('warning', `watcher: ${(e as Error).message}`));
-    await new Promise<void>((res) => watcher.once('ready', () => res()));
+    watcher.on('error', (e) => {
+      d?.record(this.root, 'error', (e as Error).message);
+      this.emit('warning', `watcher: ${(e as Error).message}`);
+    });
+    await new Promise<void>((res) =>
+      watcher.once('ready', () => {
+        d?.record(this.root, 'ready');
+        res();
+      }),
+    );
   }
 }
 

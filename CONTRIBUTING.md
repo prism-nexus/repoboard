@@ -50,7 +50,8 @@ ran them. Not adjectives; numbers.
 
 ## What a PR needs
 
-- One concern per PR.
+- One concern per PR. PRs are squash-merged (the only merge method enabled), so the PR title
+  becomes the commit subject on `main`; the branch is deleted on merge.
 - Tests for behaviour: a bug fix carries the test that failed before the fix and passes after.
 - The PR description states what was measured (counts, sizes, timings) with the date, not
   adjectives.

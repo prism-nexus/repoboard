@@ -2,8 +2,8 @@
  * RCB-68: phases + gates on the board — `phaseInfoFor`/`lanesFor` (web/src/store.ts),
  * `CardItem`'s chips, `Board`'s swimlanes, and the Drawer's read-only Phase block.
  */
-import { defaultBoardConfig } from '@repoboard/core';
-import { fireEvent, screen, within } from '@testing-library/react';
+import { defaultBoardConfig, type GateMemberFacts } from '@repoboard/core';
+import { act, fireEvent, screen, within } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
 import { lanesFor, phaseInfoFor } from '../src/store.js';
 import { card, renderApp, snapshot, testStore } from './helpers.jsx';
@@ -13,12 +13,12 @@ const config = defaultBoardConfig(); // backlog, decide, todo, doing, done{done:
 describe('phaseInfoFor', () => {
   it('is null for a plain card (no phase, no gate, no children)', () => {
     const plain = card('RB-1', 'todo');
-    expect(phaseInfoFor(plain, [plain], config)).toBeNull();
+    expect(phaseInfoFor(plain, [plain], config, [])).toBeNull();
   });
 
   it('is null when config is absent, even for a card that otherwise has phase info', () => {
     const step = card('RB-2', 'todo', { phase: 'PH.1' });
-    expect(phaseInfoFor(step, [step], null)).toBeNull();
+    expect(phaseInfoFor(step, [step], null, [])).toBeNull();
   });
 
   it('carries phase/blocked for a step, and total/done/blockedOn for a phase card', () => {
@@ -26,16 +26,51 @@ describe('phaseInfoFor', () => {
     const gateCard = card('RB-9', 'todo');
     const step = card('RB-2', 'todo', { parent: 'RB-1', phase: 'PH.1', gate: 'RB-9' });
     const all = [parent, gateCard, step];
-    expect(phaseInfoFor(step, all, config)).toEqual({
+    expect(phaseInfoFor(step, all, config, [])).toEqual({
       phase: 'PH.1',
       blocked: 'blocked on RB-9 (todo)',
       rollup: null,
     });
-    expect(phaseInfoFor(parent, all, config)).toEqual({
+    expect(phaseInfoFor(parent, all, config, [])).toEqual({
       phase: null,
       blocked: null,
       rollup: { total: 1, done: 0, blockedOn: 'blocked on RB-9 (todo)' },
     });
+  });
+});
+
+describe('phaseInfoFor: workspace gate members (RCB-154)', () => {
+  const wsConfig = { ...config, prefix: 'WS' };
+  const mbConfig = { ...config, prefix: 'MB' };
+
+  function members(memberCard: ReturnType<typeof card>): GateMemberFacts[] {
+    return [{ key: 'mb', prefix: 'MB', cards: [memberCard], config: mbConfig }];
+  }
+
+  it('a done member card clears the gate', () => {
+    // A phase keeps the PhaseInfo non-null, so `blocked: null` is asserted, not `?.` over null.
+    const wsCard = card('WS-1', 'todo', { gate: 'MB-1', phase: 'PH.1' });
+    const memberCard = card('MB-1', 'done');
+    expect(phaseInfoFor(wsCard, [wsCard], wsConfig, members(memberCard))).toEqual({
+      phase: 'PH.1',
+      blocked: null,
+      rollup: null,
+    });
+  });
+
+  it('a todo member card blocks, naming it', () => {
+    const wsCard = card('WS-1', 'todo', { gate: 'MB-1' });
+    const memberCard = card('MB-1', 'todo');
+    expect(phaseInfoFor(wsCard, [wsCard], wsConfig, members(memberCard))?.blocked).toBe(
+      'blocked on MB-1 (todo)',
+    );
+  });
+
+  it('no members at all — "no such card", never a silent clear', () => {
+    const wsCard = card('WS-1', 'todo', { gate: 'MB-1' });
+    expect(phaseInfoFor(wsCard, [wsCard], wsConfig, [])?.blocked).toBe(
+      'blocked on MB-1 (no such card)',
+    );
   });
 });
 
@@ -251,5 +286,32 @@ describe('Drawer: Phase block (RCB-68)', () => {
     renderApp(store);
     fireEvent.click(screen.getByTitle('Open RB-1'));
     expect(screen.queryByTestId('phase-section')).toBeNull();
+  });
+});
+
+describe('Board: workspace gate members reach the board (RCB-154)', () => {
+  it('a snapshot carrying gateMembers clears the chip; a later gateMembers message re-blocks it', () => {
+    const store = testStore();
+    const wsConfig = { ...defaultBoardConfig(), prefix: 'WS' };
+    const mbConfig = { ...defaultBoardConfig(), prefix: 'MB' };
+    const wsCard = card('WS-1', 'todo', { gate: 'MB-1' });
+
+    store.dispatch({
+      type: 'snapshot',
+      board: { config: wsConfig, cards: [wsCard] },
+      repo: null,
+      gateMembers: [{ key: 'mb', prefix: 'MB', cards: [card('MB-1', 'done')], config: mbConfig }],
+    });
+    renderApp(store);
+    expect(screen.queryByTestId('blocked-WS-1')).toBeNull();
+
+    act(() =>
+      store.dispatch({
+        type: 'gateMembers',
+        members: [{ key: 'mb', prefix: 'MB', cards: [card('MB-1', 'todo')], config: mbConfig }],
+      }),
+    );
+    const blocked = screen.getByTestId('blocked-WS-1');
+    expect(blocked).toHaveAttribute('title', 'blocked on MB-1 (todo)');
   });
 });

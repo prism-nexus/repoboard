@@ -5,6 +5,7 @@ import type {
   CardPatch,
   DecisionOption,
   Event,
+  GateMemberFacts,
   Lease,
   RepoSnapshot,
   Sibling,
@@ -90,6 +91,11 @@ export interface SystemTestsPayload {
  * never a crash, so a mock or a pre-P8.2 payload still renders (the Now strip's quiet line).
  *
  * P8.3: `state`/`log` are optional the same way — absent means "nothing yet", never a crash.
+ *
+ * RCB-154: `gateMembers` is optional the same way `leases` is — absent means "no workspace member
+ * boards", the same default `blockedReason`/`rollup` in `@repoboard/core` fall back to on their
+ * own ([]), so a payload without it (or a repo switch, which resets the whole snapshot) renders
+ * exactly like today.
  */
 export type ServerMessage =
   | {
@@ -108,6 +114,8 @@ export type ServerMessage =
       systems?: SystemsPayload;
       state?: StatePayload;
       log?: LogPayload;
+      /** RCB-154: a WORKSPACE's opened member boards, gathered server-side — see the header note. */
+      gateMembers?: GateMemberFacts[];
     }
   | { type: 'card'; card: Card }
   | { type: 'card:removed'; id: string }
@@ -137,7 +145,10 @@ export type ServerMessage =
    * sentence, shown verbatim.
    */
   | { type: 'error'; id: string; message: string }
-  | { type: 'warning'; id: string; message: string };
+  | { type: 'warning'; id: string; message: string }
+  /** RCB-154: a live update to the workspace's opened member boards (e.g. a member's own board.yml
+   * or cards changed) — the store replaces `state.gateMembers` wholesale, same as `leases`. */
+  | { type: 'gateMembers'; members: GateMemberFacts[] };
 
 /**
  * RCB-43 slice 3: one entry of `GET /api/repos`, mirroring `packages/server/src/http.ts`'s

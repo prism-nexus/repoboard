@@ -16,8 +16,9 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import type { AddressInfo } from 'node:net';
 import { dirname, extname, join, normalize, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { boardDisplayName, type Sibling } from '@repoboard/core';
+import { boardDisplayName, type GateMemberFacts, type Sibling } from '@repoboard/core';
 import {
+  type GateMembersSource,
   HttpError,
   hasBoardDir,
   openRepoContext,
@@ -28,6 +29,7 @@ import {
 } from './repo-context.js';
 import type { ScanResult } from './scanner.js';
 import type { CardStore } from './store.js';
+import { gateMemberFacts, type OpenedWorkspaceMember } from './workspace.js';
 
 export interface ServerOptions {
   store: CardStore;
@@ -304,6 +306,70 @@ async function handleScopedApi(
   return ctx.handleApi(method, scopedUrl, req, res);
 }
 
+/**
+ * RCB-154 slice 2a: the PRIMARY's `RepoContextOptions.gateMembers`, built once per `startServer`
+ * call over `keyedRoots.slice(1)` — the workspace's sibling roots, opened through the SAME
+ * `RepoRegistry` every other multi-root route uses (no eager open here; `facts()` opens a member
+ * only when first called). `facts()` reuses `gateMemberFacts` (workspace.ts) so this feeds
+ * `gateState`'s `members` argument the identical shape CLI/MCP/seat already compute (RCB-154 slice
+ * 1) — never a second, drifting definition of a member's facts.
+ */
+function buildGateMembersSource(
+  registry: RepoRegistry,
+  memberKeys: readonly string[],
+): GateMembersSource {
+  const listeners = new Set<() => void>();
+  // Per member key: the detach function for the `card`/`card:removed`/`config` listeners this
+  // source itself attached — attached once per store (a second `facts()` call over an
+  // already-opened member never re-attaches), detached only once nobody is subscribed any more.
+  const wired = new Map<string, () => void>();
+
+  function notifyAll(): void {
+    for (const l of listeners) l();
+  }
+
+  function wire(key: string, store: CardStore): void {
+    if (wired.has(key)) return;
+    const onChange = () => notifyAll();
+    store.on('card', onChange);
+    store.on('card:removed', onChange);
+    store.on('config', onChange);
+    wired.set(key, () => {
+      store.off('card', onChange);
+      store.off('card:removed', onChange);
+      store.off('config', onChange);
+    });
+  }
+
+  async function facts(): Promise<GateMemberFacts[]> {
+    const opened: OpenedWorkspaceMember[] = [];
+    for (const key of memberKeys) {
+      let ctx: RepoContext;
+      try {
+        ctx = await registry.openRepo(key);
+      } catch {
+        continue; // W3: a member this cannot open contributes nothing, never a broken facts().
+      }
+      wire(key, ctx.store);
+      opened.push({ key, root: ctx.root, store: ctx.store });
+    }
+    return gateMemberFacts(opened);
+  }
+
+  function subscribe(onChange: () => void): () => void {
+    listeners.add(onChange);
+    return () => {
+      listeners.delete(onChange);
+      if (listeners.size === 0) {
+        for (const detach of wired.values()) detach();
+        wired.clear();
+      }
+    };
+  }
+
+  return { facts, subscribe };
+}
+
 export async function startServer(opts: ServerOptions): Promise<RunningServer> {
   const { store } = opts;
   const host = opts.host ?? '127.0.0.1';
@@ -341,6 +407,17 @@ export async function startServer(opts: ServerOptions): Promise<RunningServer> {
     siblingsFlag,
     now: opts.now,
   });
+  // RCB-154 slice 2a: ONLY a workspace serve (`keyedRoots` given) gets a gate-members source, and
+  // it goes to the PRIMARY's own context alone — never the registry template, so a root opened
+  // later through the registry (`RepoRegistry.openRepo`, slice 2's per-key routes) never gets one
+  // of its own. `keyedRoots.slice(1)` is every OTHER member: `keyedRoots[0]` is the workspace
+  // itself (the `roots[0] === store.root` contract checked above).
+  const gateMembers = opts.keyedRoots
+    ? buildGateMembersSource(
+        registry,
+        opts.keyedRoots.slice(1).map((r) => r.key),
+      )
+    : undefined;
   const primary = await openRepoContext(registry.primaryKey, {
     store,
     fun,
@@ -351,6 +428,7 @@ export async function startServer(opts: ServerOptions): Promise<RunningServer> {
     warn,
     siblingsFlag,
     now: opts.now,
+    gateMembers,
   });
   registry.setOpened(registry.primaryKey, primary);
   // K12 "map on demand": only the primary is scanned/watched at start, and only when `scan` is

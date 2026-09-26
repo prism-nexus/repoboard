@@ -22,6 +22,7 @@ import {
   type Column,
   type CreateCardInput,
   type DecisionOption,
+  type GateMemberFacts,
   isOwnerTask,
   mergeSiblings,
   needsDecision,
@@ -571,6 +572,22 @@ export function hasBoardDir(root: string): boolean {
   return existsSync(join(root, '.repoboard'));
 }
 
+/**
+ * RCB-154 slice 2a: how a `RepoContext` reaches a workspace's OTHER member boards' gate facts,
+ * without knowing how they are opened, watched, or keyed — `http.ts` builds the one instance (over
+ * `keyedRoots.slice(1)`, via the SAME `RepoRegistry` every other multi-root route uses) and hands
+ * it in as `RepoContextOptions.gateMembers`; this module only ever calls the two methods below.
+ * `facts()` never rejects — a member it cannot resolve simply contributes nothing (W3), never a
+ * broken snapshot or a dropped broadcast.
+ */
+export interface GateMembersSource {
+  facts(): Promise<GateMemberFacts[]>;
+  /** `onChange` fires whenever a member's cards or config might have changed — never with the new
+   * facts themselves (the caller re-`facts()`s), so this source never has to compute or cache a
+   * payload just to raise its own event. Returns the unsubscribe. */
+  subscribe(onChange: () => void): () => void;
+}
+
 export interface RepoContextOptions {
   store: CardStore;
   fun: boolean;
@@ -586,6 +603,10 @@ export interface RepoContextOptions {
   /** RCB-125 test seam only: fires once the initial scan has resolved but before the repo
    * watcher is created — the exact gap K16 names. Production callers never set this. */
   afterInitialScan?: () => Promise<void> | void;
+  /** RCB-154 slice 2a: this root's PRIMARY-only source of workspace member gate facts (`http.ts`,
+   * built over `keyedRoots.slice(1)`). Absent means "not a multi-root workspace serve" — the
+   * snapshot then carries no `gateMembers` key at all, byte-identical to before this card. */
+  gateMembers?: GateMembersSource;
 }
 
 export interface RepoContext {
@@ -691,6 +712,17 @@ export async function openRepoContext(key: string, opts: RepoContextOptions): Pr
   const todayLogPayload = async () => {
     const log = await store.log();
     return log ?? { date: toIso(store.clock).slice(0, 10), text: '', blocks: [] };
+  };
+
+  // RCB-154 slice 2a: `undefined` when there is no `gateMembers` source at all — the ONLY signal
+  // that decides whether the key is present on the wire (never an empty array standing in for
+  // "no source"). Every card's `body` is replaced with `''` before this ever reaches a client: the
+  // web board only resolves `gate:` against `id`/`status`/`config`, and a member's body text can be
+  // arbitrarily large and is none of the other board's business.
+  const gateMembersPayload = async (): Promise<GateMemberFacts[] | undefined> => {
+    if (!opts.gateMembers) return undefined;
+    const facts = await opts.gateMembers.facts();
+    return facts.map((f) => ({ ...f, cards: f.cards.map((c) => ({ ...c, body: '' })) }));
   };
 
   function broadcast(msg: unknown): void {
@@ -834,6 +866,23 @@ export async function openRepoContext(key: string, opts: RepoContextOptions): Pr
   store.on('state', onState);
   store.on('log', onLog);
 
+  // RCB-154 slice 2a: `opts.gateMembers.subscribe` ONCE, here, at context open — never per
+  // connection (a connection's own snapshot fetch, `gateMembersPayload()`, is a separate, freshly
+  // re-`facts()`'d read). A trailing 100 ms timer collapses a burst of member changes into one
+  // re-fetch and one broadcast, the same debounce shape as the repo watcher's `scheduleRescan`
+  // above, just on its own short timer (this one is not the repo scan's `debounceMs`, which is
+  // seconds, not milliseconds meant for a workspace board's own card edits).
+  let gateMembersTimer: NodeJS.Timeout | null = null;
+  const unsubscribeGateMembers = opts.gateMembers?.subscribe(() => {
+    if (gateMembersTimer) clearTimeout(gateMembersTimer);
+    gateMembersTimer = setTimeout(() => {
+      gateMembersTimer = null;
+      void gateMembersPayload().then((members) => {
+        if (members !== undefined) broadcast({ type: 'gateMembers', members });
+      });
+    }, 100);
+  });
+
   // ---- clients → store ----------------------------------------------------------------
   async function onClientMessage(ws: WebSocket, raw: unknown): Promise<void> {
     let msg: unknown;
@@ -872,7 +921,7 @@ export async function openRepoContext(key: string, opts: RepoContextOptions): Pr
   }
 
   wss.on('connection', (ws) => {
-    void todayLogPayload().then((log) => {
+    void Promise.all([todayLogPayload(), gateMembersPayload()]).then(([log, gateMembers]) => {
       if (ws.readyState !== ws.OPEN) return;
       ws.send(
         JSON.stringify({
@@ -883,6 +932,7 @@ export async function openRepoContext(key: string, opts: RepoContextOptions): Pr
           systems: systemsPayload(),
           state: statePayload(),
           log,
+          ...(gateMembers !== undefined ? { gateMembers } : {}),
         }),
       );
     });
@@ -1233,6 +1283,8 @@ export async function openRepoContext(key: string, opts: RepoContextOptions): Pr
       if (closed) return;
       closed = true;
       if (timer) clearTimeout(timer);
+      if (gateMembersTimer) clearTimeout(gateMembersTimer);
+      unsubscribeGateMembers?.();
       store.off('card', onCard);
       store.off('card:removed', onRemoved);
       store.off('event', onEvent);

@@ -15,6 +15,7 @@ import {
   type Card,
   type Column as ColumnConfig,
   findColumn,
+  type GateMemberFacts,
   isActive,
   rollup,
   type Size,
@@ -115,6 +116,7 @@ function LaneHead({
   lane,
   cards,
   config,
+  gateMembers,
   columnId,
   isDoneColumn,
   onOpen,
@@ -123,11 +125,12 @@ function LaneHead({
   lane: Lane;
   cards: Card[];
   config: BoardConfig;
+  gateMembers: readonly GateMemberFacts[];
   columnId: string;
   isDoneColumn: (status: string) => boolean;
   onOpen: (id: string) => void;
 }) {
-  const parentRollup = lane.parent ? rollup(lane.parent, cards, config) : null;
+  const parentRollup = lane.parent ? rollup(lane.parent, cards, config, gateMembers) : null;
   return (
     <div className="lane__head" data-testid={`lane-${parentId}`}>
       <button
@@ -237,6 +240,7 @@ export function Board() {
     hasBoard,
     state,
     log,
+    gateMembers,
     sizeFilter,
     sortBy,
     query,
@@ -270,9 +274,9 @@ export function Board() {
   // of this map (referentially stable when neither `cards` nor `config` changed).
   const phaseById = useMemo(() => {
     const map = new Map<string, PhaseInfo | null>();
-    for (const c of cards) map.set(c.id, phaseInfoFor(c, cards, config));
+    for (const c of cards) map.set(c.id, phaseInfoFor(c, cards, config, gateMembers));
     return map;
-  }, [cards, config]);
+  }, [cards, config, gateMembers]);
   // RCB-151: every id that appears as SOME card's `parent`, over the FULL `cards` — the set
   // `wipCountFor` tests membership against instead of each column re-running `isPlanParent`
   // (itself an O(N) `stepsOf` scan) once per card, which made the WIP count O(N^2) in the column.
@@ -434,6 +438,7 @@ export function Board() {
                           lane={row.lane}
                           cards={cards}
                           config={config}
+                          gateMembers={gateMembers}
                           columnId={col.id}
                           isDoneColumn={isDoneColumn}
                           onOpen={open}
@@ -464,6 +469,7 @@ export function Board() {
                             lane={lane}
                             cards={cards}
                             config={config}
+                            gateMembers={gateMembers}
                             columnId={col.id}
                             isDoneColumn={isDoneColumn}
                             onOpen={open}

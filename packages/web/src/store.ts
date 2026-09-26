@@ -11,6 +11,7 @@ import {
   type CardPatch,
   type Column,
   type Event,
+  type GateMemberFacts,
   type RepoSnapshot,
   rollup,
   type Sibling,
@@ -69,6 +70,11 @@ export interface State {
   /** RCB-98: `.repoboard/systems.yml`, or `null` before the first snapshot (the Flow view's
    * "loading" state — distinct from `exists: false`, which is a real, inert answer). */
   systems: SystemsPayload | null;
+  /** RCB-154: a WORKSPACE's opened member boards, for resolving a `gate:` that names a card on
+   * another board — see `wire.ts`'s `ServerMessage` header. `[]` (never absent) so every existing
+   * `phaseInfoFor`/`rollup`/`gateState` caller can pass it straight through with no null check;
+   * a snapshot resets it (`msg.gateMembers ?? []`) so a repo switch never carries stale members. */
+  gateMembers: GateMemberFacts[];
   /** RCB-98: the Flow view's env switch (plan §3.4); default `'both'`, not persisted — a fresh
    * load always starts at the safest read of "both stories". */
   flowEnv: FlowEnv;
@@ -224,6 +230,7 @@ export function createStore(factory: TransportFactory, opts: StoreOptions = {}):
     state: null,
     log: null,
     systems: null,
+    gateMembers: [],
     flowEnv: 'both',
     events: [],
     connected: false,
@@ -343,6 +350,7 @@ export function createStore(factory: TransportFactory, opts: StoreOptions = {}):
             systems: msg.systems ?? null,
             state: msg.state ?? null,
             log: msg.log ?? null,
+            gateMembers: msg.gateMembers ?? [],
             everConnected: true,
             unreachable: false,
             fun: chosen === null || chosen === undefined ? funFromConfig : chosen === '1',
@@ -387,6 +395,9 @@ export function createStore(factory: TransportFactory, opts: StoreOptions = {}):
           break;
         case 'log':
           set({ log: { date: msg.date, text: msg.text } });
+          break;
+        case 'gateMembers':
+          set({ gateMembers: msg.members });
           break;
         case 'error': {
           // RCB-69: a refused card:move/card:update — snap back immediately rather than waiting
@@ -746,15 +757,22 @@ export interface PhaseInfo {
   rollup: { total: number; done: number; blockedOn: string | null } | null;
 }
 
+/**
+ * RCB-154: `gateMembers` is REQUIRED (not defaulted) — every caller here already has `state.
+ * gateMembers` (`[]` when there are none), so there is no "caller doesn't know about members" case
+ * to default around, unlike core's own `blockedReason`/`rollup`, which many non-web callers still
+ * call with none.
+ */
 export function phaseInfoFor(
   card: Card,
   cards: readonly Card[],
   config: BoardConfig | null,
+  gateMembers: readonly GateMemberFacts[],
 ): PhaseInfo | null {
   if (!config) return null;
   const phase = card.phase ?? null;
-  const blocked = blockedReason(card, cards, config);
-  const cardRollup = rollup(card, cards, config);
+  const blocked = blockedReason(card, cards, config, gateMembers);
+  const cardRollup = rollup(card, cards, config, gateMembers);
   if (phase === null && blocked === null && cardRollup === null) return null;
   return { phase, blocked, rollup: cardRollup };
 }

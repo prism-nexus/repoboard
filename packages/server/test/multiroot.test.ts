@@ -5,10 +5,14 @@
  * RCB-43 slice 2: `/api/repos/<key>/…` (one prefix strip, one registry lookup, then the SAME
  * `handleApi`) and the per-root WS (`/api/repos/<key>/ws`). See §Slice 2 for the seven scenarios
  * below `describe('RCB-43 slice 2: ...')`.
+ *
+ * RCB-154 slice 2a: `startServer({keyedRoots})` also feeds the primary a `GateMembersSource` over
+ * the OTHER keyed roots, so the web board's WS snapshot/broadcast carries `gateMembers` — see
+ * `describe('RCB-154 slice 2a: ...')` below.
  */
 import { execFile } from 'node:child_process';
 import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
-import { basename, join } from 'node:path';
+import { basename, join, relative } from 'node:path';
 import { promisify } from 'node:util';
 import { type Card, defaultBoardConfig, serializeBoard } from '@repoboard/core';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -552,5 +556,143 @@ describe('RCB-153 W6: startServer({keyedRoots}) — pre-keyed roots bypass assig
     const message = threw instanceof Error ? threw.message : String(threw);
     expect(message).toContain(b.root);
     expect(message).toContain(a.root);
+  });
+});
+
+// ---- RCB-154 slice 2a: startServer({keyedRoots}) feeds the primary a GateMembersSource --------
+//
+// A workspace card's `gate: MB-1` is resolved by core's `gateState` against `members` — a
+// WORKSPACE serve (`keyedRoots`) is the one shape that can supply them over the wire, since the
+// web board only ever sees ITS OWN repo's snapshot otherwise (slice 1 fed CLI/MCP/seat; this is
+// the web's turn). `roots` (plain `--root`, no `keyedRoots`) must stay byte-identical: NO
+// `gateMembers` key at all, not even an empty one.
+describe('RCB-154 slice 2a: startServer({keyedRoots}) feeds gateMembers', () => {
+  /** `cardText` (helpers.ts) has no `gate:` field — this is the same frontmatter shape, by hand,
+   * with one added. */
+  function cardTextWithGate(id: string, status: string, gate: string): string {
+    return [
+      '---',
+      `id: ${id}`,
+      `title: ${JSON.stringify(`Card ${id}`)}`,
+      `status: ${status}`,
+      `gate: ${gate}`,
+      'created: 2026-09-02T22:00:00Z',
+      'updated: 2026-09-02T22:00:00Z',
+      '---',
+      '',
+      'Body.',
+      '',
+    ].join('\n');
+  }
+
+  /** `ws` (prefix WS) has one step, WS-1, gated on `MB-1` — a card on `mb` (prefix MB), a
+   * configured (but, for these tests, never resolved through) `repos:` member. `mb`'s
+   * `board.yml` prefix is set directly (`makeTempRepoboard` always defaults to `RB`). */
+  async function makeGateFixture(mb1Status: 'todo' | 'done') {
+    const mb = await makeTempRepoboard({ 'MB-1.md': cardText('MB-1', mb1Status) });
+    await writeFile(
+      join(mb.root, '.repoboard', 'board.yml'),
+      serializeBoard({ ...defaultBoardConfig(), prefix: 'MB' }),
+    );
+    const ws = await makeTempRepoboard({ 'WS-1.md': cardTextWithGate('WS-1', 'todo', 'MB-1') });
+    await writeFile(
+      join(ws.root, '.repoboard', 'board.yml'),
+      serializeBoard({
+        ...defaultBoardConfig(),
+        prefix: 'WS',
+        repos: [{ key: 'mb', root: relative(ws.root, mb.root) }],
+      }),
+    );
+    return { ws, mb };
+  }
+
+  it('1. snapshot has gateMembers with key mb, MB-1 present, body stripped', async () => {
+    const { ws, mb } = await makeGateFixture('todo');
+    cleanups.push(ws.cleanup, mb.cleanup);
+    const store = await openStore(ws.root, { watch: true, now: () => NOW });
+    cleanups.push(() => store.close());
+    const server = await startServer({
+      store,
+      port: 0,
+      scan: false,
+      keyedRoots: [
+        { key: 'ws', root: ws.root },
+        { key: 'mb', root: mb.root },
+      ],
+      now: () => NOW,
+    });
+    cleanups.push(() => server.close());
+
+    const client = await connectPath(server.url.replace(/\/$/, ''), '/ws');
+    cleanups.push(async () => client.close());
+    const snap = await client.next<{
+      type: string;
+      gateMembers?: Array<{
+        key: string;
+        cards: Array<{ id: string; status: string; body: string }>;
+      }>;
+    }>((m) => m.type === 'snapshot');
+
+    expect(snap.gateMembers).toBeDefined();
+    expect(snap.gateMembers?.map((f) => f.key)).toEqual(['mb']);
+    const mb1 = snap.gateMembers?.find((f) => f.key === 'mb')?.cards.find((c) => c.id === 'MB-1');
+    expect(mb1).toBeDefined();
+    expect(mb1?.status).toBe('todo');
+    expect(mb1?.body).toBe('');
+  });
+
+  it("2. moving MB-1 to done in the member's own store rebroadcasts gateMembers with MB-1 done", async () => {
+    const { ws, mb } = await makeGateFixture('todo');
+    cleanups.push(ws.cleanup, mb.cleanup);
+    const store = await openStore(ws.root, { watch: true, now: () => NOW });
+    cleanups.push(() => store.close());
+    const server = await startServer({
+      store,
+      port: 0,
+      scan: false,
+      keyedRoots: [
+        { key: 'ws', root: ws.root },
+        { key: 'mb', root: mb.root },
+      ],
+      now: () => NOW,
+    });
+    cleanups.push(() => server.close());
+
+    const client = await connectPath(server.url.replace(/\/$/, ''), '/ws');
+    cleanups.push(async () => client.close());
+    // Drains the initial snapshot — this is also what calls `facts()` for the first time and so
+    // opens+wires `mb`'s store (map on demand: nothing opens `mb` before this).
+    await client.next((m) => m.type === 'snapshot');
+
+    const mbCtx = await server.openRepo('mb');
+    const moved = await mbCtx.store.move('MB-1', 'done', 'tester');
+    expect(moved.ok).toBe(true);
+
+    const broadcast = await client.next<{
+      type: string;
+      members: Array<{ key: string; cards: Array<{ id: string; status: string }> }>;
+    }>((m) => m.type === 'gateMembers', 2000);
+    const mb1 = broadcast.members.find((f) => f.key === 'mb')?.cards.find((c) => c.id === 'MB-1');
+    expect(mb1?.status).toBe('done');
+  });
+
+  it('3. plain roots: serve snapshot has no gateMembers key at all', async () => {
+    const { ws, mb } = await makeGateFixture('todo');
+    cleanups.push(ws.cleanup, mb.cleanup);
+    const store = await openStore(ws.root, { watch: true, now: () => NOW });
+    cleanups.push(() => store.close());
+    const server = await startServer({
+      store,
+      port: 0,
+      scan: false,
+      roots: [ws.root, mb.root],
+      now: () => NOW,
+    });
+    cleanups.push(() => server.close());
+
+    const client = await connectPath(server.url.replace(/\/$/, ''), '/ws');
+    cleanups.push(async () => client.close());
+    const snap = await client.next<Record<string, unknown>>((m) => m.type === 'snapshot');
+    expect('gateMembers' in snap).toBe(false);
   });
 });

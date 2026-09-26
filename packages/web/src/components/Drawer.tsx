@@ -1,7 +1,14 @@
-import type { BoardConfig, Card, Decision, ResolvedRef, Size } from '@repoboard/core';
+import type {
+  BoardConfig,
+  Card,
+  Decision,
+  GateMemberFacts,
+  ResolvedRef,
+  Size,
+} from '@repoboard/core';
 import { gateState, rollup, stepsOf } from '@repoboard/core';
 import { useEffect, useMemo, useState } from 'react';
-import { useStore } from '../hooks.js';
+import { useBoardState, useStore } from '../hooks.js';
 import { type LogEntry, renderMarkdown, renderNote, splitBody } from '../markdown.js';
 import { apiPath } from '../repo-key.js';
 import type { ColumnCards } from '../store.js';
@@ -50,6 +57,9 @@ export function Drawer({
   config = null,
   onOpen,
 }: Props) {
+  // RCB-154: a WORKSPACE's opened member boards, for resolving a `gate:` that names a card on
+  // another board — the same `state.gateMembers` `Board.tsx` reads (see `store.ts`).
+  const { gateMembers } = useBoardState();
   const [title, setTitle] = useState(card.title);
   const [assignee, setAssignee] = useState(card.assignee ?? '');
   // Reset drafts when a different card (or a fresh echo of this one) arrives.
@@ -205,7 +215,13 @@ export function Drawer({
           onDecide={(input) => onDecide?.(card.id, input)}
         />
       ) : null}
-      <PhaseSection card={card} cards={cards} config={config} onOpen={onOpen} />
+      <PhaseSection
+        card={card}
+        cards={cards}
+        config={config}
+        gateMembers={gateMembers}
+        onOpen={onOpen}
+      />
       <NotesSection cardId={card.id} notes={notes} now={now} onAddNote={onAddNote} />
       <section className="drawer__section">
         {/* biome-ignore lint/security/noDangerouslySetInnerHtml: sanitized by DOMPurify in renderMarkdown */}
@@ -412,21 +428,23 @@ function PhaseSection({
   card,
   cards,
   config,
+  gateMembers,
   onOpen,
 }: {
   card: Card;
   cards: Card[];
   config: BoardConfig | null;
+  gateMembers: readonly GateMemberFacts[];
   onOpen?: (id: string) => void;
 }) {
   if (!config) return null;
   const isStep = card.parent !== undefined || card.phase !== undefined || card.gate !== undefined;
-  const cardRollup = rollup(card, cards, config);
+  const cardRollup = rollup(card, cards, config, gateMembers);
   if (!isStep && !cardRollup) return null;
 
   const parentId = card.parent;
   const parentCard = parentId !== undefined ? (cards.find((c) => c.id === parentId) ?? null) : null;
-  const gate = card.gate !== undefined ? gateState(card, cards, config) : null;
+  const gate = card.gate !== undefined ? gateState(card, cards, config, gateMembers) : null;
   const steps = cardRollup ? stepsOf(card.id, cards) : [];
 
   return (
@@ -460,7 +478,7 @@ function PhaseSection({
       {cardRollup ? (
         <ul className="drawer__phase-steps">
           {steps.map((step) => {
-            const state = gateState(step, cards, config);
+            const state = gateState(step, cards, config, gateMembers);
             return (
               <li
                 key={step.id}

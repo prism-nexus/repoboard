@@ -1670,6 +1670,11 @@ button {
 .flow-box--blocked .flow-box__badge {
   fill: var(--coral);
 }
+/* Selection still wins over a status stroke: same specificity as the status rules, so it must
+   come after them. */
+.flow-box--selected rect {
+  stroke: var(--accent);
+}
 
 /* ---- repo dashboard (RCB-112 B) ---- */
 .dash {

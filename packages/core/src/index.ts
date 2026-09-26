@@ -306,6 +306,8 @@ export {
 } from './systems-surface.js';
 export type { PointerTests, SystemTests, TestFileInput } from './systems-tests.js';
 export { isCodePath, isTestFile, SYSTEM_TESTS_SOURCE, testsForPointers } from './systems-tests.js';
+export type { UnblockerInfo } from './systems-unblockers.js';
+export { unblockerInfo } from './systems-unblockers.js';
 export { toIso } from './time.js';
 export type {
   CardPatch,

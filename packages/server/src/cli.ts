@@ -27,7 +27,6 @@ import {
   exitCodeForFindings,
   type Finding,
   filterLogBlocks,
-  findColumn,
   findSeatLine,
   formatAnsweredChoice,
   formatCostTable,
@@ -67,6 +66,8 @@ import {
   systemsSummary,
   toIso,
   trimLandings,
+  type UnblockerInfo,
+  unblockerInfo,
   type WorkspaceBoardRef,
   type WorkspaceRepo,
   workspaceLeaseLines,
@@ -2586,43 +2587,6 @@ async function cmdSystems(args: string[], io: CliIO): Promise<number> {
   }
   io.stdout.write(formatSystemsTable(doc));
   return 0;
-}
-
-/**
- * RCB-161 slice 1: one `unblocked_by` id's resolution against THIS board's cards — `card: null`
- * when the id names no card here (printed as "(not on this board)"); otherwise its title/status,
- * plus EITHER `decision` (an open ask, letters and text) OR `nextStep` (the first `stepsOf` child
- * not in a done column with a clear gate) — never both, and both `null` when the card has neither.
- */
-interface UnblockerInfo {
-  id: string;
-  card: { title: string; status: string } | null;
-  decision: { question: string; options: DecisionOption[] } | null;
-  nextStep: { id: string; title: string } | null;
-}
-
-function unblockerInfo(id: string, cards: readonly Card[], config: BoardConfig): UnblockerInfo {
-  const card = cards.find((c) => c.id === id);
-  if (!card) return { id, card: null, decision: null, nextStep: null };
-  const cardInfo = { title: card.title, status: card.status };
-  if (needsDecision(card)) {
-    const d = card.decision;
-    return {
-      id,
-      card: cardInfo,
-      decision: d ? { question: d.question, options: d.options } : null,
-      nextStep: null,
-    };
-  }
-  const step = stepsOf(id, cards).find(
-    (s) => findColumn(config, s.status)?.done !== true && blockedReason(s, cards, config) === null,
-  );
-  return {
-    id,
-    card: cardInfo,
-    decision: null,
-    nextStep: step ? { id: step.id, title: step.title } : null,
-  };
 }
 
 /** Text lines for one `UnblockerInfo` — the brief's `  <ID> <title> [<card status>]` plus an

@@ -1649,6 +1649,27 @@ button {
   stroke: var(--muted);
   stroke-width: 1.5;
 }
+/* RCB-161 slice 2: a planned/blocked row or connection, tokens only — `--muted`/`--coral` already
+   used elsewhere in this file, no new colours. */
+.flow-box--planned rect {
+  stroke: var(--muted);
+}
+.flow-box--blocked rect {
+  stroke: var(--coral);
+}
+.flow-edge--planned {
+  stroke: var(--muted);
+}
+.flow-edge--blocked {
+  stroke: var(--coral);
+}
+.flow-box__badge {
+  font-size: 10px;
+  fill: var(--muted);
+}
+.flow-box--blocked .flow-box__badge {
+  fill: var(--coral);
+}
 
 /* ---- repo dashboard (RCB-112 B) ---- */
 .dash {

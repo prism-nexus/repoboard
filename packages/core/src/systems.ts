@@ -320,6 +320,8 @@ export interface LayoutBox {
   w: number;
   h: number;
   dashed: boolean;
+  /** RCB-161 slice 2: copied from the row's `status` — the Flow view's "what's not live yet". */
+  status: SystemStatus;
 }
 
 export interface LayoutEdge {
@@ -328,6 +330,8 @@ export interface LayoutEdge {
   dashed: boolean;
   via: string | null;
   points: LayoutPoint[];
+  /** RCB-161 slice 2: copied from the connection's `status`. */
+  status: SystemStatus;
 }
 
 export interface LayoutRow {
@@ -524,6 +528,7 @@ export function layoutSystems(doc: SystemsDoc, env: 'dev' | 'prod' | 'both'): Sy
         w: 1,
         h: 1,
         dashed: env === 'both' && bothEnvsShown && (system?.env.length ?? 0) === 1,
+        status: system?.status ?? 'live',
       };
       boxOf.set(id, box);
       return box;
@@ -543,6 +548,7 @@ export function layoutSystems(doc: SystemsDoc, env: 'dev' | 'prod' | 'both'): Sy
         dashed: env === 'both' && bothEnvsShown && c.env.length === 1,
         via: c.via,
         points: edgePoints(from, to, allBoxes),
+        status: c.status,
       },
     ];
   });

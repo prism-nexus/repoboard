@@ -329,6 +329,61 @@ systems:
       expect(order).toEqual(['beta', 'alpha', 'zeta']);
     });
 
+    it('RCB-161 slice 2: a box/edge carries its row/connection status, absent on disk defaults to live', () => {
+      const doc: SystemsDoc = {
+        environments: { dev: { note: null }, prod: { note: null } },
+        systems: [
+          {
+            id: 'alpha',
+            name: 'alpha',
+            kind: 'service',
+            layer: 'app',
+            env: ['dev'],
+            runtime: {},
+            owner: null,
+            pointers: [],
+            docs: [],
+            why: null,
+            status: 'planned',
+            unblockedBy: [],
+            source: { hand: 'x', at: 't' },
+          },
+          {
+            id: 'beta',
+            name: 'beta',
+            kind: 'service',
+            layer: 'app',
+            env: ['dev'],
+            runtime: {},
+            owner: null,
+            pointers: [],
+            docs: [],
+            why: null,
+            status: 'live',
+            unblockedBy: [],
+            source: { hand: 'x', at: 't' },
+          },
+        ],
+        connections: [
+          {
+            from: 'alpha',
+            to: 'beta',
+            via: null,
+            env: ['dev'],
+            status: 'blocked',
+            unblockedBy: [],
+            source: { hand: 'x', at: 't' },
+          },
+        ],
+      };
+      const layout = layoutSystems(doc, 'dev');
+      const boxById = new Map(layout.rows.flatMap((r) => r.boxes).map((b) => [b.id, b]));
+      expect(boxById.get('alpha')?.status).toBe('planned');
+      expect(boxById.get('beta')?.status).toBe('live');
+      expect(layout.edges).toHaveLength(1);
+      expect(layout.edges[0]?.status).toBe('blocked');
+    });
+
     it('is deterministic: two calls on the same doc give byte-identical JSON', () => {
       const doc = twoEnv();
       const a = JSON.stringify(layoutSystems(doc, 'both'));

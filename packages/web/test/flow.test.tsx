@@ -155,6 +155,36 @@ connections:
     source: { hand: "owner", at: "2026-09-22T00:00:00Z" }
 `;
 
+/** RCB-161 slice 2: one live box (`web`), one non-live box (`svc`, `status: planned`) with three
+ * `unblocked_by` ids (an open decision, a next step, an unknown id), and one non-live connection
+ * (`status: planned`, `env: [dev]` so it is ALSO one-env-dashed in "both" — the dotted `1 4` must
+ * win over the one-env `4 3`). */
+const STATUS_YML = `environments:
+  dev:  { note: "d" }
+  prod: { note: "p" }
+systems:
+  - id: web
+    name: web client
+    kind: client
+    layer: client
+    env: [dev, prod]
+    source: { hand: "owner", at: "2026-09-22T00:00:00Z" }
+  - id: svc
+    name: planned service
+    kind: service
+    layer: app
+    env: [dev, prod]
+    status: planned
+    unblocked_by: ["RB-1", "RB-2", "RB-99"]
+    source: { hand: "owner", at: "2026-09-22T00:00:00Z" }
+connections:
+  - from: web
+    to: svc
+    env: [dev]
+    status: planned
+    source: { hand: "owner", at: "2026-09-22T00:00:00Z" }
+`;
+
 function parsedDoc(text: string): SystemsDoc {
   const result = parseSystems(text);
   if (!result.ok) throw new Error(`fixture failed to parse: ${result.errors.join('; ')}`);
@@ -163,6 +193,33 @@ function parsedDoc(text: string): SystemsDoc {
 
 const TWO_ENV = () => parsedDoc(TWO_ENV_YML);
 const NONE_PROD = () => parsedDoc(NONE_PROD_YML);
+const STATUS_DOC = () => parsedDoc(STATUS_YML);
+
+/** RB-1: an open decision. RB-2/RB-3: a parent with one not-done, not-blocked step. RB-99 is
+ * deliberately absent (the "unknown id" case). */
+function statusCards() {
+  return [
+    card('RB-1', 'decide', {
+      title: 'Pick a path',
+      decision: {
+        question: 'Which way?',
+        options: [
+          { letter: 'A', text: 'go left' },
+          { letter: 'B', text: 'go right' },
+        ],
+        askedBy: 'owner',
+        askedAt: '2026-09-22T00:00:00Z',
+        returnTo: 'todo',
+        chosen: null,
+        words: null,
+        decidedBy: null,
+        decidedAt: null,
+      },
+    }),
+    card('RB-2', 'backlog', { title: 'Ship the widget' }),
+    card('RB-3', 'todo', { title: 'Do the first step', parent: 'RB-2', phase: 'PH.1' }),
+  ];
+}
 
 /** Seeds a board snapshot AND the systems payload in one message — `helpers.jsx`'s `snapshot()`
  * has no `systems` parameter (out of this brief's file list), so this mirrors `map.test.tsx` /
@@ -535,5 +592,121 @@ describe('Flow view (RCB-98)', () => {
     await within(testsSection).findByText('apps/gateway/src/index.ts — none');
     expect(testsSection).not.toHaveTextContent('— 0:');
     expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('13. RCB-161 slice 2: a planned box gets data-status/badge/dotted dasharray; a live box has none of them', () => {
+    openFlow({ doc: STATUS_DOC(), errors: [], exists: true }, statusCards());
+    const svg = screen.getByTestId('flow-svg');
+
+    const svcBox = svg.querySelector('[data-box="svc"]') as Element;
+    expect(svcBox.getAttribute('data-status')).toBe('planned');
+    expect(svcBox.classList.contains('flow-box--planned')).toBe(true);
+    expect(svcBox.querySelector('rect')?.getAttribute('stroke-dasharray')).toBe('1 4');
+    expect(within(svcBox as HTMLElement).getByText('planned')).toHaveClass('flow-box__badge');
+
+    const webBox = svg.querySelector('[data-box="web"]') as Element;
+    expect(webBox.getAttribute('data-status')).toBeNull();
+    expect(webBox.classList.contains('flow-box--planned')).toBe(false);
+    expect(webBox.classList.contains('flow-box--blocked')).toBe(false);
+    expect(webBox.querySelector('rect')?.getAttribute('stroke-dasharray')).toBeNull();
+    expect(within(webBox as HTMLElement).queryByText('planned')).toBeNull();
+  });
+
+  it('14. RCB-161 slice 2: a planned, one-env edge is dotted (1 4) not dashed (4 3); data-dashed unchanged', () => {
+    openFlow({ doc: STATUS_DOC(), errors: [], exists: true }, statusCards());
+    const svg = screen.getByTestId('flow-svg');
+    const edge = svg.querySelector('[data-edge="web-svc"]') as Element;
+    expect(edge.getAttribute('data-status')).toBe('planned');
+    expect(edge.getAttribute('data-dashed')).toBe('true');
+    expect(edge.getAttribute('stroke-dasharray')).toBe('1 4');
+    expect(edge.classList.contains('flow-edge--planned')).toBe(true);
+  });
+
+  it('15. RCB-161 slice 2: drawer "Unblocked by" — open decision, next step, unknown id; none on a live row', () => {
+    const { store } = openFlow({ doc: STATUS_DOC(), errors: [], exists: true }, statusCards());
+    const svg = screen.getByTestId('flow-svg');
+
+    fireEvent.click(svg.querySelector('[data-box="svc"]') as Element);
+    const drawer = screen.getByTestId('flow-drawer');
+    expect(within(drawer).getByText('service · app · dev+prod · planned')).toBeInTheDocument();
+    const section = within(drawer).getByTestId('flow-drawer-unblockers');
+    expect(within(section).getByText('Unblocked by (3)')).toBeInTheDocument();
+
+    // RB-1: an open decision — question and both option lines.
+    expect(
+      within(section).getByRole('button', { name: 'RB-1 — Pick a path [decide]' }),
+    ).toBeInTheDocument();
+    expect(within(section).getByText('decision: Which way?')).toBeInTheDocument();
+    expect(within(section).getByText('A: go left')).toBeInTheDocument();
+    expect(within(section).getByText('B: go right')).toBeInTheDocument();
+
+    // RB-2: a next step (RB-3), also a button.
+    expect(
+      within(section).getByRole('button', { name: 'RB-2 — Ship the widget [backlog]' }),
+    ).toBeInTheDocument();
+    expect(
+      within(section).getByRole('button', { name: 'next step: RB-3 Do the first step' }),
+    ).toBeInTheDocument();
+
+    // RB-99: unknown id, no button.
+    expect(within(section).getByText('RB-99 (not on this board)')).toBeInTheDocument();
+    expect(within(section).queryByRole('button', { name: /RB-99/ })).toBeNull();
+
+    // Clicking the card button opens it on the board.
+    fireEvent.click(within(section).getByRole('button', { name: 'RB-1 — Pick a path [decide]' }));
+    expect(store.getState().selectedId).toBe('RB-1');
+    expect(store.getState().view).toBe('board');
+  });
+
+  it('16. CONTROL: a live row with no unblockedBy has no "Unblocked by" section', () => {
+    openFlow({ doc: STATUS_DOC(), errors: [], exists: true }, statusCards());
+    fireEvent.click(screen.getByTestId('flow-svg').querySelector('[data-box="web"]') as Element);
+    const drawer = screen.getByTestId('flow-drawer');
+    expect(within(drawer).getByText('client · client · dev+prod')).toBeInTheDocument();
+    expect(within(drawer).queryByTestId('flow-drawer-unblockers')).toBeNull();
+  });
+
+  it('17. RCB-161 slice 2: a blocked row with no unblockers says so; a connection lists its own unblockers', () => {
+    const doc = parsedDoc(`environments:
+  dev:  { note: "d" }
+  prod: { note: "p" }
+systems:
+  - id: web
+    name: web client
+    kind: client
+    layer: client
+    env: [dev, prod]
+    status: blocked
+    source: { hand: "owner", at: "2026-09-22T00:00:00Z" }
+  - id: svc
+    name: service
+    kind: service
+    layer: app
+    env: [dev, prod]
+    source: { hand: "owner", at: "2026-09-22T00:00:00Z" }
+connections:
+  - from: web
+    to: svc
+    env: [dev, prod]
+    status: blocked
+    unblocked_by: ["RB-1"]
+    source: { hand: "owner", at: "2026-09-22T00:00:00Z" }
+`);
+    openFlow({ doc, errors: [], exists: true }, statusCards());
+    fireEvent.click(screen.getByTestId('flow-svg').querySelector('[data-box="web"]') as Element);
+    const drawer = screen.getByTestId('flow-drawer');
+    const section = within(drawer).getByTestId('flow-drawer-unblockers');
+    expect(within(section).getByText('Unblocked by (0)')).toBeInTheDocument();
+    expect(within(section).getByText('Nothing recorded unblocks this yet.')).toBeInTheDocument();
+    // The connection's line carries its status and its own unblocker, outside the section.
+    expect(
+      within(drawer).getByText(
+        (_, el) => el?.tagName === 'DIV' && el.textContent === 'web → svc · blocked',
+      ),
+    ).toBeInTheDocument();
+    expect(
+      within(drawer).getByRole('button', { name: 'RB-1 — Pick a path [decide]' }),
+    ).toBeInTheDocument();
+    expect(within(section).queryByRole('button')).toBeNull();
   });
 });

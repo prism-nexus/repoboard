@@ -7,12 +7,15 @@
  * this file only draws the boxes and edges it returns. Fun stays off here (plan D9).
  */
 import {
+  type BoardConfig,
   type Card,
+  defaultBoardConfig,
   layoutSystems,
   type ResolvedRef,
   type SystemRow,
   type SystemsDoc,
   systemsSummary,
+  unblockerInfo,
 } from '@repoboard/core';
 import { useEffect, useMemo, useState } from 'react';
 import { RefsList } from '../components/RefsList.jsx';
@@ -204,6 +207,60 @@ function TestsToggle({ payload }: { payload: SystemTestsPayload }) {
   );
 }
 
+interface UnblockerRowsProps {
+  ids: readonly string[];
+  cards: readonly Card[];
+  config: BoardConfig | null;
+  onOpenCard: (id: string) => void;
+}
+
+/** RCB-161 slice 2: one row per `unblocked_by` id — shared by the drawer's own "Unblocked by"
+ * section and a non-live connection's line, so both go through the SAME resolution
+ * (`unblockerInfo`, core; also `repoboard systems show`'s CLI output) rather than a second
+ * rendering of the same data. Empty list: the one "nothing recorded" line. */
+function UnblockerRows({ ids, cards, config, onOpenCard }: UnblockerRowsProps) {
+  if (ids.length === 0) {
+    return <p className="rail__empty">Nothing recorded unblocks this yet.</p>;
+  }
+  return (
+    <ul className="drawer__files mono">
+      {ids.map((id) => {
+        const info = unblockerInfo(id, cards, config ?? defaultBoardConfig());
+        const nextStep = info.nextStep;
+        return (
+          <li key={id}>
+            {info.card ? (
+              <button type="button" className="who__body" onClick={() => onOpenCard(id)}>
+                {id} — {info.card.title} [{info.card.status}]
+              </button>
+            ) : (
+              <span>{id} (not on this board)</span>
+            )}
+            {info.decision ? (
+              <div className="muted">
+                <div>decision: {info.decision.question}</div>
+                {info.decision.options.map((o) => (
+                  <div key={o.letter}>
+                    {o.letter}: {o.text}
+                  </div>
+                ))}
+              </div>
+            ) : nextStep ? (
+              <button
+                type="button"
+                className="who__body muted"
+                onClick={() => onOpenCard(nextStep.id)}
+              >
+                next step: {nextStep.id} {nextStep.title}
+              </button>
+            ) : null}
+          </li>
+        );
+      })}
+    </ul>
+  );
+}
+
 function sourceText(source: SystemRow['source']): string {
   return 'hand' in source
     ? `hand: ${source.hand} · ${source.at}`
@@ -214,11 +271,12 @@ interface SystemDrawerProps {
   system: SystemRow;
   doc: SystemsDoc;
   cards: readonly Card[];
+  config: BoardConfig | null;
   onClose: () => void;
   onOpenCard: (id: string) => void;
 }
 
-function SystemDrawer({ system, doc, cards, onClose, onOpenCard }: SystemDrawerProps) {
+function SystemDrawer({ system, doc, cards, config, onClose, onOpenCard }: SystemDrawerProps) {
   const refs = useSystemRefs(system.id, system.pointers);
   const tests = useSystemTests(system.id, system.pointers);
   const connections = useMemo(
@@ -238,6 +296,7 @@ function SystemDrawer({ system, doc, cards, onClose, onOpenCard }: SystemDrawerP
       <h2 className="drawer__title">{system.name}</h2>
       <p className="drawer__meta mono">
         {system.kind} · {system.layer} · {system.env.join('+')}
+        {system.status !== 'live' ? ` · ${system.status}` : ''}
       </p>
       <div className="drawer__fields">
         <div className="field">
@@ -255,6 +314,17 @@ function SystemDrawer({ system, doc, cards, onClose, onOpenCard }: SystemDrawerP
           <p>{system.why}</p>
         </section>
       ) : null}
+      {system.status !== 'live' || system.unblockedBy.length > 0 ? (
+        <section className="drawer__section" data-testid="flow-drawer-unblockers">
+          <h3>Unblocked by ({system.unblockedBy.length})</h3>
+          <UnblockerRows
+            ids={system.unblockedBy}
+            cards={cards}
+            config={config}
+            onOpenCard={onOpenCard}
+          />
+        </section>
+      ) : null}
       <section className="drawer__section">
         <h3>Connections ({connections.length})</h3>
         {connections.length === 0 ? (
@@ -266,8 +336,17 @@ function SystemDrawer({ system, doc, cards, onClose, onOpenCard }: SystemDrawerP
                 <div>
                   {c.from === system.id ? <strong>{c.from}</strong> : c.from} →{' '}
                   {c.to === system.id ? <strong>{c.to}</strong> : c.to}
+                  {c.status !== 'live' ? ` · ${c.status}` : ''}
                 </div>
                 {c.via ? <span className="muted">via {c.via}</span> : null}
+                {c.unblockedBy.length > 0 ? (
+                  <UnblockerRows
+                    ids={c.unblockedBy}
+                    cards={cards}
+                    config={config}
+                    onOpenCard={onOpenCard}
+                  />
+                ) : null}
               </li>
             ))}
           </ul>
@@ -387,14 +466,16 @@ function Diagram({ doc, env, selectedSystem, onSelect }: DiagramProps) {
           const at = px(p.x, p.y);
           return `${at.x},${at.y}`;
         });
+        const notLive = e.status !== 'live';
         return (
           <polyline
             key={`${e.from}-${e.to}-${i.toString()}`}
             points={points.join(' ')}
-            className="flow-edge"
+            className={`flow-edge${notLive ? ` flow-edge--${e.status}` : ''}`}
             data-edge={`${e.from}-${e.to}`}
             data-dashed={e.dashed}
-            strokeDasharray={e.dashed ? '4 3' : undefined}
+            data-status={notLive ? e.status : undefined}
+            strokeDasharray={notLive ? '1 4' : e.dashed ? '4 3' : undefined}
           >
             {e.via ? <title>{e.via}</title> : null}
           </polyline>
@@ -406,12 +487,14 @@ function Diagram({ doc, env, selectedSystem, onSelect }: DiagramProps) {
           const at = px(box.x, box.y);
           const system = doc.systems.find((s) => s.id === box.id);
           const selected = selectedSystem === box.id;
+          const notLive = box.status !== 'live';
           return (
             // biome-ignore lint/a11y/noStaticElementInteractions: SVG node; the drawer's close button is the keyboard path back out
             <g
               key={box.id}
-              className={`flow-box ${selected ? 'flow-box--selected' : ''}`}
+              className={`flow-box ${selected ? 'flow-box--selected' : ''}${notLive ? ` flow-box--${box.status}` : ''}`}
               data-box={box.id}
+              data-status={notLive ? box.status : undefined}
               onClick={() => onSelect(box.id)}
             >
               <rect
@@ -421,7 +504,7 @@ function Diagram({ doc, env, selectedSystem, onSelect }: DiagramProps) {
                 height={SCALE_Y}
                 rx={6}
                 data-dashed={box.dashed}
-                strokeDasharray={box.dashed ? '4 3' : undefined}
+                strokeDasharray={notLive ? '1 4' : box.dashed ? '4 3' : undefined}
               />
               <text x={at.x + 8} y={at.y + 18} className="flow-box__id mono">
                 {box.id}
@@ -432,6 +515,16 @@ function Diagram({ doc, env, selectedSystem, onSelect }: DiagramProps) {
               <text x={at.x + 8} y={at.y + SCALE_Y - 8} className="flow-box__env mono muted">
                 {system ? system.env.join('+') : ''}
               </text>
+              {notLive ? (
+                <text
+                  x={at.x + SCALE_X - 8}
+                  y={at.y + 14}
+                  textAnchor="end"
+                  className="flow-box__badge mono"
+                >
+                  {box.status}
+                </text>
+              ) : null}
             </g>
           );
         })}
@@ -450,7 +543,7 @@ function planRepoName(repos: State['repos'], repoKey: State['repoKey']): string 
 
 export function FlowView() {
   const store = useStore();
-  const { systems, flowEnv, cards, hasBoard, repos, repoKey } = useBoardState();
+  const { systems, flowEnv, cards, hasBoard, repos, repoKey, config } = useBoardState();
   const [selectedSystem, setSelectedSystem] = useState<string | null>(null);
   const [planConfirming, setPlanConfirming] = useState(false);
   const [planPending, setPlanPending] = useState(false);
@@ -550,6 +643,7 @@ export function FlowView() {
           system={selected}
           doc={doc}
           cards={cards}
+          config={config}
           onClose={() => setSelectedSystem(null)}
           onOpenCard={(id) => {
             store.select(id);

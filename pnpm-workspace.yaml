@@ -2,3 +2,7 @@ packages:
   - packages/*
 allowBuilds:
   esbuild: false
+overrides:
+  # RCB-159: GHSA esbuild <0.28.1 (Dependabot alert 1, dev-only). tsup 8.5.1 still asks for
+  # ^0.27.0, so only an override lifts it; vite 8 already accepts ^0.28.0.
+  esbuild: ^0.28.1

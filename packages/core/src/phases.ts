@@ -16,8 +16,9 @@ import { resolveCardRef, type WorkspaceBoardRef } from './card-ref.js';
 import type { BoardConfig, Card } from './types.js';
 
 /** `<PREFIX>-<n>`, e.g. `RCB-9` — what makes a `gate:` value a card reference rather than a
- * sentence. Anything else (including a card id in the WRONG shape) is read as a sentence. */
-const CARD_ID_SHAPE = /^[A-Za-z][A-Za-z0-9]*-\d+$/;
+ * sentence. Anything else (including a card id in the WRONG shape) is read as a sentence.
+ * RCB-161 slice 1: exported so `systems.ts` can validate an `unblocked_by` entry the same way. */
+export const CARD_ID_SHAPE = /^[A-Za-z][A-Za-z0-9]*-\d+$/;
 
 export type GateState =
   | { kind: 'none' } // no gate: never blocked (an unconfigured rule is inert)

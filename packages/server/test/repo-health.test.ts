@@ -219,6 +219,8 @@ function sysRow(id: string, pointer: string): SystemsDoc['systems'][number] {
     pointers: [pointer],
     docs: [],
     why: null,
+    status: 'live',
+    unblockedBy: [],
     source: { hand: 'test', at: '2026-09-22T00:00:00Z' },
   };
 }

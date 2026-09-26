@@ -809,6 +809,8 @@ describe('systems detect (RCB-96)', () => {
         pointers: ['apps/web/src'],
         docs: [],
         why: null,
+        status: 'live',
+        unblockedBy: [],
         source: { hand: 'owner', at: '2026-09-22T00:00:00Z' },
       });
 
@@ -824,6 +826,8 @@ describe('systems detect (RCB-96)', () => {
         pointers: ['apps/gateway/src/index.ts', 'apps/gateway/wrangler.jsonc'],
         docs: ['docs/BUILD-PLAN.md#§3'],
         why: null,
+        status: 'live',
+        unblockedBy: [],
         source: { detected: 'wrangler.jsonc@v2', at: AT },
       });
 
@@ -839,6 +843,8 @@ describe('systems detect (RCB-96)', () => {
         pointers: ['apps/new-service/src'],
         docs: [],
         why: null,
+        status: 'live',
+        unblockedBy: [],
         source: { detected: 'package.json@new-service', at: AT },
       });
     });
@@ -854,6 +860,38 @@ describe('systems detect (RCB-96)', () => {
       const first = applyDetected(twoEnvDoc(), candidates(), AT);
       const second = applyDetected(first.doc, candidates(), AT);
       expect(serializeSystems(second.doc)).toEqual(serializeSystems(first.doc));
+    });
+
+    it("RCB-161: keeps an updated detected row/connection's status+unblockedBy; a new row/connection gets live/[]", () => {
+      const before = twoEnvDoc();
+      const gatewayIdx = before.systems.findIndex((s) => s.id === 'gateway');
+      const gateway = before.systems[gatewayIdx];
+      if (gatewayIdx === -1 || !gateway) throw new Error('fixture missing gateway');
+      const withUnblocker: SystemsDoc = {
+        ...before,
+        systems: before.systems.map((s, i) =>
+          i === gatewayIdx ? { ...s, status: 'planned' as const, unblockedBy: ['RCB-9'] } : s,
+        ),
+        connections: before.connections.map((c) =>
+          c.from === 'gateway' && c.to === 'api'
+            ? { ...c, status: 'blocked' as const, unblockedBy: ['RCB-10'] }
+            : c,
+        ),
+      };
+      const result = applyDetected(withUnblocker, candidates(), AT);
+      expect(result.updated).toContain('gateway');
+      const updatedGateway = result.doc.systems.find((s) => s.id === 'gateway');
+      expect(updatedGateway?.status).toBe('planned');
+      expect(updatedGateway?.unblockedBy).toEqual(['RCB-9']);
+      const updatedConn = result.doc.connections.find(
+        (c) => c.from === 'gateway' && c.to === 'api',
+      );
+      expect(updatedConn?.status).toBe('blocked');
+      expect(updatedConn?.unblockedBy).toEqual(['RCB-10']);
+
+      const newService = result.doc.systems.find((s) => s.id === 'new-service');
+      expect(newService?.status).toBe('live');
+      expect(newService?.unblockedBy).toEqual([]);
     });
   });
 
@@ -907,6 +945,8 @@ describe('systems detect (RCB-96)', () => {
         pointers: ['apps/svc/src'],
         docs: [],
         why: null,
+        status: 'live',
+        unblockedBy: [],
         source: { detected: 'package.json@svc', at: '2026-09-01T00:00:00Z' },
       };
       const result = applyDetected(noneProdDoc([existing]), svcCandidate(['dev', 'prod']), K15_AT);
@@ -1000,6 +1040,45 @@ describe('systems detect (RCB-96)', () => {
       expect(text).not.toContain('dev: null');
       expect(text).not.toContain('prod: null');
       expect(text).not.toContain('docs: []');
+    });
+
+    it('RCB-161: an old fixture (no status/unblocked_by anywhere) never writes those keys — byte for byte the same as before this card', () => {
+      const result = parseSystems(systemsFixture('two-env.yml'));
+      if (!result.ok) throw new Error('fixture failed to parse');
+      const text = serializeSystems(result.doc);
+      expect(text).not.toContain('status:');
+      expect(text).not.toContain('unblocked_by:');
+      // every row/connection normalises to the absent-key default
+      expect(
+        result.doc.systems.every((s) => s.status === 'live' && s.unblockedBy.length === 0),
+      ).toBe(true);
+      expect(
+        result.doc.connections.every((c) => c.status === 'live' && c.unblockedBy.length === 0),
+      ).toBe(true);
+    });
+
+    it('RCB-161: round-trips a doc WITH status/unblocked_by set on a system and a connection', () => {
+      const result = parseSystems(systemsFixture('two-env.yml'));
+      if (!result.ok) throw new Error('fixture failed to parse');
+      const withUnblockers: SystemsDoc = {
+        ...result.doc,
+        systems: result.doc.systems.map((s) =>
+          s.id === 'worker-jobs' ? { ...s, status: 'planned', unblockedBy: ['RCB-9'] } : s,
+        ),
+        connections: result.doc.connections.map((c) =>
+          c.from === 'worker-jobs' && c.to === 'postgres'
+            ? { ...c, status: 'blocked', unblockedBy: ['RCB-9', 'RCB-10'] }
+            : c,
+        ),
+      };
+      const text = serializeSystems(withUnblockers);
+      expect(text).toContain('status: planned');
+      expect(text).toContain('status: blocked');
+      expect(text).toContain('unblocked_by:');
+      const reparsed = parseSystems(text);
+      expect(reparsed.ok).toBe(true);
+      if (!reparsed.ok) return;
+      expect(reparsed.doc).toEqual(withUnblockers);
     });
   });
 

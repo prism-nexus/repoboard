@@ -95,6 +95,116 @@ systems:
         'systems[0] (id "Bad_ID"): invalid id "Bad_ID" (must match ^[a-z0-9-]+$)',
       ]);
     });
+
+    // RCB-161 slice 1 -----------------------------------------------------------------------
+    it('an unknown `status` on a system row is an error naming the row', () => {
+      const text = `environments:
+  dev: { note: null }
+  prod: { note: null }
+systems:
+  - id: svc
+    name: x
+    kind: service
+    layer: app
+    env: [dev]
+    status: shipped
+    source: { hand: "owner", at: "2026-09-22T00:00:00Z" }
+`;
+      const result = parseSystems(text);
+      expect(result.ok).toBe(false);
+      if (result.ok) return;
+      expect(result.errors).toEqual(['systems[0] (id "svc"): unknown status "shipped"']);
+    });
+
+    it('an `unblocked_by` entry not shaped like a card id is an error naming the row', () => {
+      const text = `environments:
+  dev: { note: null }
+  prod: { note: null }
+systems:
+  - id: svc
+    name: x
+    kind: service
+    layer: app
+    env: [dev]
+    unblocked_by: ["not a card id"]
+    source: { hand: "owner", at: "2026-09-22T00:00:00Z" }
+`;
+      const result = parseSystems(text);
+      expect(result.ok).toBe(false);
+      if (result.ok) return;
+      expect(result.errors).toEqual([
+        'systems[0] (id "svc"): unblocked_by entry "not a card id" is not a card id',
+      ]);
+    });
+
+    it('an unknown `status` and a bad `unblocked_by` entry on a CONNECTION are each an error', () => {
+      const text = `environments:
+  dev: { note: null }
+  prod: { note: null }
+systems:
+  - id: a
+    name: a
+    kind: service
+    layer: app
+    env: [dev]
+    source: { hand: "owner", at: "t" }
+  - id: b
+    name: b
+    kind: service
+    layer: app
+    env: [dev]
+    source: { hand: "owner", at: "t" }
+connections:
+  - from: a
+    to: b
+    env: [dev]
+    status: shipped
+    unblocked_by: ["nope"]
+    source: { hand: "owner", at: "t" }
+`;
+      const result = parseSystems(text);
+      expect(result.ok).toBe(false);
+      if (result.ok) return;
+      expect(result.errors).toEqual([
+        'connections[0]: unknown status "shipped"',
+        'connections[0]: unblocked_by entry "nope" is not a card id',
+      ]);
+    });
+
+    it('a valid status and unblocked_by round-trip through parseSystems', () => {
+      const text = `environments:
+  dev: { note: null }
+  prod: { note: null }
+systems:
+  - id: svc
+    name: x
+    kind: service
+    layer: app
+    env: [dev]
+    status: planned
+    unblocked_by: ["RCB-9", "RCB-10"]
+    source: { hand: "owner", at: "2026-09-22T00:00:00Z" }
+`;
+      const result = parseSystems(text);
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      expect(result.doc.systems[0]?.status).toBe('planned');
+      expect(result.doc.systems[0]?.unblockedBy).toEqual(['RCB-9', 'RCB-10']);
+    });
+
+    it('absent `status`/`unblocked_by` normalise to "live"/[] (today\'s behaviour, byte for byte)', () => {
+      const result = parseSystems(fixture('two-env.yml'));
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      for (const s of result.doc.systems) {
+        expect(s.status).toBe('live');
+        expect(s.unblockedBy).toEqual([]);
+      }
+      for (const c of result.doc.connections) {
+        expect(c.status).toBe('live');
+        expect(c.unblockedBy).toEqual([]);
+      }
+    });
   });
 
   describe('emptySystemsDoc', () => {
@@ -164,6 +274,8 @@ systems:
             pointers: [],
             docs: [],
             why: null,
+            status: 'live',
+            unblockedBy: [],
             source: { hand: 'x', at: 't' },
           },
           {
@@ -177,6 +289,8 @@ systems:
             pointers: [],
             docs: [],
             why: null,
+            status: 'live',
+            unblockedBy: [],
             source: { hand: 'x', at: 't' },
           },
           {
@@ -190,12 +304,22 @@ systems:
             pointers: [],
             docs: [],
             why: null,
+            status: 'live',
+            unblockedBy: [],
             source: { hand: 'x', at: 't' },
           },
         ],
         // `beta` must come before `alpha` despite losing the id sort.
         connections: [
-          { from: 'beta', to: 'alpha', via: null, env: ['dev'], source: { hand: 'x', at: 't' } },
+          {
+            from: 'beta',
+            to: 'alpha',
+            via: null,
+            env: ['dev'],
+            status: 'live',
+            unblockedBy: [],
+            source: { hand: 'x', at: 't' },
+          },
         ],
       };
       const layout = layoutSystems(doc, 'dev');

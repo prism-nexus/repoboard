@@ -26,6 +26,7 @@ import {
 import { blockedReason, type GateMemberFacts } from './phases.js';
 import { isActive } from './presence.js';
 import type { LogBlock } from './repolog.js';
+import type { SystemsDoc } from './systems.js';
 import { toIso } from './time.js';
 import type { BoardConfig, Card, LeasesDoc } from './types.js';
 
@@ -300,6 +301,8 @@ export interface Finding {
     | 'future-stamp'
     | 'systems-invalid'
     | 'systems-stale'
+    | 'systems-unblocker-unknown'
+    | 'systems-planned-without-unblocker'
     | 'untracked-cards'
     | 'seat-owner-queue-drift'
     | 'workspace-member-missing'
@@ -343,7 +346,15 @@ export interface CheckInput {
    * I/O) by the caller — core stays I/O-free (§0.5). `null`/absent when the caller gathered
    * nothing (no systems.yml at all, or it gathered no stale check) — an unconfigured systems.yml
    * is inert, not dangerous, so no finding fires for it. */
-  systems?: { errors: readonly string[]; stale: readonly string[] } | null;
+  systems?: {
+    errors: readonly string[];
+    stale: readonly string[];
+    /** RCB-161 slice 1: the parsed doc (present only when the file parsed OK — an invalid file
+     * has no rows to check for unblockers), so `systemsUnblockerFindings` can read `status`/
+     * `unblockedBy` without a second gather. `null`/absent is inert, same rule as the rest of
+     * `systems`. */
+    doc?: SystemsDoc | null;
+  } | null;
   /** RCB-119: card files git does not track, gathered (with I/O, one `git ls-files`) by the
    * caller — core stays I/O-free (§0.5). `null`/absent when the caller could not gather it (not a
    * git repo, or the gather itself failed) — an ungathered signal is inert, not dangerous, so no
@@ -403,6 +414,72 @@ export function systemsFindings(systems: CheckInput['systems']): Finding[] {
       message: `systems-stale: ${systems.stale.length} detected row(s) no longer yielded by their source: ${systems.stale.join(', ')}`,
     });
   }
+  return findings;
+}
+
+/** RCB-161 slice 1: is `id` a card on `cards` (this board) or on any of `members` (by prefix — the
+ * same "own board first, then exactly the member whose prefix matches" shape `gateState` resolves
+ * a `gate:` value against, `phases.ts`)? An `unblocked_by` entry always passed `CARD_ID_SHAPE` to
+ * reach here (`parseSystems` rejects anything else before `doc` is ever handed to `check`), so no
+ * shape re-check is needed — only "does a board know this id". */
+function isKnownCardId(
+  id: string,
+  cards: readonly Card[],
+  members: readonly GateMemberFacts[],
+): boolean {
+  if (cards.some((c) => c.id === id)) return true;
+  const dash = id.lastIndexOf('-');
+  if (dash === -1) return false;
+  const prefix = id.slice(0, dash);
+  const member = members.find((m) => m.prefix === prefix);
+  return member ? member.cards.some((c) => c.id === id) : false;
+}
+
+/**
+ * RCB-161 slice 1 (plan docs/SYSTEMS-FLOW-PLAN.md, systems status + unblocked_by): two warning
+ * findings over `doc`'s `unblocked_by` fields — `null`/absent `doc` is inert (unparsed or absent
+ * systems.yml has nothing to check), same "ungathered/unconfigured signal yields nothing" rule as
+ * every other half of `systems`. `systems-unblocker-unknown`: an `unblocked_by` id that names no
+ * card of this board nor any member. `systems-planned-without-unblocker`: a `planned`/`blocked`
+ * row or connection whose `unblocked_by` list is empty — the other half of the same question, "if
+ * this isn't live yet, what unblocks it?" Each row/connection is checked independently; a row can
+ * fire both, neither, or either.
+ */
+export function systemsUnblockerFindings(
+  doc: SystemsDoc | null | undefined,
+  cards: readonly Card[],
+  members: readonly GateMemberFacts[],
+): Finding[] {
+  if (!doc) return [];
+  const findings: Finding[] = [];
+
+  const rows: { label: string; status: string; unblockedBy: readonly string[] }[] = [
+    ...doc.systems.map((s) => ({ label: s.id, status: s.status, unblockedBy: s.unblockedBy })),
+    ...doc.connections.map((c) => ({
+      label: `${c.from}→${c.to}`,
+      status: c.status,
+      unblockedBy: c.unblockedBy,
+    })),
+  ];
+
+  for (const row of rows) {
+    for (const id of row.unblockedBy) {
+      if (isKnownCardId(id, cards, members)) continue;
+      findings.push({
+        kind: 'systems-unblocker-unknown',
+        level: 'warning',
+        message: `systems-unblocker-unknown: ${row.label} names unblocked_by "${id}" — no card of this board or any member`,
+      });
+    }
+    if (row.status !== 'live' && row.unblockedBy.length === 0) {
+      findings.push({
+        kind: 'systems-planned-without-unblocker',
+        level: 'warning',
+        message: `systems-planned-without-unblocker: ${row.label} is ${row.status} with no unblocked_by`,
+      });
+    }
+  }
+
   return findings;
 }
 
@@ -647,6 +724,7 @@ export function checkFindings(input: CheckInput): Finding[] {
   if (cf) findings.push(cf);
 
   findings.push(...systemsFindings(input.systems));
+  findings.push(...systemsUnblockerFindings(input.systems?.doc, input.cards, input.members ?? []));
 
   // RCB-119: an absent/null `untrackedCards` is inert (no git repo, or the caller could not
   // gather it) — like `local` and `systems`, an unconfigured/ungathered signal yields nothing,

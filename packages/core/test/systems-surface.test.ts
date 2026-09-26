@@ -40,6 +40,8 @@ function sys(id: string, env: SystemEnv[]): SystemsDoc['systems'][number] {
     pointers: [],
     docs: [],
     why: null,
+    status: 'live',
+    unblockedBy: [],
     source: { hand: 'test', at: '2026-09-22T00:00:00Z' },
   };
 }
@@ -196,6 +198,18 @@ describe('systems surfaces (RCB-97)', () => {
       expect(row).toBeDefined();
       expect(row?.endsWith('…')).toBe(true);
     });
+
+    it('RCB-161: STATUS column after ENV, shows a non-live status', () => {
+      const doc: SystemsDoc = {
+        ...emptySystemsDoc(),
+        systems: [{ ...sys('a', ['dev']), status: 'planned' }],
+      };
+      const text = formatSystemsTable(doc);
+      const header = text.split('\n')[2];
+      expect(header).toBe('ID  KIND     LAYER  ENV  STATUS   RUNTIME');
+      const row = text.split('\n')[3];
+      expect(row).toBe('a   service  app    dev  planned  -→-');
+    });
   });
 
   describe('formatSystemRow', () => {
@@ -229,6 +243,52 @@ describe('systems surfaces (RCB-97)', () => {
     it('an unknown id returns null', () => {
       const doc = parseFixture('two-env.yml');
       expect(formatSystemRow(doc, 'nope')).toBeNull();
+    });
+
+    it('RCB-161: a non-live status, an unblocked_by list, and a connection status suffix', () => {
+      const doc: SystemsDoc = {
+        ...emptySystemsDoc(),
+        systems: [
+          { ...sys('a', ['dev']), status: 'planned', unblockedBy: ['RCB-9', 'RCB-10'] },
+          sys('b', ['dev']),
+        ],
+        connections: [
+          {
+            from: 'a',
+            to: 'b',
+            via: null,
+            env: ['dev'],
+            status: 'blocked',
+            unblockedBy: ['RCB-9'],
+            source: { hand: 'test', at: 't' },
+          },
+        ],
+      };
+      expect(formatSystemRow(doc, 'a')).toBe(
+        [
+          'id: a',
+          'name: a',
+          'kind: service',
+          'layer: app',
+          'env: dev',
+          'status: planned',
+          'runtime dev: -',
+          'runtime prod: -',
+          'owner: -',
+          'why: -',
+          'source: hand test at 2026-09-22T00:00:00Z',
+          'pointers:',
+          '  (none)',
+          'docs:',
+          '  (none)',
+          'unblocked by:',
+          '  RCB-9',
+          '  RCB-10',
+          'connections:',
+          '  a → b (-) [dev] · blocked',
+          '',
+        ].join('\n'),
+      );
     });
   });
 });

@@ -9,6 +9,7 @@
  */
 import * as YAML from 'yaml';
 import { z } from 'zod';
+import { CARD_ID_SHAPE } from './phases.js';
 
 /** Diagram row membership. Order here is NOT significant (§3.1 list order); `SYSTEM_LAYERS`
  * below is the one place the diagram's row ORDER lives. */
@@ -36,6 +37,12 @@ export type SystemLayer = (typeof SYSTEM_LAYERS)[number];
 export const SYSTEM_ENVS = ['dev', 'prod'] as const;
 export type SystemEnv = (typeof SYSTEM_ENVS)[number];
 
+/** RCB-161 slice 1 (plan §3.1): a row/connection's build state — `live` (default, absent on disk)
+ * is today's every row; `planned`/`blocked` are new. Drives the Flow view's "what unblocks this"
+ * (slice 2, not here). */
+export const SYSTEM_STATUSES = ['live', 'planned', 'blocked'] as const;
+export type SystemStatus = (typeof SYSTEM_STATUSES)[number];
+
 /** §3.1: half the CLAUDE.md budget; `board.yml` may raise it (not read here — core has no I/O). */
 export const DEFAULT_SYSTEMS_BUDGET_BYTES = 4096;
 
@@ -56,6 +63,10 @@ export interface SystemRow {
   pointers: string[];
   docs: string[];
   why: string | null;
+  /** RCB-161 slice 1: absent on disk (YAML has no `status:` key) → `'live'`. */
+  status: SystemStatus;
+  /** RCB-161 slice 1: YAML key `unblocked_by`, a list of card ids; absent on disk → `[]`. */
+  unblockedBy: string[];
   source: Source;
 }
 
@@ -64,6 +75,10 @@ export interface Connection {
   to: string;
   via: string | null;
   env: SystemEnv[];
+  /** RCB-161 slice 1: absent on disk (YAML has no `status:` key) → `'live'`. */
+  status: SystemStatus;
+  /** RCB-161 slice 1: YAML key `unblocked_by`, a list of card ids; absent on disk → `[]`. */
+  unblockedBy: string[];
   source: Source;
 }
 
@@ -102,6 +117,11 @@ const SystemRowInputSchema = z.looseObject({
   pointers: z.array(z.string()).default(() => []),
   docs: z.array(z.string()).default(() => []),
   why: z.string().nullable().default(null),
+  // RCB-161 slice 1: `status` is checked against SYSTEM_STATUSES in `validateSemantics` (like
+  // `kind`/`layer`), not `z.enum` here, so a bad value is reported with the row named rather than
+  // a generic zod issue. `unblocked_by` entries are checked against CARD_ID_SHAPE the same way.
+  status: z.string().optional(),
+  unblocked_by: z.array(z.string()).default(() => []),
   source: SourceInputSchema,
 });
 
@@ -110,6 +130,8 @@ const ConnectionInputSchema = z.looseObject({
   to: z.string().min(1),
   via: z.string().nullable().default(null),
   env: z.array(z.string()),
+  status: z.string().optional(),
+  unblocked_by: z.array(z.string()).default(() => []),
   source: SourceInputSchema,
 });
 
@@ -173,6 +195,14 @@ function validateSemantics(raw: RawSystemsDoc): string[] {
     if (!isValidEnvList(row.env)) {
       errors.push(`${label}: env must be a non-empty subset of dev, prod`);
     }
+    if (row.status !== undefined && !(SYSTEM_STATUSES as readonly string[]).includes(row.status)) {
+      errors.push(`${label}: unknown status "${row.status}"`);
+    }
+    for (const id of row.unblocked_by) {
+      if (!CARD_ID_SHAPE.test(id)) {
+        errors.push(`${label}: unblocked_by entry "${id}" is not a card id`);
+      }
+    }
   });
 
   raw.connections.forEach((conn, i) => {
@@ -187,6 +217,17 @@ function validateSemantics(raw: RawSystemsDoc): string[] {
     }
     if (!isValidEnvList(conn.env)) {
       errors.push(`connections[${i}]: env must be a non-empty subset of dev, prod`);
+    }
+    if (
+      conn.status !== undefined &&
+      !(SYSTEM_STATUSES as readonly string[]).includes(conn.status)
+    ) {
+      errors.push(`connections[${i}]: unknown status "${conn.status}"`);
+    }
+    for (const id of conn.unblocked_by) {
+      if (!CARD_ID_SHAPE.test(id)) {
+        errors.push(`connections[${i}]: unblocked_by entry "${id}" is not a card id`);
+      }
     }
   });
 
@@ -220,6 +261,8 @@ function toSystemsDoc(raw: RawSystemsDoc): SystemsDoc {
       pointers: row.pointers,
       docs: row.docs,
       why: row.why,
+      status: (row.status ?? 'live') as SystemStatus,
+      unblockedBy: row.unblocked_by,
       source: toSource(row.source),
     })),
     connections: raw.connections.map((conn) => ({
@@ -227,6 +270,8 @@ function toSystemsDoc(raw: RawSystemsDoc): SystemsDoc {
       to: conn.to,
       via: conn.via,
       env: conn.env as SystemEnv[],
+      status: (conn.status ?? 'live') as SystemStatus,
+      unblockedBy: conn.unblocked_by,
       source: toSource(conn.source),
     })),
   };

@@ -86,12 +86,16 @@ systems:
     pointers: ["apps/worker/src/index.ts", "wrangler.jsonc@main"]   # refs syntax (K7), resolved live
     docs: ["docs/BUILD-PLAN.md#§3"]
     why: null                       # optional one line
+    status: planned                 # RCB-161: live | planned | blocked — absent key means live
+    unblocked_by: ["RCB-9"]         # RCB-161: card ids; absent/empty means none named
     source: { detected: "wrangler.jsonc", at: "2026-09-22T04:00:00Z" }   # or { hand: "<actor>", at }
 connections:
   - from: worker
     to: postgres
     via: "Hyperdrive binding HYPERDRIVE"
     env: [dev, prod]
+    status: blocked                 # RCB-161: same status enum, absent key means live
+    unblocked_by: ["RCB-10"]        # RCB-161: card ids that unblock this connection
     source: { detected: "wrangler.jsonc@hyperdrive", at: "…" }
 ```
 

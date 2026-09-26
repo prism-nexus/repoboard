@@ -27,6 +27,7 @@ import {
   exitCodeForFindings,
   type Finding,
   filterLogBlocks,
+  findColumn,
   findSeatLine,
   formatAnsweredChoice,
   formatCostTable,
@@ -2588,13 +2589,67 @@ async function cmdSystems(args: string[], io: CliIO): Promise<number> {
 }
 
 /**
+ * RCB-161 slice 1: one `unblocked_by` id's resolution against THIS board's cards — `card: null`
+ * when the id names no card here (printed as "(not on this board)"); otherwise its title/status,
+ * plus EITHER `decision` (an open ask, letters and text) OR `nextStep` (the first `stepsOf` child
+ * not in a done column with a clear gate) — never both, and both `null` when the card has neither.
+ */
+interface UnblockerInfo {
+  id: string;
+  card: { title: string; status: string } | null;
+  decision: { question: string; options: DecisionOption[] } | null;
+  nextStep: { id: string; title: string } | null;
+}
+
+function unblockerInfo(id: string, cards: readonly Card[], config: BoardConfig): UnblockerInfo {
+  const card = cards.find((c) => c.id === id);
+  if (!card) return { id, card: null, decision: null, nextStep: null };
+  const cardInfo = { title: card.title, status: card.status };
+  if (needsDecision(card)) {
+    const d = card.decision;
+    return {
+      id,
+      card: cardInfo,
+      decision: d ? { question: d.question, options: d.options } : null,
+      nextStep: null,
+    };
+  }
+  const step = stepsOf(id, cards).find(
+    (s) => findColumn(config, s.status)?.done !== true && blockedReason(s, cards, config) === null,
+  );
+  return {
+    id,
+    card: cardInfo,
+    decision: null,
+    nextStep: step ? { id: step.id, title: step.title } : null,
+  };
+}
+
+/** Text lines for one `UnblockerInfo` — the brief's `  <ID> <title> [<card status>]` plus an
+ * indented `decision:`/`next step:` line, or `  <ID> (not on this board)` when unknown. */
+function formatUnblockerLines(info: UnblockerInfo): string[] {
+  if (!info.card) return [`  ${info.id} (not on this board)`];
+  const lines = [`  ${info.id} ${info.card.title} [${info.card.status}]`];
+  if (info.decision) {
+    const opts = info.decision.options.map((o) => `${o.letter}: ${o.text}`).join(' · ');
+    lines.push(`    decision: ${info.decision.question}${opts ? ` — ${opts}` : ''}`);
+  } else if (info.nextStep) {
+    lines.push(`    next step: ${info.nextStep.id} ${info.nextStep.title}`);
+  }
+  return lines;
+}
+
+/**
  * RCB-97 (plan §3.3): `repoboard systems show <id> [--json]` — one row plus its `pointers`
  * resolved the way `card show --resolve` does (`cmdCardShow`). Unknown id (or no systems.yml at
- * all/invalid) → stderr, exit 1. `--json` returns `{ system, connections, pointers, tests }`.
- * RCB-110: `tests` (core's `SystemTests`) is printed as one line per pointer between the row and
- * the resolved refs. RCB-113: `tests.measured` (source B, % lines from the gate's own coverage
- * report) prints its own line right after `tests.line`, and each pointer line gains a `· <pct>%`
- * or `· <reason>` suffix from `tests.measured.pointers`.
+ * all/invalid) → stderr, exit 1. `--json` returns `{ system, connections, pointers, tests,
+ * unblockers }`. RCB-110: `tests` (core's `SystemTests`) is printed as one line per pointer
+ * between the row and the resolved refs. RCB-113: `tests.measured` (source B, % lines from the
+ * gate's own coverage report) prints its own line right after `tests.line`, and each pointer line
+ * gains a `· <pct>%` or `· <reason>` suffix from `tests.measured.pointers`. RCB-161 slice 1: under the
+ * row's `unblocked by:`, one block per `system.unblockedBy` id (`unblockerInfo`/`formatUnblockerLines`
+ * above) — this board's cards only, same as `card show`'s own gate resolution without workspace
+ * members.
  */
 async function cmdSystemsShow(args: string[], io: CliIO): Promise<number> {
   const { values, positionals } = parse('systems', args, {
@@ -2610,11 +2665,20 @@ async function cmdSystemsShow(args: string[], io: CliIO): Promise<number> {
   const connections = doc.connections.filter((c) => c.from === id || c.to === id);
   const pointers = await Promise.all(system.pointers.map((p) => resolveRefSpec(root, p)));
   const tests = await systemTests(root, system.pointers);
+  const unblockers = system.unblockedBy.map((uid) =>
+    unblockerInfo(uid, store.list(), store.config),
+  );
   if (values.json) {
-    io.stdout.write(`${JSON.stringify({ system, connections, pointers, tests }, null, 2)}\n`);
+    io.stdout.write(
+      `${JSON.stringify({ system, connections, pointers, tests, unblockers }, null, 2)}\n`,
+    );
     return 0;
   }
-  const row = formatSystemRow(doc, id);
+  const byId = new Map(unblockers.map((u) => [u.id, u]));
+  const row = formatSystemRow(doc, id, (uid) => {
+    const info = byId.get(uid);
+    return info ? formatUnblockerLines(info) : [`  ${uid}`];
+  });
   io.stdout.write(row ?? '');
   io.stdout.write(`${tests.line}\n`);
   io.stdout.write(`${tests.measured.line}\n`);

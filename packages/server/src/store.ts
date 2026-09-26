@@ -1170,14 +1170,17 @@ export class CardStore extends EventEmitter<StoreEvents> {
 
   /**
    * RCB-97: `check`'s `systems` input — `null` when there is no `systems.yml` at all (§3.1:
-   * unconfigured is inert). Otherwise `{ errors, stale }`: `stale` is only ever computed when
-   * `doc` parsed AND has at least one `source.detected` row (an invalid file has no rows to
+   * unconfigured is inert). Otherwise `{ errors, stale, doc }`: `stale` is only ever computed
+   * when `doc` parsed AND has at least one `source.detected` row (an invalid file has no rows to
    * stale-check); a detection failure yields `stale: []` — a `check` call must never throw over
-   * this (mirrors `cost`'s and `local`'s own "gather never fails" rule above).
+   * this (mirrors `cost`'s and `local`'s own "gather never fails" rule above). RCB-161 slice 1:
+   * `doc` is forwarded unchanged (`null` on a parse failure) so `checkFindings` can also run
+   * `systemsUnblockerFindings` without a second gather.
    */
   private async gatherSystemsCheck(): Promise<{
     errors: readonly string[];
     stale: readonly string[];
+    doc: SystemsDoc | null;
   } | null> {
     const { doc, errors, exists } = this.systems();
     if (!exists) return null;
@@ -1190,7 +1193,7 @@ export class CardStore extends EventEmitter<StoreEvents> {
         stale = [];
       }
     }
-    return { errors, stale };
+    return { errors, stale, doc };
   }
 
   /**

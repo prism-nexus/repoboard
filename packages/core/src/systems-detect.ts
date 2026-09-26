@@ -983,6 +983,10 @@ export function applyDetected(
         pointers: cand.pointers,
         docs: [],
         why: null,
+        // RCB-161 slice 1: a newly-detected row is always live/[] — an unblocker only ever comes
+        // from a hand edit, never from a detector.
+        status: 'live',
+        unblockedBy: [],
         source: { detected: cand.detected, at },
       });
       added.push(cand.id);
@@ -1005,6 +1009,10 @@ export function applyDetected(
       pointers: cand.pointers,
       docs: existing.docs,
       why: existing.why,
+      // RCB-161 slice 1: an updated detected row KEEPS the hand-set status/unblockers — a
+      // re-detect must never silently clear an owner's "planned, waiting on RCB-9" note.
+      status: existing.status,
+      unblockedBy: existing.unblockedBy,
       source: { detected: cand.detected, at },
     };
     updated.push(cand.id);
@@ -1020,6 +1028,8 @@ export function applyDetected(
         to: cand.to,
         via: cand.via,
         env: filterNoneEnvs(doc, cand.env),
+        status: 'live',
+        unblockedBy: [],
         source: { detected: cand.detected, at },
       });
       added.push(key);
@@ -1036,6 +1046,8 @@ export function applyDetected(
       to: cand.to,
       via: cand.via,
       env: filterNoneEnvs(doc, cand.env),
+      status: existing.status,
+      unblockedBy: existing.unblockedBy,
       source: { detected: cand.detected, at },
     };
     updated.push(key);
@@ -1124,6 +1136,10 @@ export function serializeSystems(doc: SystemsDoc): string {
     row.pointers = s.pointers;
     if (s.docs.length > 0) row.docs = s.docs;
     if (s.why !== null) row.why = s.why;
+    // RCB-161 slice 1: `status`/`unblocked_by` write only when they diverge from the absent-key
+    // default (live/[]) — an old fixture with neither field round-trips byte-identical.
+    if (s.status !== 'live') row.status = s.status;
+    if (s.unblockedBy.length > 0) row.unblocked_by = s.unblockedBy;
     row.source = serializeSource(s.source);
     return row;
   });
@@ -1131,6 +1147,8 @@ export function serializeSystems(doc: SystemsDoc): string {
     const row: Record<string, unknown> = { from: c.from, to: c.to };
     if (c.via !== null) row.via = c.via;
     row.env = c.env;
+    if (c.status !== 'live') row.status = c.status;
+    if (c.unblockedBy.length > 0) row.unblocked_by = c.unblockedBy;
     row.source = serializeSource(c.source);
     return row;
   });

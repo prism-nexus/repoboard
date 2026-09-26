@@ -4,6 +4,7 @@
  */
 import { describe, expect, it } from 'vitest';
 import { defaultBoardConfig } from '../src/board.js';
+import type { GateMemberFacts } from '../src/phases.js';
 import type { LogBlock } from '../src/repolog.js';
 import type { StateDoc } from '../src/state.js';
 import {
@@ -21,8 +22,10 @@ import {
   setStateSection,
   splitLandings,
   systemsFindings,
+  systemsUnblockerFindings,
   trimLandings,
 } from '../src/state.js';
+import type { SystemsDoc } from '../src/systems.js';
 import type { Card, LeasesDoc } from '../src/types.js';
 import { sampleCard } from './helpers.js';
 
@@ -1324,6 +1327,162 @@ describe('systems findings (RCB-97)', () => {
     expect(findings.some((f) => f.kind === 'systems-stale')).toBe(true);
     expect(exitCodeForFindings(findings, false)).toBe(0);
     expect(exitCodeForFindings(findings, true)).toBe(1);
+  });
+});
+
+describe('systemsUnblockerFindings / systems-unblocker-* (RCB-161 slice 1)', () => {
+  const config = defaultBoardConfig();
+  const knownCard = sampleCard({ id: 'RB-9', status: 'todo', decision: undefined });
+
+  function sysRow(
+    overrides: Partial<SystemsDoc['systems'][number]> = {},
+  ): SystemsDoc['systems'][number] {
+    return {
+      id: 'svc',
+      name: 'svc',
+      kind: 'service',
+      layer: 'app',
+      env: ['dev'],
+      runtime: {},
+      owner: null,
+      pointers: [],
+      docs: [],
+      why: null,
+      status: 'live',
+      unblockedBy: [],
+      source: { hand: 'test', at: 't' },
+      ...overrides,
+    };
+  }
+
+  function doc(
+    systems: SystemsDoc['systems'] = [],
+    connections: SystemsDoc['connections'] = [],
+  ): SystemsDoc {
+    return { environments: { dev: { note: null }, prod: { note: null } }, systems, connections };
+  }
+
+  it('doc null/undefined — inert, no finding (unconfigured/unparsed is inert)', () => {
+    expect(systemsUnblockerFindings(null, [knownCard], [])).toEqual([]);
+    expect(systemsUnblockerFindings(undefined, [knownCard], [])).toEqual([]);
+  });
+
+  it('unblocked_by names a card on this board — no systems-unblocker-unknown', () => {
+    const d = doc([sysRow({ status: 'planned', unblockedBy: ['RB-9'] })]);
+    const findings = systemsUnblockerFindings(d, [knownCard], []);
+    expect(findings.some((f) => f.kind === 'systems-unblocker-unknown')).toBe(false);
+  });
+
+  it('unblocked_by names no card of this board nor any member — systems-unblocker-unknown, exact message', () => {
+    const d = doc([sysRow({ status: 'planned', unblockedBy: ['RB-404'] })]);
+    const findings = systemsUnblockerFindings(d, [knownCard], []);
+    expect(findings).toContainEqual({
+      kind: 'systems-unblocker-unknown',
+      level: 'warning',
+      message:
+        'systems-unblocker-unknown: svc names unblocked_by "RB-404" — no card of this board or any member',
+    });
+  });
+
+  it('unblocked_by names a card on a workspace member (by prefix) — no finding', () => {
+    const memberCard = sampleCard({ id: 'FPJ-1', status: 'todo', decision: undefined });
+    const members: GateMemberFacts[] = [{ key: 'fpj', prefix: 'FPJ', cards: [memberCard], config }];
+    const d = doc([sysRow({ status: 'planned', unblockedBy: ['FPJ-1'] })]);
+    const findings = systemsUnblockerFindings(d, [], members);
+    expect(findings.some((f) => f.kind === 'systems-unblocker-unknown')).toBe(false);
+  });
+
+  it('a member exists with the right prefix but not the id — still unknown', () => {
+    const memberCard = sampleCard({ id: 'FPJ-1', status: 'todo', decision: undefined });
+    const members: GateMemberFacts[] = [{ key: 'fpj', prefix: 'FPJ', cards: [memberCard], config }];
+    const d = doc([sysRow({ status: 'planned', unblockedBy: ['FPJ-2'] })]);
+    const findings = systemsUnblockerFindings(d, [], members);
+    expect(findings.some((f) => f.kind === 'systems-unblocker-unknown')).toBe(true);
+  });
+
+  it('planned/blocked with an empty unblocked_by — systems-planned-without-unblocker, exact message', () => {
+    const d = doc([sysRow({ id: 'svc', status: 'blocked', unblockedBy: [] })]);
+    const findings = systemsUnblockerFindings(d, [], []);
+    expect(findings).toEqual([
+      {
+        kind: 'systems-planned-without-unblocker',
+        level: 'warning',
+        message: 'systems-planned-without-unblocker: svc is blocked with no unblocked_by',
+      },
+    ]);
+  });
+
+  it('planned WITH a non-empty unblocked_by — no systems-planned-without-unblocker', () => {
+    const d = doc([sysRow({ status: 'planned', unblockedBy: ['RB-9'] })]);
+    const findings = systemsUnblockerFindings(d, [knownCard], []);
+    expect(findings.some((f) => f.kind === 'systems-planned-without-unblocker')).toBe(false);
+  });
+
+  it('live status is never flagged even with an empty unblocked_by', () => {
+    const d = doc([sysRow({ status: 'live', unblockedBy: [] })]);
+    expect(systemsUnblockerFindings(d, [], [])).toEqual([]);
+  });
+
+  it('a connection is checked the same way, labeled "from→to"', () => {
+    const d = doc(
+      [],
+      [
+        {
+          from: 'a',
+          to: 'b',
+          via: null,
+          env: ['dev'],
+          status: 'blocked',
+          unblockedBy: [],
+          source: { hand: 'test', at: 't' },
+        },
+      ],
+    );
+    expect(systemsUnblockerFindings(d, [], [])).toEqual([
+      {
+        kind: 'systems-planned-without-unblocker',
+        level: 'warning',
+        message: 'systems-planned-without-unblocker: a→b is blocked with no unblocked_by',
+      },
+    ]);
+  });
+
+  it('a row can fire both findings at once (unknown id counts as "no unblocker" too? no — it HAS an entry, so only unknown fires)', () => {
+    const d = doc([sysRow({ status: 'blocked', unblockedBy: ['RB-404'] })]);
+    const findings = systemsUnblockerFindings(d, [knownCard], []);
+    expect(findings).toEqual([
+      {
+        kind: 'systems-unblocker-unknown',
+        level: 'warning',
+        message:
+          'systems-unblocker-unknown: svc names unblocked_by "RB-404" — no card of this board or any member',
+      },
+    ]);
+  });
+
+  const base = {
+    state: stateAt('2026-09-17T21:00:00Z'),
+    logs: [],
+    cards: [] as Card[],
+    config,
+    leases: emptyLeases(),
+    now: NOW,
+  };
+
+  it('wired into checkFindings via CheckInput.systems.doc', () => {
+    const d = doc([sysRow({ status: 'blocked', unblockedBy: [] })]);
+    const findings = checkFindings({ ...base, systems: { errors: [], stale: [], doc: d } });
+    expect(findings.some((f) => f.kind === 'systems-planned-without-unblocker')).toBe(true);
+  });
+
+  it('CheckInput.systems.doc absent (older caller, or an invalid file) — inert', () => {
+    const findings = checkFindings({ ...base, systems: { errors: [], stale: [] } });
+    expect(
+      findings.some(
+        (f) =>
+          f.kind === 'systems-unblocker-unknown' || f.kind === 'systems-planned-without-unblocker',
+      ),
+    ).toBe(false);
   });
 });
 

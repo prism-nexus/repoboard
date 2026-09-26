@@ -310,6 +310,99 @@ describe('CLI: repoboard systems show <id> (RCB-97)', () => {
     expect(gateway.out).toContain('tests: n/a (no source pointers)');
     expect(gateway.out).toContain('apps/gateway/src/index.ts: not found');
   });
+
+  // RCB-161 slice 1: `status`/`unblocked_by`, and the per-unblocker block `systems show` prints
+  // right after the row — an open decision's letters, or a next step, or "(not on this board)".
+  it('RCB-161: per-unblocker lines — an open decision, a next step, and an unknown id', async () => {
+    const repo = await freshRepo();
+
+    // RB-1: an unblocker with an OPEN decision (moved into the `decide` column by `card ask`).
+    const created1 = await repoboard(repo.root, 'card', 'add', 'Pick a path');
+    expect(created1.code).toBe(0);
+    const asked = await repoboard(
+      repo.root,
+      'card',
+      'ask',
+      'RB-1',
+      'Which way?',
+      '--option',
+      'A go left',
+      '--option',
+      'B go right',
+    );
+    expect(asked.code).toBe(0);
+
+    // RB-2: an unblocker with no decision but a not-yet-done, not-blocked STEP (RB-3, `parent:
+    // RB-2`) — its title/id is the "next step" line.
+    const created2 = await repoboard(repo.root, 'card', 'add', 'Ship the widget');
+    expect(created2.code).toBe(0);
+    const created3 = await repoboard(
+      repo.root,
+      'card',
+      'add',
+      'Do the first step',
+      '--parent',
+      'RB-2',
+      '--phase',
+      'PH.1',
+    );
+    expect(created3.code).toBe(0);
+
+    const text = `environments:
+  dev: { note: null }
+  prod: { note: null }
+systems:
+  - id: svc
+    name: svc
+    kind: service
+    layer: app
+    env: [dev]
+    status: planned
+    unblocked_by: ["RB-1", "RB-2", "RB-99"]
+    source: { hand: "owner", at: "2026-09-22T00:00:00Z" }
+`;
+    await writeSystemsYml(repo.root, text);
+
+    const res = await repoboard(repo.root, 'systems', 'show', 'svc');
+    expect(res.code).toBe(0);
+    expect(res.out).toContain('status: planned');
+    expect(res.out).toContain('unblocked by:');
+    expect(res.out).toContain('  RB-1 Pick a path [decide]');
+    expect(res.out).toContain('    decision: Which way? — A: go left · B: go right');
+    expect(res.out).toContain('  RB-2 Ship the widget [backlog]');
+    expect(res.out).toContain('    next step: RB-3 Do the first step');
+    expect(res.out).toContain('  RB-99 (not on this board)');
+
+    const json = await repoboard(repo.root, 'systems', 'show', 'svc', '--json');
+    expect(json.code).toBe(0);
+    const parsed = JSON.parse(json.out) as {
+      unblockers: Array<{
+        id: string;
+        card: { title: string; status: string } | null;
+        decision: { question: string; options: unknown[] } | null;
+        nextStep: { id: string; title: string } | null;
+      }>;
+    };
+    expect(parsed.unblockers).toHaveLength(3);
+    expect(parsed.unblockers[0]).toMatchObject({
+      id: 'RB-1',
+      card: { title: 'Pick a path', status: 'decide' },
+      decision: { question: 'Which way?' },
+      nextStep: null,
+    });
+    expect(parsed.unblockers[1]).toMatchObject({
+      id: 'RB-2',
+      card: { title: 'Ship the widget', status: 'backlog' },
+      decision: null,
+      nextStep: { id: 'RB-3', title: 'Do the first step' },
+    });
+    expect(parsed.unblockers[2]).toEqual({
+      id: 'RB-99',
+      card: null,
+      decision: null,
+      nextStep: null,
+    });
+  });
 });
 
 // ---------------------------------------------------------------------------------------------

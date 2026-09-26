@@ -5,7 +5,7 @@
  * I/O-free, and `./refs.js`-free (§0.5): pointer RESOLUTION is the server's job, which appends
  * `formatResolvedRefs` after `formatSystemRow`'s text.
  */
-import type { Connection, Source, SystemEnv, SystemsDoc } from './systems.js';
+import type { Connection, Source, SystemEnv, SystemRow, SystemsDoc } from './systems.js';
 
 /** `repoboard seat`'s one line (§3.3) — which environments the file's systems actually cover. */
 export type SystemsEnvs = 'dev+prod' | 'dev only' | 'prod only' | 'dev none' | 'prod none' | 'none';
@@ -140,8 +140,18 @@ export function formatSystemsTable(doc: SystemsDoc): string {
     return `${lines.join('\n')}\n`;
   }
 
-  const header = ['ID', 'KIND', 'LAYER', 'ENV'] as const;
-  const rows = doc.systems.map((s) => [s.id, s.kind, s.layer, envTag(s.env)]);
+  // RCB-161: STATUS only when some row is not live — a file without `status:` keys prints today's
+  // table byte for byte.
+  const withStatus = doc.systems.some((s) => s.status !== 'live');
+  const cellsOf = (s: SystemRow): string[] => {
+    const cells = [s.id, s.kind, s.layer, envTag(s.env)];
+    if (withStatus) cells.push(s.status);
+    return cells;
+  };
+  const header = withStatus
+    ? ['ID', 'KIND', 'LAYER', 'ENV', 'STATUS']
+    : ['ID', 'KIND', 'LAYER', 'ENV'];
+  const rows = doc.systems.map(cellsOf);
   const allRows: readonly (readonly string[])[] = [header, ...rows];
   const widths = header.map((_, i) => Math.max(...allRows.map((r) => (r[i] ?? '').length)));
 
@@ -150,7 +160,7 @@ export function formatSystemsTable(doc: SystemsDoc): string {
 
   lines.push(fitRow(prefixOf(header), 'RUNTIME'));
   for (const s of doc.systems) {
-    lines.push(fitRow(prefixOf([s.id, s.kind, s.layer, envTag(s.env)]), runtimeOf(s)));
+    lines.push(fitRow(prefixOf(cellsOf(s)), runtimeOf(s)));
   }
 
   return `${lines.join('\n')}\n`;
@@ -162,7 +172,8 @@ function sourceLine(s: Source): string {
 }
 
 function connectionLine(c: Connection): string {
-  return `  ${c.from} → ${c.to} (${c.via ?? '-'}) [${envTag(c.env)}]`;
+  const statusSuffix = c.status !== 'live' ? ` · ${c.status}` : '';
+  return `  ${c.from} → ${c.to} (${c.via ?? '-'}) [${envTag(c.env)}]${statusSuffix}`;
 }
 
 /**
@@ -170,7 +181,11 @@ function connectionLine(c: Connection): string {
  * Pointer RESOLUTION is the server's job — it appends `formatResolvedRefs` after this text; this
  * function only ever prints `pointers`/`docs` as raw, unresolved strings.
  */
-export function formatSystemRow(doc: SystemsDoc, id: string): string | null {
+export function formatSystemRow(
+  doc: SystemsDoc,
+  id: string,
+  unblocker?: (cardId: string) => string[],
+): string | null {
   const system = doc.systems.find((s) => s.id === id);
   if (!system) return null;
 
@@ -189,8 +204,15 @@ export function formatSystemRow(doc: SystemsDoc, id: string): string | null {
     ...(system.pointers.length > 0 ? system.pointers.map((p) => `  ${p}`) : ['  (none)']),
     'docs:',
     ...(system.docs.length > 0 ? system.docs.map((d) => `  ${d}`) : ['  (none)']),
-    'connections:',
   ];
+  // RCB-161: `status`/`unblocked by` print only when set, so a row without them reads as before.
+  // `unblocker` (the server's card resolution) replaces the bare id line when given.
+  if (system.status !== 'live') lines.splice(5, 0, `status: ${system.status}`);
+  if (system.unblockedBy.length > 0) {
+    lines.push('unblocked by:');
+    for (const uid of system.unblockedBy) lines.push(...(unblocker?.(uid) ?? [`  ${uid}`]));
+  }
+  lines.push('connections:');
 
   const touching = doc.connections.filter((c) => c.from === id || c.to === id);
   if (touching.length === 0) {

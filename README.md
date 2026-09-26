@@ -9,7 +9,7 @@ board next to a map of the code — so you can see what your agents are doing, a
 
 ## Try it
 
-<!-- npm:omit -->Once `repoboard` is on npm (it is not yet — see Status):<!-- /npm:omit -->
+Inside any git repo (Node 20 or newer):
 
 ```sh
 npx repoboard init && npx repoboard serve --open
@@ -237,9 +237,8 @@ how this repo dispatches subagents: [`docs/SUBAGENTS.md`](docs/SUBAGENTS.md); th
 
 ## Status
 
-Pre-1.0, at 0.2.0. Public at https://github.com/prism-nexus/repoboard since 2026-09-18. <!-- npm:omit -->Not on
-npm yet — publish waits on the owner's npm account (RCB-51); once it lands, install via `npx
-repoboard`.<!-- /npm:omit --> `repoboard@0.2.0` packs to a 339.7 kB tarball of 8 files (measured 2026-09-24, after RCB-141, with
+Pre-1.0, at 0.2.0. Public at https://github.com/prism-nexus/repoboard since 2026-09-18. On npm as
+`repoboard` since 2026-09-25 (`npx repoboard` or `npm install -g repoboard`). `repoboard@0.2.0` packs to a 339.7 kB tarball of 8 files (measured 2026-09-24, after RCB-141, with
 `npm pack --dry-run` in `packages/server` after `pnpm build`). `@repoboard/core` is internal: not
 published, bundled into the CLI (`packages/server/tsup.config.ts`'s `noExternal`) — depend on
 `repoboard`.

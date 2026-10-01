@@ -1,0 +1,3444 @@
+#!/usr/bin/env node
+/**
+ * P2.1 CLI. `node:util.parseArgs`, no framework. Every card mutation goes through the store,
+ * which goes through @repoboard/core. Exit codes: 0 ok · 1 user error (one line) · 2 crash.
+ */
+import { spawn } from 'node:child_process';
+import { realpathSync } from 'node:fs';
+import { mkdir, readFile, stat, writeFile } from 'node:fs/promises';
+import { basename, dirname, join, relative, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { type ParseArgsConfig, parseArgs } from 'node:util';
+import {
+  type AnsweredDecisionRow,
+  answeredDecisions,
+  type BoardConfig,
+  blockedReason,
+  boardShortName,
+  type Card,
+  type CardPatch,
+  type Column,
+  type CreateCardInput,
+  checkDownFields,
+  checkPaneAssertion,
+  createCard,
+  DEFAULT_CLAUDE_MD_BUDGET_BYTES,
+  type DecisionOption,
+  dailyLogHeader,
+  defaultBoardConfig,
+  exitCodeForFindings,
+  type Finding,
+  filterLogBlocks,
+  findSeatLine,
+  formatAnsweredChoice,
+  formatCostTable,
+  formatDetectReport,
+  formatLogBlock,
+  formatSystemRow,
+  formatSystemsTable,
+  type GateCheckName,
+  type GateCheckResult,
+  type GateMemberFacts,
+  type GateRecord,
+  initialStateText,
+  isOwnerTask,
+  isSiblingUrl,
+  needsDecision,
+  type Priority,
+  parseBoard,
+  parseSeatHolderLabel,
+  parseSystems,
+  renderSeatBundle,
+  renderSeatList,
+  renderState,
+  resolveCardRef,
+  resolveOlderThan,
+  resolveSince,
+  resolveTimeSpec,
+  SECTION_PLACEHOLDER,
+  type SeatRow,
+  type Sibling,
+  type Size,
+  type StateSectionName,
+  type SystemsDoc,
+  seatListRows,
+  seatWhoami,
+  serializeBoard,
+  serializeCard,
+  serializeLeases,
+  splitLandings,
+  stepsOf,
+  systemsSummary,
+  systemsUnblockerFindings,
+  toIso,
+  trimLandings,
+  type UnblockerInfo,
+  unblockerInfo,
+  type WorkspaceBoardRef,
+  type WorkspaceRepo,
+  workspaceLeaseLines,
+  workspaceOwnerQueueLines,
+  workspaceSeatLines,
+} from '@repoboard/core';
+import * as YAML from 'yaml';
+import { filterCards, type OwnerQueueRow, ownerQueue } from './card-query.js';
+import { gatherCost } from './cost.js';
+import { distStaleness } from './dist-stale.js';
+import { holderFromEnv } from './holder.js';
+import { type RunningServer, startServer } from './http.js';
+import { applySyncPlan, computeSyncPlan } from './issues.js';
+import { hasLocal, localInit, localStatus, localSync, scaffoldIfAbsent } from './local.js';
+import {
+  formatRows,
+  type LeaseRow,
+  liveLeaseRows,
+  serveMcp,
+  toLeaseRow,
+  toRow,
+  toWindowRow,
+  type WindowRow,
+} from './mcp.js';
+import { formatResolvedRefs, resolveCardRefs, resolveRefSpec } from './refs.js';
+import { assignRepoKeys, hasBoardDir, type RootEntry } from './repo-context.js';
+import { loadGateHealth, recordGate } from './repo-health.js';
+import { type CardStore, openStore } from './store.js';
+import { runDetect } from './systems-detect.js';
+import { systemTests } from './systems-tests.js';
+import { VERSION } from './version.js';
+import {
+  checkMembers,
+  expandHome,
+  gateMemberFacts,
+  memberStateRepos,
+  type OpenedWorkspaceMember,
+  resolveMemberRoot,
+  Workspace,
+  workspaceGateMembers,
+} from './workspace.js';
+
+export { VERSION };
+
+export interface CliIO {
+  cwd: string;
+  stdout: { write(chunk: string): unknown };
+  stderr?: { write(chunk: string): unknown };
+  env?: Record<string, string | undefined>;
+  /** `serve` stops when this aborts (tests); otherwise on SIGINT/SIGTERM. */
+  signal?: AbortSignal;
+  /** `serve` hands the running server here (tests). */
+  onServe?: (server: RunningServer) => void;
+  /** Override for `--open`. */
+  openUrl?: (url: string) => void;
+  /** Clock override. */
+  now?: () => Date;
+  /** Reads all of stdin as a UTF-8 string. Defaults to reading `process.stdin`. Tests override it. */
+  readStdin?: () => Promise<string>;
+}
+
+/** A mistake by the caller: printed as one line, exit 1. */
+export class UserError extends Error {}
+
+/**
+ * RCB-134: a `parse()` failure specifically (unknown flag, missing value) — a `UserError`
+ * subclass so `run()`'s catch can give it the command's usage block instead of the bare
+ * one-line message every other `UserError` gets.
+ */
+export class ParseError extends UserError {}
+
+const HELP = `repoboard — Remember · Connect · Build
+
+Usage:
+  repoboard init [--practices]                 create .repoboard/ with a default board and a first card;
+                                        --practices also scaffolds STATE.md, today's log,
+                                        leases.yml and a root NEXT-AGENT-PROMPT.md if absent —
+                                        works on a repo that already has a board too
+  repoboard init --workspace [--repo <key>=<path>]...  [--practices]
+                                        RCB-153 W8: scaffold a WORKSPACE board — board.yml gets a
+                                        repos: entry per --repo (repeatable), path written relative
+                                        when it shares this directory's own parent (a sibling repo,
+                                        W2), absolute otherwise; ~ is expanded. Refuses if
+                                        .repoboard/ already exists (even with --practices — repos:
+                                        is a one-time scaffold, never a merge). A key must match
+                                        /^[a-z0-9][a-z0-9-]*$/ and be unique; a --repo path that
+                                        does not exist yet is allowed (repoboard check finds it as
+                                        workspace-member-missing) — the output says so. Never reads
+                                        or writes anything under a member's own path.
+  repoboard card add "<title>" [options]      --status s --assignee a --priority high|medium|low
+                                        --size S|M|L|XL
+                                        --label l (repeatable) --file f (repeatable) --ref r (repeatable)
+                                        --parent <id> --phase PH.<n> --gate <id|"sentence">
+                                        --as actor
+                                        RCB-153: at a workspace root, --repo <key> creates it on
+                                        that member instead (needs \`writes: cards\`); absent means
+                                        the workspace itself
+  repoboard card move <id> <status> [--as a]  move a card to a column
+                                        RCB-153: at a workspace root, <id> resolves across members
+                                        by prefix (W4: <PREFIX>-<n>, or <key>:<id> to disambiguate);
+                                        a member target needs \`writes: cards\` in board.yml, else
+                                        refused: "member <key> is read-only (set writes: cards in
+                                        board.yml)" — same resolution/refusal for move/update/ask/
+                                        decide/note below
+  repoboard card update <id> [options]        --title t --assignee a --priority high|medium|low
+                                        --size S|M|L|XL
+                                        --label l --file f --ref r (repeatable; each one REPLACES
+                                        the whole list, it does not append)
+                                        --parent <id> --phase PH.<n> --gate <id|"sentence">
+                                        --clear assignee|priority|size|labels|files|refs|parent|phase|gate
+                                        (repeatable)
+                                        --as actor; status changes go through \`card move\`
+  repoboard card list [--status s] [--json] [--needs-decision] [--size S|M|L|XL]
+                      [--parent <id> [--unblocked]]
+                                        list cards; --json is compact (id, title, status,
+                                        assignee, priority, size, labels, files, parent, phase,
+                                        gate, blocked, updated); add --full for bodies;
+                                        --size filters to that size;
+                                        --needs-decision filters to cards with an open decision;
+                                        a BLOCKED column appears only when a listed card
+                                        is blocked on a gate;
+                                        --parent lists that card's steps in phase order (ID PHASE
+                                        STATUS ASSIGNEE GATE BLOCKED TITLE); --unblocked keeps
+                                        the not-done, not-blocked ones
+                                        RCB-153: at a workspace root, --repo <key> lists just that
+                                        member's own table; --repo all lists every board (REPO
+                                        column first, workspace rows tagged with its own basename
+                                        key); --json rows gain a \`repo\` field either way
+  repoboard card show <id> [--resolve] [--steps] [--json]  print the card file; --resolve appends
+                                        the lines each refs: entry points at, read live from the
+                                        file; an archived id prints
+                                        \`archived: .repoboard/archive/<id>.md\`; --steps appends
+                                        a ## Steps table of its children. --json prints the same
+                                        card object \`card list --json --full\` emits for one row,
+                                        plus steps (compact rows, only with --steps) and refs
+                                        (resolved, only with --resolve); an archived id prints
+                                        {"archived": "<path>"}
+                                        RCB-153: at a workspace root, <id> resolves across members
+                                        by prefix (W4), same rule as \`card move\`
+  repoboard card ask <id> "<question>" [--option "A1 <text>"]... [--as a] [--replace] [--task]
+                                        open a decision on a card (P8.1); --replace withdraws one
+                                        already open. With no options, the owner answers with --words.
+                                        --task files an owner WORK item instead of a question (no
+                                        options; the owner closes it with \`card decide <id>\` and
+                                        no letter)
+  repoboard card decide <id> [<letter>] [--words "<verbatim>"] [--as a]
+                                        answer the open decision; a letter, --words, or both
+  repoboard card note <id> "<text>" [--as a]
+                                        append a dated, attributed remark under \`## Notes\`
+                                        (created before \`## Log\` if missing); never writes a
+                                        \`## Log\` line
+  repoboard columns [--json]           ID TITLE FLAGS COUNT (flags: active, wip:N, done,
+                                        decision); --json prints board.yml's raw columns list
+  repoboard columns set (--stdin | "<text>") [--as a]
+                                        replace the WHOLE column list — YAML or JSON, a bare
+                                        list or {columns: [...]}, exactly PATCH /api/board's
+                                        contract; a schema error (empty list, duplicate
+                                        id) leaves board.yml untouched
+  repoboard lease take <resource> [--as h] [--until ts] [--note n] [--force]
+                                        take (or renew) a lease on a named resource; ts is ISO or
+                                        +90m / +2h relative to now; omit --until to hold until
+                                        released; --force takes it from a live holder
+  repoboard lease release <resource> [--as h] [--force]
+                                        release a lease you hold; --force releases another holder's
+  repoboard lease list [--json]        RESOURCE HOLDER SINCE UNTIL STATE(live|stale) NOTE
+  repoboard window add <resource> <start> <end> <name> [--as a]
+                                        start/end are ISO or +90m / +2h relative to now
+  repoboard window list [--json]
+  repoboard window check <resource> [--at ts]
+                                        exit 0 "clear <resource>" when nothing blocks it; exit 1
+                                        naming what does (a window, a live lease, or both) — this is
+                                        what a lock shim calls
+  repoboard state [--json]                      print the rendered STATE.md (OWNER QUEUE and, right
+                                        after it, LEASES — RCB-131: live leases only — both
+                                        generated fresh, never stored on disk); --json prints
+                                        {stamp, actor, sections, ownerQueue, leases} (read path
+                                        only — refused with --set-section/--trim-landings); no
+                                        STATE.md: null
+  repoboard state --set-section LIVE|LAST-LANDINGS|SEATS (<text> | --stdin) [--as a] [--force]
+                                        replace one section's body and restamp; SEATS is
+                                        written by the seat verbs (seat <name> --up|--down|
+                                        --update) and is refused here without --force
+                                        (RCB-196: a whole-section rewrite from a stale copy
+                                        reverts another seat's bullet)
+  repoboard state --trim-landings <n> [--archive <path>] [--as a]
+                                        keep the newest <n> LAST LANDINGS entries in STATE.md;
+                                        with --archive, append the rest verbatim to <path>
+                                        (relative to root, created with a header if absent,
+                                        never overwritten) instead of today's log — the SEATS
+                                        pointer names <path> either way; "nothing to trim" and
+                                        no write when there is nothing beyond <n>
+  repoboard log --as <seat> [--title "…"] [--force] (<text> | --stdin)
+                                        append one block to today's log — board.yml logDir when
+                                        set, else .repoboard/local/log/, else .repoboard/log/;
+                                        also restamps STATE.md's stamp (RCB-127) when <seat> has
+                                        an UP bullet in SEATS right now, printing " · STATE
+                                        restamped (<seat> is UP)" on the same line — a DOWN or
+                                        unknown seat just logs, and still needs \`seat --update\`;
+                                        RCB-198: with a local layer, refused (exit 1, nothing
+                                        written) from a pane that does not hold <seat>, naming
+                                        both panes, unless --force (audited in the log); a seat
+                                        with no recorded holder is writable by anyone
+  repoboard log show [--date YYYY-MM-DD] [--seat s] [--since ts] [--tail n] [--json]
+                                        print a day's log (default today); --seat narrows to one
+                                        seat, --since to blocks whose ts >= ts (full ISO-8601, or
+                                        HH:MMZ for that UTC time on --date), --tail to the last n
+                                        blocks — applied in that order, seat then since then tail;
+                                        with any of the three, text output is the formatted
+                                        blocks, same as --seat alone; --json prints {date, blocks:
+                                        [{repo, seat, ts, title, text}]} (repo null on an
+                                        unprefixed block); no log for that date: {date,
+                                        blocks: []} exit 0
+  repoboard log --last <seat>           print that seat's newest block, searching back across days
+                                        (cold-start: your own seat's last block, then the coordinator's)
+  repoboard seat <name> | list [--json]  the cold-start bundle for one seat: its SEATS line, its
+                                        live leases (RCB-131: "## Leases", right after the SEATS
+                                        line — one lease per line, "(yours)" suffixed when this
+                                        seat holds it, "(no live leases)" when none), its last log
+                                        block, the coordinator's, its next todo card, the open
+                                        decisions, and its in-flight/owes fields — one command
+                                        instead of the three-file ritual
+  repoboard seat list [--json]         one row per SEATS bullet — NAME STATUS STAMP PANE LABEL
+                                        LIVE IN-FLIGHT — instead of "seat <name>" being parsed as
+                                        a seat literally named "list". RCB-199: PANE is the tag of
+                                        the pane that holds the seat (seats.yml), LABEL what the
+                                        bullet says, LIVE whether that holder's process is still
+                                        running (alive, dead: no process, unknown: other host,
+                                        …); each "-" when unknown. A "! <seat> <STATUS>: holder
+                                        <tag> is dead: …" line follows for a bullet that still
+                                        says UP for a holder that is gone. --json prints
+                                        SeatListRow[]; an unreadable seats.yml is a stderr
+                                        warning, the rows still print
+  repoboard seat whoami [--json]       RCB-199: which seat does THIS pane hold — "A7B2 · acme
+                                        builder", or "A7B2 · no seat" when it holds none (exit 0
+                                        either way), " (also holds a, b)" appended when it holds
+                                        more than one; "(no pane)" for a process with no pane env.
+                                        A read: creates no file or lock. --json prints {label,
+                                        tag, seat, alsoHolds, holder, lease, bullet} (seat, lease
+                                        and bullet null when it holds none); an unreadable
+                                        seats.yml is exit 1 on stderr, not a guess
+  repoboard seat <name> --up "<text>" [--force] [--from <seat>] [--pane <tag>] | --down "<text>" [--force] | --update "<text>" [--force]
+                                        replace ONLY this seat's own SEATS bullet and restamp
+                                        STATE.md; appends the bullet if the seat has none; --up
+                                        is a CLAIM, decided inside the seat-file and STATE.md
+                                        locks (RCB-197): allowed when the seat is DOWN, when the
+                                        recorded holder is THIS pane (a new session after /clear
+                                        needs no --force) or is dead (its process is gone or its
+                                        pid was reused — taken over, audited in the log); refused,
+                                        naming the holder ("builder is held by A7B2 · acme
+                                        builder (UP …); you are 0460 · acme"), while another
+                                        holder is alive or cannot be measured, unless --force
+                                        (audited); refused, whatever --force says, while this
+                                        pane already holds ANOTHER UP seat unless --from <seat>,
+                                        which stands that seat DOWN ("moved to <name>") in the
+                                        same write (needs a local layer); --pane <4|6 chars>
+                                        asserts the pane running this and exits 1 on a mismatch,
+                                        writing nothing; a seat with no recorded holder (no local
+                                        layer, or UP before holders were recorded) falls back to
+                                        the old rule: refuses a second UP while the seat was seen
+                                        alive inside activeWindowMinutes — its UP stamp, its
+                                        newest log block, or STATE.md's stamp when it wrote it
+                                        (RCB-169; --update keeps the UP stamp) — unless --force;
+                                        --from/--pane are valid only with --up; --down is refused
+                                        unless the text carries BOTH an "in-flight:" line and an
+                                        "owes:" line; --update rewrites only the body,
+                                        keeps the standing stamp, no presence guard; RCB-198: with
+                                        a local layer --down and --update are the HOLDER's — a
+                                        pane that does not hold the seat is refused (exit 1,
+                                        nothing written, "builder is held by A7B2 · acme builder
+                                        (UP …); you are 0460 · acme — use --force …") unless
+                                        --force, which writes and is audited in the log; --down
+                                        drops the seat's holder record, --update keeps it; a seat
+                                        with no recorded holder is writable by anyone; --down and
+                                        --update both refuse a text with MORE THAN ONE
+                                        "in-flight:" or "owes:" line (never hand-type OWNER QUEUE
+                                        into either field — it is generated, see \`repoboard
+                                        check\`'s seat-owner-queue-drift). <name> is the BARE seat
+                                        name (RCB-172, here and in log --as/--last/show --seat): a
+                                        leading "[<board>]" or "<board> " is stripped, another
+                                        board's "[…]" prefix is refused; the confirmation prints
+                                        the bullet's label, "[<board>] <name>"; with a local layer
+                                        (.repoboard/local/), --up also records WHO holds the
+                                        seat (terminal pane, pid, host) in the gitignored
+                                        .repoboard/local/seats.yml, and the confirmation and bullet
+                                        end with the short label, "· A7B2 · acme builder"; --down
+                                        removes that record
+  repoboard decisions [--since <ISO|HH:MMZ>] [--all] [--json]
+                                        answered decisions a seat has not yet acknowledged — the
+                                        owner can answer on another surface (the web) and nothing
+                                        else here changes; table DECIDED BY CARD CHOSEN ACK
+                                        QUESTION. Default: unacknowledged only; --all also shows
+                                        acknowledged ones; --since filters on decidedAt (HH:MMZ =
+                                        that UTC time today). "acknowledged" means someone OTHER
+                                        than the decider has written a \`## Log\` or \`## Notes\`
+                                        line on the card since it was decided — e.g.
+                                        \`repoboard card note <id> "ack" --as you\`
+  repoboard check [--json] [--strict]  exit 0 "ok" / 1 with one line per finding: stale-state
+                                        (also reads board.yml's logDir, P8.6 — an extra daily-log
+                                        directory alongside .repoboard/log/, read-only),
+                                        active-without-lease (warning; blocks only with --strict),
+                                        stale-lease, live-lease (informational, never fails — one
+                                        line per lease currently held, RCB-131),
+                                        needs-decision (informational, never fails),
+                                        needs-ask (warning; blocks only with --strict — a card in a
+                                        decision: true column with no OPEN ask, never asked or
+                                        already decided and moved back), gated-steps
+                                        (informational, never fails — N cards blocked on a gate),
+                                        cost-over-budget (error; see \`repoboard cost\`),
+                                        local-unsynced (warning; blocks only with --strict —
+                                        uncommitted changes or unpushed commits in
+                                        .repoboard/local/), local-no-remote (informational, never
+                                        fails — .repoboard/local/ has no origin and no
+                                        \`remote: none\` ack; see \`local init\`),
+                                        future-stamp (warning; blocks only with --strict — a log
+                                        block's header time is more than a minute ahead of the
+                                        clock, so it was ignored for stale-state; hand-typed header
+                                        or clock skew), systems-invalid (error — a
+                                        .repoboard/systems.yml that fails to parse), systems-stale
+                                        (warning; blocks only with --strict — a detected system no
+                                        longer matches its source file), systems-unblocker-unknown
+                                        (warning; blocks only with --strict — a systems.yml
+                                        unblocked_by id that names no card of this board or any
+                                        member), systems-planned-without-unblocker (warning; blocks
+                                        only with --strict — a planned or blocked system or
+                                        connection with no unblocked_by), seat-owner-queue-drift
+                                        (warning; blocks only with --strict — a SEATS bullet
+                                        hand-types "OWNER QUEUE = <ids>" and that set no longer
+                                        matches the generated queue; drop the hand line),
+                                        untracked-cards (warning;
+                                        blocks only with --strict — card files git does not track),
+                                        workspace-member-missing (error — at a workspace root, a
+                                        repos: entry whose root has no .repoboard/),
+                                        workspace-key-name-mismatch (warning; blocks only with
+                                        --strict — at a workspace root, a member whose board name
+                                        differs from the repos: key the workspace uses for it),
+                                        public-denylist-missing (informational, never fails —
+                                        .repoboard/local/ is its own git repo with no
+                                        public-denylist.txt), public-denylist-invalid (error —
+                                        that file is unreadable, or git cannot compile a pattern
+                                        in it), public-denylist-hit (error — a line of a tracked
+                                        file matches a pattern; reported as path:line only, never
+                                        the matched text),
+                                        seat-duplicate-bullet (error — two SEATS bullets for one
+                                        seat on one board; seat verbs rewrite only the first),
+                                        seat-name-ambiguous (warning; blocks only with --strict —
+                                        one seat name stamped for two boards; a seat verb matches
+                                        the name alone), seat-log-while-down (warning; blocks only
+                                        with --strict — a seat whose bullet says DOWN logged after
+                                        that minute: stale DOWN, or a session working without the
+                                        seat), seat-up-dead-holder (warning; blocks only with
+                                        --strict — a bullet says UP but the process seats.yml
+                                        records for it is gone), pane-holds-two-seats (error — one
+                                        pane recorded as holding two or more seats; seat whoami
+                                        names only the first), seat-lease-bullet-drift (warning;
+                                        blocks only with --strict — the bullet and seats.yml
+                                        disagree about who holds a seat, or a lease has no bullet);
+                                        each is one line per seat or group of bullets, and the last
+                                        three say nothing without .repoboard/local/ or when its
+                                        seats.yml does not parse (RCB-200)
+  repoboard gate record --as <seat> [--tests <passed>|<skipped> --failed n] [--files n]
+                        [--typecheck n] [--lint n] [--build n] [--sha s] [--note t]
+                                        append one line to the gate ledger — a
+                                        SEAT'S OWN RECORD of a check it already ran, never a
+                                        re-run; --sha defaults to \`git rev-parse --short HEAD\`
+                                        (null outside a repo); needs at least one of --tests,
+                                        --typecheck, --lint, --build — none given is exit 1,
+                                        nothing written; --tests requires --failed (0 means a
+                                        clean run) — without it, exit 1, nothing written
+  repoboard gate show [--json]         the newest recorded result per check (tests, typecheck,
+                                        lint, build); \`no gate recorded\` for any check with no
+                                        line yet
+  repoboard local init [--remote <url>|none] [--move-record]
+                                        create .repoboard/local/ — a gitignored, separate git repo
+                                        for machine facts (scaffolds RIG.md, adds the exact line
+                                        \`.repoboard/local/\` to the root .gitignore, git-inits and
+                                        commits); --remote <url> sets (or updates) origin for a
+                                        private backup that needs no extra step, and removes any
+                                        \`remote: none\` ack (a real remote supersedes it);
+                                        --remote none writes that ack instead — no backup on
+                                        purpose, so \`check\`'s local-no-remote goes quiet; with
+                                        neither --remote nor a remote already configured, prints
+                                        \`local: no remote — back up with --remote <url>, or
+                                        --remote none to stop check asking\`; a tracked
+                                        STATE.md/log is kept in place unless --move-record — the
+                                        store reads the record where it is
+  repoboard local sync [-m "<msg>"]    stage, commit (default message "repoboard local: sync") and
+                                        push .repoboard/local/ if it has an origin; "no
+                                        .repoboard/local/" when there is none to sync
+  repoboard local status                one line: \`local: <n> ahead, dirty|clean, remote|no
+                                        remote|no remote (ack: none)\`, or the "run repoboard local
+                                        init" prompt
+  repoboard cost [--root <dir>] [--budget <bytes>] [--json]
+                                        "cold context": bytes (and ≈tokens at 4 B/token) of what a
+                                        cold agent loads — CLAUDE.md/.claude/CLAUDE.md/CLAUDE.local.md
+                                        if present, AGENTS.md/docs/AGENTS.md if present, every
+                                        repo-relative path CLAUDE.md names in backticks that exists
+                                        (first-order only, no recursion, no globs), and the NAMES of
+                                        any .mcp.json MCP servers (not their schema bytes — those are
+                                        per-harness). Exit 1 when CLAUDE.md exceeds --budget (default
+                                        8192, or board.yml's claudeMdBudgetBytes); exit 0 otherwise.
+                                        An absent CLAUDE.md is reported, never OVER. --root measures
+                                        ANY directory, with or without a .repoboard/ board.
+  repoboard systems [--json]           one line per system: id kind layer env runtime(dev→prod);
+                                        no file: "no systems.yml yet"; invalid: each error on
+                                        stderr, exit 1; an unknown unblocked_by id: a warning on
+                                        stderr, still exit 0
+  repoboard systems show <id> [--json]
+                                        one system's full row, plus its \`pointers\` resolved the
+                                        way \`card show --resolve\` does; unknown id: exit 1;
+                                        tests: which test files import or name each pointer
+  repoboard systems detect [--root <dir>] [--apply] [--json]
+                                        propose .repoboard/systems.yml candidates from
+                                        package.json/workspaces, wrangler.*, compose, CI, .env,
+                                        vite/drizzle/prisma configs; dry-run by default (table
+                                        only) — --apply merges, stamps provenance, never
+                                        overwrites a hand row (detection proposes; the file is truth)
+  repoboard archive [--older-than 14d] [--dry-run] [--as actor]
+                                        move every \`done\` card whose \`updated\` is older than the
+                                        cutoff (duration 14d/2h/90m, or an ISO-8601 datetime) to
+                                        .repoboard/archive/ — git mv when tracked, else a rename;
+                                        never rewrites the file. --dry-run lists the ids and moves
+                                        nothing.
+  repoboard sync-issues <path>#<heading> [--status todo] [--label issue] [--dry-run] [--as a]
+                                        [--root <dir>]
+                                        read a markdown file's section under the first heading
+                                        starting with <heading>; create a card (labelled issue,
+                                        refs: [<path>@K<n>]) for every open \`- **K<n>\` item with
+                                        no card yet, and move a struck or vanished item's card to
+                                        the done column. Idempotent by ref; NEVER writes <path>.
+                                        --dry-run prints what it would do and writes nothing —
+                                        the only mode to run against a repo you do not own.
+  repoboard serve [--root <dir>]... [--port 4242] [--open] [--no-fun] [--watch-cap 20000]
+                  [--sibling <name>=<url>]...
+                                        start the dashboard (binds 127.0.0.1); --root serves that
+                                        directory as given — a directory with no .repoboard/ opens
+                                        map-only, and nothing is ever written into it. --root is
+                                        repeatable: the first is the primary and is opened
+                                        (and scanned, if enabled) immediately; every later --root is
+                                        just registered — its board opens on first request (map on
+                                        demand, K12) — and is listed by GET /api/repos. With no
+                                        --root the one root is found by climbing from the cwd, as
+                                        before — UNLESS that board's board.yml has repos: (RCB-153
+                                        W6: a workspace), in which case the roots are the workspace
+                                        plus every member, in repos: order, keyed by the workspace's
+                                        own folder name and each member's configured repos[].key
+                                        (never re-derived); any --root flag overrides this and
+                                        serves exactly what was given. The repo watcher honours
+                                        .gitignore (K12); if what
+                                        it would watch still exceeds --watch-cap (default 20000
+                                        paths), or it hits EMFILE/ENFILE, it turns itself off and
+                                        logs one warning — the map keeps working from the last scan,
+                                        rescans only on request. --sibling (repeatable) adds
+                                        a top-bar link to another running board — an http(s) URL
+                                        only; it is merged with board.yml's own siblings: list for
+                                        this process only (never written to the file), and on a name
+                                        collision the flag wins
+  repoboard mcp [--root <dir>]                MCP server over stdio (for Claude Code etc.)
+  repoboard --help | --version
+
+Actor for --as defaults to $REPOBOARD_ACTOR, then $USER, then "cli"; for mcp: $REPOBOARD_ACTOR, then "mcp".
+Exception: log takes no $USER/"cli" fallback — it needs --as or $REPOBOARD_ACTOR.
+Set REPOBOARD_DEBUG=1 to print the full stack trace on an unexpected crash (exit 2).
+`;
+
+/** RCB-134: printed for a bare `repoboard` and above the full `Usage:` on `--help`. ≤ 8 lines. */
+const QUICKSTART = `repoboard quickstart:
+  repoboard init                               create .repoboard/, a board, a first card
+  repoboard card add "<title>"                 add a card
+  repoboard card move <id> <status>            move it
+  repoboard serve --open                       open the dashboard
+  claude mcp add repoboard -- npx repoboard mcp  wire repoboard into Claude Code
+  repoboard --help for every command
+`;
+
+const PRIORITIES: ReadonlySet<string> = new Set(['high', 'medium', 'low']);
+const SIZES: ReadonlySet<string> = new Set(['S', 'M', 'L', 'XL']);
+
+type Options = NonNullable<ParseArgsConfig['options']>;
+
+function parse<T extends Options>(cmd: string, args: string[], options: T) {
+  try {
+    return parseArgs({ args, options, allowPositionals: true, strict: true });
+  } catch (e) {
+    throw new ParseError(`repoboard ${cmd}: ${firstSentence((e as Error).message)}`);
+  }
+}
+
+/** Up to and including the first `.`; the whole message when there is none. */
+function firstSentence(message: string): string {
+  return message.match(/^[^.]*\./)?.[0] ?? message;
+}
+
+/**
+ * RCB-134: derives one command's `Usage:` block straight from `HELP` — the ONE source of that
+ * text. A block is a `  repoboard <cmd> [<sub>]…` header line plus its indented continuation
+ * lines, up to the next `  repoboard ` line (or the end of the Usage section).
+ *
+ * With `sub` given, returns the block(s) whose header's second token is exactly `sub` (e.g.
+ * `usageFor('card', 'add')` → just the `card add` block). With no exact match — `sub` is a
+ * positional value, not a subcommand keyword (`seat <name>`), or `sub` is omitted — returns
+ * every block for `cmd`. `null` when `cmd` has no block at all (not a known command).
+ */
+function usageFor(cmd: string, sub?: string): string | null {
+  const lines = HELP.split('\n');
+  const start = lines.indexOf('Usage:');
+  if (start === -1) return null;
+  const blocks: string[][] = [];
+  let current: string[] | null = null;
+  for (let i = start + 1; i < lines.length; i++) {
+    const line = lines[i] as string;
+    if (line.startsWith('Actor for --as defaults')) break;
+    if (/^ {2}repoboard /.test(line)) {
+      current = [line];
+      blocks.push(current);
+    } else if (current) {
+      current.push(line);
+    }
+  }
+  const forCmd = blocks.filter((b) => (b[0] as string).trim().split(/\s+/)[1] === cmd);
+  if (forCmd.length === 0) return null;
+  const exact =
+    sub === undefined ? [] : forCmd.filter((b) => (b[0] as string).trim().split(/\s+/)[2] === sub);
+  const chosen = exact.length > 0 ? exact : forCmd;
+  return chosen
+    .map((b) => b.join('\n'))
+    .join('\n')
+    .replace(/\n+$/, '');
+}
+
+/** RCB-134: the crash line — the message alone, unless `debug` asks for the stack too. */
+export function formatCrash(e: unknown, debug: boolean): string {
+  const err = e instanceof Error ? e : new Error(String(e));
+  return `repoboard: crash: ${debug ? (err.stack ?? err.message) : err.message}\n`;
+}
+
+/** Walk up from `cwd` to the nearest directory containing `.repoboard/`. */
+export async function findRoot(cwd: string): Promise<string | null> {
+  let dir = resolve(cwd);
+  for (;;) {
+    try {
+      if ((await stat(join(dir, '.repoboard'))).isDirectory()) return dir;
+    } catch {
+      // keep climbing
+    }
+    const parent = dirname(dir);
+    if (parent === dir) return null;
+    dir = parent;
+  }
+}
+
+async function requireRoot(io: CliIO): Promise<string> {
+  const root = await findRoot(io.cwd);
+  if (!root)
+    throw new UserError(
+      `no .repoboard directory found in ${io.cwd} or above (run \`repoboard init\`)`,
+    );
+  return root;
+}
+
+// ---- RCB-153 slice 2: card verbs across a workspace (W4, W5) --------------------------------
+
+interface OpenedWorkspace {
+  workspace: Workspace;
+  opened: readonly OpenedWorkspaceMember[];
+  /** `resolveCardRef`'s board list: this board's own prefix first, then every OPENED member that
+   * actually has a board (W3 — a missing member's default-config prefix is not a real collision
+   * candidate). */
+  boards: readonly WorkspaceBoardRef[];
+}
+
+/**
+ * `null` when `repos:` is absent/empty — the ONLY signal any card verb uses to decide whether it
+ * is even AT a workspace. Every member is opened (read-only, memoised — W3) up front, because
+ * resolving one ref by prefix (W4) needs every OTHER member's prefix too, to detect a collision.
+ */
+async function openWorkspace(
+  root: string,
+  store: CardStore,
+  io: CliIO,
+): Promise<OpenedWorkspace | null> {
+  const repos = store.config.repos ?? [];
+  if (repos.length === 0) return null;
+  const workspace = new Workspace(root, repos, io.now);
+  const opened = await workspace.openAll();
+  const boards: WorkspaceBoardRef[] = [
+    { key: null, prefix: store.config.prefix },
+    ...opened
+      .filter((m) => m.store.hasBoard)
+      .map((m) => ({ key: m.key, prefix: m.store.config.prefix })),
+  ];
+  return { workspace, opened, boards };
+}
+
+/**
+ * W4: resolve `ref` for a READ verb (`card show`) — the SAME store/id, untouched, when `repos:`
+ * is absent/empty (the hard constraint: ids never go through `resolveCardRef` on a plain board,
+ * so every existing card-verb error text is byte-identical to before this card).
+ */
+async function resolveCardTarget(
+  root: string,
+  store: CardStore,
+  ref: string,
+  io: CliIO,
+): Promise<{ store: CardStore; id: string }> {
+  const ws = await openWorkspace(root, store, io);
+  if (!ws) return { store, id: ref };
+  const resolved = resolveCardRef(ref, ws.boards);
+  if (!resolved.ok) throw new UserError(resolved.error);
+  if (resolved.key === null) return { store, id: resolved.id };
+  const member = ws.opened.find((m) => m.key === resolved.key);
+  if (!member) throw new UserError(`unknown workspace member "${resolved.key}"`); // unreachable
+  return { store: member.store, id: resolved.id };
+}
+
+/**
+ * W4/W5: resolve `ref` for a WRITE verb (`move`/`note`/`ask`/`decide`/`update`) — same resolution
+ * as `resolveCardTarget`, but a member target must ALSO clear `Workspace.storeForWrite`, the ONE
+ * function that checks `writes: cards` (this function never checks it itself).
+ */
+async function resolveWriteTarget(
+  root: string,
+  store: CardStore,
+  ref: string,
+  io: CliIO,
+): Promise<{ store: CardStore; id: string }> {
+  const ws = await openWorkspace(root, store, io);
+  if (!ws) return { store, id: ref };
+  const resolved = resolveCardRef(ref, ws.boards);
+  if (!resolved.ok) throw new UserError(resolved.error);
+  if (resolved.key === null) return { store, id: resolved.id };
+  try {
+    const memberStore = await ws.workspace.storeForWrite(resolved.key);
+    return { store: memberStore, id: resolved.id };
+  } catch (e) {
+    throw new UserError((e as Error).message);
+  }
+}
+
+/**
+ * P7.1/P7.2: where `serve` opens.
+ *
+ * `--root` is taken **as given** and never searched upward — board or no board. That is what
+ * makes map-only mode an explicit act: a bare `repoboard serve` in some random directory keeps
+ * today's meaning (climb to the nearest `.repoboard/`, refuse if there is none) and cannot
+ * silently turn into "serve whatever is here". The only difference is that its error now names
+ * `--root` as the way to open a project that has no board.
+ */
+async function serveRoot(rootFlag: string | undefined, io: CliIO): Promise<string> {
+  if (rootFlag === undefined) {
+    const found = await findRoot(io.cwd);
+    if (!found)
+      throw new UserError(
+        `no .repoboard directory found in ${io.cwd} or above (run \`repoboard init\`, or ` +
+          '`repoboard serve --root <dir>` to open a project that has no board)',
+      );
+    return found;
+  }
+  const root = resolve(io.cwd, rootFlag);
+  const dir = await stat(root).then(
+    (s) => s.isDirectory(),
+    () => false,
+  );
+  if (!dir) throw new UserError(`--root ${root} is not a directory`);
+  return root;
+}
+
+function actorFrom(flag: string | undefined, io: CliIO): string {
+  const env = io.env ?? process.env;
+  return flag || env.REPOBOARD_ACTOR || env.USER || 'cli';
+}
+
+function defaultReadStdin(): Promise<string> {
+  return new Promise((resolve_, reject) => {
+    let data = '';
+    process.stdin.setEncoding('utf8');
+    process.stdin.on('data', (chunk: string) => {
+      data += chunk;
+    });
+    process.stdin.on('end', () => resolve_(data));
+    process.stdin.on('error', reject);
+  });
+}
+
+/** P8.3: `--stdin` on `state --set-section` / `log`. Tests inject `io.readStdin`. */
+async function readStdin(io: CliIO): Promise<string> {
+  return (io.readStdin ?? defaultReadStdin)();
+}
+
+/** P8.3: `state --set-section` accepts the CLI-friendly hyphenated form. */
+const SECTION_NAMES: Record<string, StateSectionName> = {
+  LIVE: 'live',
+  'LAST-LANDINGS': 'lastLandings',
+  SEATS: 'seats',
+};
+
+function sectionNameFrom(v: string): StateSectionName {
+  const key = SECTION_NAMES[v.toUpperCase()];
+  if (!key) {
+    throw new UserError(`--set-section must be one of LIVE, LAST-LANDINGS, SEATS (got "${v}")`);
+  }
+  return key;
+}
+
+function priorityFrom(v: string | undefined): Priority | undefined {
+  if (v === undefined) return undefined;
+  if (!PRIORITIES.has(v)) throw new UserError(`priority must be high, medium or low (got "${v}")`);
+  return v as Priority;
+}
+
+function sizeFrom(v: string | undefined): Size | undefined {
+  if (v === undefined) return undefined;
+  if (!SIZES.has(v)) throw new UserError(`size must be S, M, L or XL (got "${v}")`);
+  return v as Size;
+}
+
+// ---- commands ---------------------------------------------------------------------------
+
+/**
+ * RCB-136: the two parenthesised descriptions shared by the three init verbs' cross-pointer
+ * lines (`init`'s "next:", `init --practices`'s "see also:", `local init`'s "see also:") — one
+ * spelling of each, so the three lines cannot drift apart.
+ */
+const PRACTICES_OUTPUTS_DESC = "STATE.md, today's log, leases.yml, NEXT-AGENT-PROMPT.md";
+const LOCAL_INIT_DESC = 'a private nested git repo for machine facts';
+
+/**
+ * P8.3 `init --practices`'s eight-line `NEXT-AGENT-PROMPT.md`, adapted from the reference
+ * implementation (a member's own, read-only) to this repo's `.repoboard/` paths and
+ * command names. Never overwrites (locked decision 3).
+ */
+function nextAgentPromptText(): string {
+  return [
+    '# Next agent — three lines',
+    '',
+    '1. `repoboard seat <your seat>` — it prints your SEATS line, your last log block,',
+    "   the coordinator's, your next card and the open decisions. That is the cold start.",
+    '2. Take the card: `repoboard card move <id> doing --as <seat>`; log as you go',
+    '   (`repoboard log --as <seat>`); `repoboard check` before you start and before you stop.',
+    '3. Stand down: log block first, then `repoboard seat <seat> --down "<≤3 lines>"` LAST.',
+    '   Blocks come from `repoboard log --as <seat>` (the CLI stamps them); never hand-type a `#####` header.',
+    '',
+  ].join('\n');
+}
+
+/** P8.3: `repoboard init --practices` — STATE.md, today's log, leases.yml, root NEXT-AGENT-PROMPT.md. */
+async function scaffoldPractices(root: string, io: CliIO): Promise<void> {
+  const now = io.now?.() ?? new Date();
+  const repoboardDir = join(root, '.repoboard');
+  const date = toIso(now).slice(0, 10);
+  await scaffoldIfAbsent(
+    join(repoboardDir, 'STATE.md'),
+    initialStateText({ now, actor: 'repoboard init' }),
+    io,
+    '.repoboard/STATE.md',
+  );
+  await scaffoldIfAbsent(
+    join(repoboardDir, 'log', `${date}.md`),
+    `${dailyLogHeader(date)}\n\n`,
+    io,
+    `.repoboard/log/${date}.md`,
+  );
+  await scaffoldIfAbsent(
+    join(repoboardDir, 'leases.yml'),
+    serializeLeases({ leases: [], windows: [] }),
+    io,
+    '.repoboard/leases.yml',
+  );
+  await scaffoldIfAbsent(
+    join(root, 'NEXT-AGENT-PROMPT.md'),
+    nextAgentPromptText(),
+    io,
+    'NEXT-AGENT-PROMPT.md',
+  );
+}
+
+/**
+ * RCB-153 W8: `init --workspace --repo <key>=<path>` — split on the FIRST `=` (same rule as
+ * `--sibling`/`parseSiblingFlag`) — key and path both required.
+ */
+function parseRepoFlag(raw: string): { key: string; path: string } {
+  const i = raw.indexOf('=');
+  const key = (i === -1 ? raw : raw.slice(0, i)).trim();
+  const path = (i === -1 ? '' : raw.slice(i + 1)).trim();
+  if (!key || !path) {
+    throw new UserError(`--repo must be "<key>=<path>" (got "${raw}")`);
+  }
+  return { key, path };
+}
+
+async function cmdInit(args: string[], io: CliIO): Promise<number> {
+  const { values } = parse('init', args, {
+    practices: { type: 'boolean', default: false },
+    workspace: { type: 'boolean', default: false },
+    repo: { type: 'string', multiple: true },
+  });
+  const repoFlags = values.repo ?? [];
+  if (repoFlags.length > 0 && !values.workspace) {
+    throw new UserError('init --repo requires --workspace (a plain board has no repos:)');
+  }
+  const root = resolve(io.cwd);
+  const repoboardDir = join(root, '.repoboard');
+  const present = await stat(repoboardDir).then(
+    () => true,
+    () => false,
+  );
+  // W8: --workspace refuses on an existing .repoboard/ even with --practices — repos: is a
+  // one-time scaffold, never a merge onto a board that might already have a different member
+  // list. Plain --practices (no --workspace) keeps today's behaviour: safe to layer onto an
+  // existing board, byte-identical (values.workspace defaults false).
+  if (present && (!values.practices || values.workspace)) {
+    throw new UserError(`${repoboardDir} already exists; refusing to overwrite`);
+  }
+  // RCB-153 W8: build `repos:` before writing anything. Each path is resolved PURELY in string
+  // space (`resolve`/`dirname`/`relative` — no `stat`, so this never reads a member, let alone
+  // writes one — O7): relative when the member and this workspace share a parent directory
+  // (the sibling-repo layout W2 assumes), absolute otherwise. Validation (the key regex AND
+  // duplicate keys) goes through the ONE schema `board.yml` parsing already uses
+  // (`BoardConfigSchema` via `parseBoard`/`serializeBoard`) rather than a second copy of the
+  // same rule, so a refusal here is always worded exactly like the one `check`/`serve` would
+  // give the same board.yml later.
+  let workspaceRepos: WorkspaceRepo[] | undefined;
+  if (values.workspace) {
+    const rawRepos: WorkspaceRepo[] = repoFlags.map((raw) => {
+      const { key, path } = parseRepoFlag(raw);
+      const memberAbs = resolve(root, expandHome(path));
+      const boardRoot =
+        dirname(memberAbs) === dirname(root) ? relative(root, memberAbs) : memberAbs;
+      return { key, root: boardRoot };
+    });
+    const draft: BoardConfig = { ...defaultBoardConfig(), repos: rawRepos };
+    const parsed = parseBoard(serializeBoard(draft));
+    if (!parsed.ok) throw new UserError(parsed.error);
+    workspaceRepos = parsed.config.repos ?? [];
+  }
+  if (!present) {
+    const config: BoardConfig = workspaceRepos
+      ? { ...defaultBoardConfig(), repos: workspaceRepos }
+      : defaultBoardConfig();
+    const now = io.now?.() ?? new Date();
+    const welcome = createCard(
+      {
+        title: 'Welcome',
+        body: [
+          '',
+          'This board lives in `.repoboard/`. Every card is a markdown file in `.repoboard/cards/`;',
+          'columns are in `.repoboard/board.yml`. Move a card by editing `status:` in its file,',
+          'or with `repoboard card move <id> <status>`. Run `repoboard serve` to see the board.',
+          '',
+        ].join('\n'),
+      },
+      { existingIds: [], now, config },
+    );
+    if (!welcome.ok) throw new Error(`init: ${welcome.error}`); // default config: cannot happen
+    const card = welcome.card;
+    await mkdir(join(repoboardDir, 'cards'), { recursive: true });
+    await writeFile(join(repoboardDir, 'board.yml'), serializeBoard(config));
+    await writeFile(join(repoboardDir, 'cards', `${card.id}.md`), serializeCard(card));
+    io.stdout.write(`initialised ${repoboardDir} with ${card.id} "Welcome"\n`);
+  }
+  // W8: one line per configured member, its written `root:` and — a plain `stat`, never a write,
+  // never opening the member's own store — whether that path exists yet. A nonexistent path is
+  // allowed (`repoboard check` reports `workspace-member-missing` once the board exists), but
+  // this is where the CLI says so, right when the owner typed it.
+  for (const repo of workspaceRepos ?? []) {
+    const abs = resolveMemberRoot(root, repo.root);
+    const exists = await stat(abs).then(
+      () => true,
+      () => false,
+    );
+    io.stdout.write(
+      `  repo ${repo.key} -> ${repo.root}` +
+        (exists ? '' : ' (not found yet; `repoboard check` will report workspace-member-missing)') +
+        '\n',
+    );
+  }
+  if (values.practices) {
+    await scaffoldPractices(root, io);
+    io.stdout.write(`see also: repoboard local init (${LOCAL_INIT_DESC})\n`);
+  } else {
+    io.stdout.write(
+      `next: repoboard init --practices (${PRACTICES_OUTPUTS_DESC}) · ` +
+        `repoboard local init (${LOCAL_INIT_DESC})\n`,
+    );
+  }
+  return 0;
+}
+
+async function cmdCardAdd(args: string[], io: CliIO): Promise<number> {
+  const { values, positionals } = parse('card', args, {
+    status: { type: 'string' },
+    assignee: { type: 'string' },
+    priority: { type: 'string' },
+    size: { type: 'string' },
+    label: { type: 'string', multiple: true },
+    file: { type: 'string', multiple: true },
+    ref: { type: 'string', multiple: true },
+    parent: { type: 'string' },
+    phase: { type: 'string' },
+    gate: { type: 'string' },
+    body: { type: 'string' },
+    as: { type: 'string' },
+    repo: { type: 'string' },
+  });
+  const title = positionals.join(' ').trim();
+  if (!title) throw new UserError('card add needs a title: repoboard card add "<title>"');
+  const root = await requireRoot(io);
+  const store = await openStore(root, { watch: false, now: io.now });
+  // RCB-153 W5: `--repo <key>` targets a member (needs `writes: cards`, the ONE check
+  // `Workspace.storeForWrite` owns); absent means the workspace itself — exactly today's target,
+  // for a plain board too, since `--repo` is never mentioned there (byte-identical default path).
+  let target = store;
+  if (values.repo !== undefined) {
+    const repos = store.config.repos ?? [];
+    if (repos.length === 0) {
+      throw new UserError('card add --repo requires repos: in board.yml (not a workspace)');
+    }
+    try {
+      target = await new Workspace(root, repos, io.now).storeForWrite(values.repo);
+    } catch (e) {
+      throw new UserError((e as Error).message);
+    }
+  }
+  const input: CreateCardInput = { title };
+  if (values.status !== undefined) input.status = values.status;
+  if (values.assignee !== undefined) input.assignee = values.assignee;
+  const priority = priorityFrom(values.priority);
+  if (priority !== undefined) input.priority = priority;
+  const size = sizeFrom(values.size);
+  if (size !== undefined) input.size = size;
+  if (values.label !== undefined) input.labels = values.label;
+  if (values.file !== undefined) input.files = values.file;
+  if (values.ref !== undefined) input.refs = values.ref;
+  if (values.parent !== undefined) input.parent = values.parent;
+  if (values.phase !== undefined) input.phase = values.phase;
+  if (values.gate !== undefined) input.gate = values.gate;
+  if (values.body !== undefined) input.body = values.body;
+  const res = await target.create(input, actorFrom(values.as, io));
+  if (!res.ok) throw new UserError(res.error);
+  const { card } = res;
+  io.stdout.write(`created ${card.id} (${card.status}) ${card.title}\n`);
+  return 0;
+}
+
+async function cmdCardMove(args: string[], io: CliIO): Promise<number> {
+  const { values, positionals } = parse('card', args, { as: { type: 'string' } });
+  const [id, status] = positionals;
+  if (!id || !status) throw new UserError('usage: repoboard card move <id> <status>');
+  const root = await requireRoot(io);
+  const store = await openStore(root, { watch: false, now: io.now });
+  // RCB-153 W4/W5: `id` resolves across the workspace by prefix; a member target needs `writes:
+  // cards` (`resolveWriteTarget` → `Workspace.storeForWrite`, the one place that checks it).
+  const target = await resolveWriteTarget(root, store, id, io);
+  const res = await target.store.move(target.id, status, actorFrom(values.as, io));
+  if (!res.ok) throw new UserError(res.error);
+  for (const w of res.warnings) (io.stderr ?? io.stdout).write(`warning: ${w}\n`);
+  io.stdout.write(`moved ${target.id} ${res.event.from} → ${res.event.to}\n`);
+  return 0;
+}
+
+/**
+ * K9 / plan §11 O8. The fields `--clear` may name — exactly the optional ones `updateCard` will
+ * take a `null` for (`applyOptional`, core transitions.ts:181). `title` is absent on purpose:
+ * core refuses an empty title, so there is no null to send.
+ */
+const CLEARABLE = [
+  'assignee',
+  'priority',
+  'size',
+  'labels',
+  'files',
+  'refs',
+  'parent',
+  'phase',
+  'gate',
+] as const;
+type Clearable = (typeof CLEARABLE)[number];
+
+function clearedFields(flags: string[] | undefined): Set<Clearable> {
+  const out = new Set<Clearable>();
+  for (const f of flags ?? []) {
+    if (!(CLEARABLE as readonly string[]).includes(f)) {
+      throw new UserError(
+        `--clear must name one of ${CLEARABLE.join(', ')} (got "${f}")${
+          f === 'title' ? '; a card must have a title, so it cannot be cleared' : ''
+        }`,
+      );
+    }
+    out.add(f as Clearable);
+  }
+  return out;
+}
+
+/**
+ * `undefined` = leave alone, `null` = clear, a value = set — the same three-way meaning
+ * `applyOptional` gives a `CardPatch` field. `--clear x` is how a shell flag says the `null` that
+ * MCP and HTTP send as JSON; naming the same field twice is a contradiction, not a precedence rule.
+ */
+function setOrClear<T>(
+  value: T | undefined,
+  field: Clearable,
+  clear: Set<Clearable>,
+): T | null | undefined {
+  if (!clear.has(field)) return value;
+  if (value !== undefined) {
+    throw new UserError(
+      `--clear ${field} contradicts the value given for it; pass one or the other`,
+    );
+  }
+  return null;
+}
+
+/**
+ * K9 / plan §11 O8: the third surface onto `updateCard`, speaking the `CardPatch` semantics MCP
+ * `update_card` and `PATCH /api/cards/:id` already speak. A repeatable list flag REPLACES the
+ * list (core copies it wholesale, transitions.ts:166-168) — a CLI that appended where the other
+ * two replace would be a worse bug than the missing command. Status is not a field here.
+ */
+async function cmdCardUpdate(args: string[], io: CliIO): Promise<number> {
+  const { values, positionals } = parse('card', args, {
+    title: { type: 'string' },
+    assignee: { type: 'string' },
+    priority: { type: 'string' },
+    size: { type: 'string' },
+    label: { type: 'string', multiple: true },
+    file: { type: 'string', multiple: true },
+    ref: { type: 'string', multiple: true },
+    parent: { type: 'string' },
+    phase: { type: 'string' },
+    gate: { type: 'string' },
+    clear: { type: 'string', multiple: true },
+    // Declared so a user who tries it gets a pointer instead of `unknown option` — and because
+    // this is the ONLY layer that can catch it. Core's `'status' in patch` refusal
+    // (transitions.ts:147-149) is unreachable from here: `status` never enters the patch, so
+    // without the check below `--status doing --assignee a` exits 0, sets the assignee and drops
+    // the status silently. Measured 2026-09-07 by deleting the check and reading the card back.
+    status: { type: 'string' },
+    as: { type: 'string' },
+  });
+  if (values.status !== undefined) {
+    throw new UserError(
+      'card update cannot change status; use `repoboard card move <id> <status>`',
+    );
+  }
+  const [id] = positionals;
+  if (!id) throw new UserError('usage: repoboard card update <id> [options] (see --help)');
+  const clear = clearedFields(values.clear);
+  // Insertion order matches core's PATCH_KEYS (transitions.ts:140), so the fields we print are
+  // named in the same order as the `## Log` line core writes for the same update.
+  const patch: CardPatch = {};
+  if (values.title !== undefined) patch.title = values.title;
+  const assignee = setOrClear(values.assignee, 'assignee', clear);
+  if (assignee !== undefined) patch.assignee = assignee;
+  const priority = setOrClear(priorityFrom(values.priority), 'priority', clear);
+  if (priority !== undefined) patch.priority = priority;
+  const size = setOrClear(sizeFrom(values.size), 'size', clear);
+  if (size !== undefined) patch.size = size;
+  const labels = setOrClear(values.label, 'labels', clear);
+  if (labels !== undefined) patch.labels = labels;
+  const files = setOrClear(values.file, 'files', clear);
+  if (files !== undefined) patch.files = files;
+  const refs = setOrClear(values.ref, 'refs', clear);
+  if (refs !== undefined) patch.refs = refs;
+  const parent = setOrClear(values.parent, 'parent', clear);
+  if (parent !== undefined) patch.parent = parent;
+  const phase = setOrClear(values.phase, 'phase', clear);
+  if (phase !== undefined) patch.phase = phase;
+  const gate = setOrClear(values.gate, 'gate', clear);
+  if (gate !== undefined) patch.gate = gate;
+  const changed = Object.keys(patch);
+  if (changed.length === 0) {
+    throw new UserError(
+      'card update needs at least one of --title, --assignee, --priority, --size, --label, ' +
+        '--file, --ref, --parent, --phase, --gate or --clear <field>',
+    );
+  }
+  const root = await requireRoot(io);
+  const store = await openStore(root, { watch: false, now: io.now });
+  const target = await resolveWriteTarget(root, store, id, io);
+  const res = await target.store.update(target.id, patch, actorFrom(values.as, io));
+  if (!res.ok) throw new UserError(res.error);
+  io.stdout.write(`updated ${res.card.id} ${changed.join(', ')}\n`);
+  return 0;
+}
+
+/** "<LETTER> <text>" — the first token is the letter (locked decision 5). */
+function parseOptionFlag(raw: string): DecisionOption {
+  const i = raw.indexOf(' ');
+  const letter = i === -1 ? raw : raw.slice(0, i);
+  const text = i === -1 ? '' : raw.slice(i + 1).trim();
+  if (!letter || !text) {
+    throw new UserError(`--option must be "<LETTER> <text>" (got "${raw}")`);
+  }
+  return { letter, text };
+}
+
+async function cmdCardAsk(args: string[], io: CliIO): Promise<number> {
+  const { values, positionals } = parse('card', args, {
+    option: { type: 'string', multiple: true },
+    as: { type: 'string' },
+    replace: { type: 'boolean', default: false },
+    task: { type: 'boolean', default: false },
+  });
+  const [id, question] = positionals;
+  if (!id || !question) {
+    throw new UserError(
+      'usage: repoboard card ask <id> "<question>" [--option "A1 <text>"]... [--as a] [--replace] [--task]',
+    );
+  }
+  const options = (values.option ?? []).map(parseOptionFlag);
+  const kind = values.task ? ('task' as const) : undefined;
+  const root = await requireRoot(io);
+  const store = await openStore(root, { watch: false, now: io.now });
+  const target = await resolveWriteTarget(root, store, id, io);
+  const res = await target.store.ask(
+    target.id,
+    { question, options, replace: values.replace, kind },
+    actorFrom(values.as, io),
+  );
+  if (!res.ok) throw new UserError(res.error);
+  for (const w of res.warnings) (io.stderr ?? io.stdout).write(`warning: ${w}\n`);
+  if (values.task) {
+    io.stdout.write(`owner task ${target.id}: ${question}\n`);
+  } else {
+    const n = options.length;
+    io.stdout.write(`asked ${target.id}: ${question} (${n} option${n === 1 ? '' : 's'})\n`);
+  }
+  return 0;
+}
+
+async function cmdCardDecide(args: string[], io: CliIO): Promise<number> {
+  const { values, positionals } = parse('card', args, {
+    words: { type: 'string' },
+    as: { type: 'string' },
+  });
+  const [id, letter] = positionals;
+  if (!id) {
+    throw new UserError('usage: repoboard card decide <id> [<letter>] [--words "<verbatim>"]');
+  }
+  const root = await requireRoot(io);
+  const store = await openStore(root, { watch: false, now: io.now });
+  const target = await resolveWriteTarget(root, store, id, io);
+  const res = await target.store.decide(
+    target.id,
+    { letter, words: values.words },
+    actorFrom(values.as, io),
+  );
+  if (!res.ok) throw new UserError(res.error);
+  for (const w of res.warnings) (io.stderr ?? io.stdout).write(`warning: ${w}\n`);
+  const chosen = res.card.decision?.chosen ?? null;
+  const words = res.card.decision?.words ?? undefined;
+  if (isOwnerTask(res.card)) {
+    io.stdout.write(
+      words !== undefined ? `done ${target.id} — "${words}"\n` : `done ${target.id}\n`,
+    );
+  } else {
+    io.stdout.write(
+      chosen !== null ? `decided ${target.id} ${chosen}\n` : `decided ${target.id} — "${words}"\n`,
+    );
+  }
+  return 0;
+}
+
+async function cmdCardNote(args: string[], io: CliIO): Promise<number> {
+  const { values, positionals } = parse('card', args, {
+    as: { type: 'string' },
+  });
+  const [id, text] = positionals;
+  if (!id || !text) {
+    throw new UserError('usage: repoboard card note <id> "<text>" [--as a]');
+  }
+  const root = await requireRoot(io);
+  const store = await openStore(root, { watch: false, now: io.now });
+  const target = await resolveWriteTarget(root, store, id, io);
+  const res = await target.store.addNote(target.id, text, actorFrom(values.as, io));
+  if (!res.ok) throw new UserError(res.error);
+  io.stdout.write(`noted ${target.id}\n`);
+  return 0;
+}
+
+/**
+ * Fixed-width table: id, status, assignee, [size,] [decision,] [blocked,] title. The `DECISION`
+ * column (a `?` for an open decision) only appears when at least one listed card has one, and
+ * likewise the `BLOCKED` column (RCB-68) only appears when at least one listed card is blocked —
+ * §7 bytes measurement: a fixture with neither is byte-identical to the table before P8.1/RCB-68.
+ * RCB-67: `SIZE` follows the same rule (only when at least one listed card has a size), placed
+ * after ASSIGNEE and before DECISION/BLOCKED/TITLE — a fixture with no sized card is
+ * byte-identical to the table before RCB-67. `all` is the WHOLE board (not just `cards`, which
+ * may be filtered) — like `toRow`, a `blocked` reason needs the facts a gate might point outside
+ * the filtered list.
+ */
+/** Shared padder: fixed-width columns, last column unpadded (trailing spaces trimmed). Both
+ * `formatTable` and `formatStepsTable` (RCB-104) render through this, so the idiom lives in one
+ * place — `formatTable`'s own bytes are unchanged by the factoring. */
+function renderFixedWidthTable(header: string[], rows: string[][]): string {
+  const widths = header.map((h, i) => Math.max(h.length, ...rows.map((r) => (r[i] ?? '').length)));
+  const line = (r: string[]) =>
+    r
+      .map((cell, i) => (i === r.length - 1 ? cell : cell.padEnd(widths[i] ?? 0)))
+      .join('  ')
+      .trimEnd();
+  return [line(header), ...rows.map(line)].join('\n');
+}
+
+/**
+ * RCB-153 W4/W5-gate: `members`, when given, is a WORKSPACE's opened member boards — a listed
+ * card's `gate:` can then resolve against them (`blockedReason`'s own trailing arg). Defaults to
+ * `[]`: every plain-board call (no `repos:`) is byte-identical to before this card.
+ */
+export function formatTable(
+  cards: Card[],
+  all: readonly Card[],
+  config: BoardConfig,
+  members: readonly GateMemberFacts[] = [],
+): string {
+  const anySize = cards.some((c) => c.size !== undefined);
+  const anyDecision = cards.some((c) => needsDecision(c));
+  const anyBlocked = cards.some((c) => blockedReason(c, all, config, members) !== null);
+  const rows = cards.map((c) => {
+    const row = [c.id, c.status, c.assignee ?? '-'];
+    if (anySize) row.push(c.size ?? '');
+    if (anyDecision) row.push(needsDecision(c) ? (isOwnerTask(c) ? '!' : '?') : '');
+    if (anyBlocked) row.push(blockedReason(c, all, config, members) ?? '');
+    row.push(c.title);
+    return row;
+  });
+  const header = ['ID', 'STATUS', 'ASSIGNEE'];
+  if (anySize) header.push('SIZE');
+  if (anyDecision) header.push('DECISION');
+  if (anyBlocked) header.push('BLOCKED');
+  header.push('TITLE');
+  return renderFixedWidthTable(header, rows);
+}
+
+/**
+ * RCB-153 W5: `card list --repo all` — every board's cards in one table, a REPO column FIRST
+ * (`repos:` order, workspace rows tagged with its own basename key — same shape `GET /api/repos`
+ * gives the workspace's own primary, W6). Each row keeps its OWN board's `all`/`config` for
+ * `blockedReason` (a gate may point outside that board's OWN filtered rows, never another
+ * board's), and its own `members` facts (only the workspace's rows carry the W4/W5-gate member
+ * list — a member's own gate stays single-board, W5's "clear-ness from the MEMBER's own config").
+ */
+interface RepoTableRow {
+  key: string;
+  card: Card;
+  all: readonly Card[];
+  config: BoardConfig;
+  members: readonly GateMemberFacts[];
+}
+
+function formatTableAcrossRepos(rows: readonly RepoTableRow[]): string {
+  const anySize = rows.some((r) => r.card.size !== undefined);
+  const anyDecision = rows.some((r) => needsDecision(r.card));
+  const anyBlocked = rows.some((r) => blockedReason(r.card, r.all, r.config, r.members) !== null);
+  const tableRows = rows.map(({ key, card, all, config, members }) => {
+    const row = [key, card.id, card.status, card.assignee ?? '-'];
+    if (anySize) row.push(card.size ?? '');
+    if (anyDecision) row.push(needsDecision(card) ? (isOwnerTask(card) ? '!' : '?') : '');
+    if (anyBlocked) row.push(blockedReason(card, all, config, members) ?? '');
+    row.push(card.title);
+    return row;
+  });
+  const header = ['REPO', 'ID', 'STATUS', 'ASSIGNEE'];
+  if (anySize) header.push('SIZE');
+  if (anyDecision) header.push('DECISION');
+  if (anyBlocked) header.push('BLOCKED');
+  header.push('TITLE');
+  return renderFixedWidthTable(header, tableRows);
+}
+
+/**
+ * RCB-104: `card list --parent <id>` and `card show <id> --steps` share this — a phase card's
+ * steps in `stepsOf` order (never re-sorted here). Columns are ALWAYS present (no
+ * appears-if-any-row-has-one rule like `formatTable`'s SIZE/DECISION/BLOCKED): `ID PHASE STATUS
+ * ASSIGNEE GATE BLOCKED TITLE`. `all` is the whole board, same reason as `formatTable`: a gate or
+ * `blockedReason` may point outside `steps`. Zero steps prints the single line `(no steps)`.
+ *
+ * RCB-154: `members` is REQUIRED (never defaulted here) — the same workspace gate-member facts
+ * `formatTable` already takes, closing the one gap where a step's own `gate:` naming an
+ * already-clear MEMBER card still read as blocked. A caller with no workspace passes `[]`.
+ */
+export function formatStepsTable(
+  steps: Card[],
+  all: readonly Card[],
+  config: BoardConfig,
+  members: readonly GateMemberFacts[],
+): string {
+  if (steps.length === 0) return '(no steps)';
+  const header = ['ID', 'PHASE', 'STATUS', 'ASSIGNEE', 'GATE', 'BLOCKED', 'TITLE'];
+  const rows = steps.map((s) => [
+    s.id,
+    s.phase ?? '-',
+    s.status,
+    s.assignee ?? '-',
+    s.gate ?? '-',
+    blockedReason(s, all, config, members) ?? '',
+    s.title,
+  ]);
+  return renderFixedWidthTable(header, rows);
+}
+
+/**
+ * RCB-153 W5: `card list --repo <key>|all` at a workspace — `<key>` is one member's own table
+ * (plain, no REPO column: the caller already knows which board it asked for); `all` is every
+ * board (workspace first, its own basename key, then every member in `repos:` order),
+ * `formatTableAcrossRepos`'s REPO-first table. `--json` always gains a `repo` field either way.
+ */
+async function cmdCardListAcrossRepos(
+  root: string,
+  store: CardStore,
+  repo: string,
+  filters: {
+    status: string | undefined;
+    size: Size | undefined;
+    needsDecision: boolean;
+    parent: string | undefined;
+    unblocked: boolean;
+  },
+  json: boolean,
+  full: boolean,
+  io: CliIO,
+): Promise<number> {
+  const repos = store.config.repos ?? [];
+  if (repos.length === 0) {
+    throw new UserError('card list --repo requires repos: in board.yml (not a workspace)');
+  }
+  const opened = await new Workspace(root, repos, io.now).openAll();
+  const workspaceKey = basename(root).toLowerCase();
+  const members = gateMemberFacts(opened);
+  let targets: { key: string; store: CardStore; members: readonly GateMemberFacts[] }[];
+  if (repo === 'all') {
+    targets = [
+      { key: workspaceKey, store, members },
+      ...opened.map((m) => ({ key: m.key, store: m.store, members: [] as GateMemberFacts[] })),
+    ];
+  } else if (repo === workspaceKey) {
+    targets = [{ key: workspaceKey, store, members }];
+  } else {
+    const member = opened.find((m) => m.key === repo);
+    if (!member) throw new UserError(`unknown workspace member "${repo}"`);
+    targets = [{ key: member.key, store: member.store, members: [] }];
+  }
+
+  const rows: RepoTableRow[] = [];
+  for (const t of targets) {
+    const boardAll = t.store.list();
+    let cards: Card[];
+    try {
+      cards = filterCards(boardAll, t.store.config, filters, t.members);
+    } catch (e) {
+      throw new UserError((e as Error).message);
+    }
+    for (const card of cards) {
+      rows.push({ key: t.key, card, all: boardAll, config: t.store.config, members: t.members });
+    }
+  }
+
+  if (json) {
+    const jsonRows = rows.map(({ key, card, all, config, members: m }) => ({
+      ...(full ? card : toRow(card, all, config, m)),
+      repo: key,
+    }));
+    io.stdout.write(`${formatRows(jsonRows)}\n`);
+    return 0;
+  }
+  if (targets.length > 1) {
+    io.stdout.write(`${formatTableAcrossRepos(rows)}\n`);
+    return 0;
+  }
+  const only = targets[0];
+  if (!only) throw new Error('unreachable: targets is non-empty'); // repo==='all' always has >=1
+  const cards = rows.map((r) => r.card);
+  io.stdout.write(
+    `${
+      filters.parent !== undefined
+        ? formatStepsTable(cards, only.store.list(), only.store.config, only.members)
+        : formatTable(cards, only.store.list(), only.store.config, only.members)
+    }\n`,
+  );
+  if (only.store.invalid.length > 0) {
+    const err = io.stderr ?? io.stdout;
+    for (const inv of only.store.invalid) err.write(`invalid: ${inv.path}: ${inv.error}\n`);
+  }
+  return 0;
+}
+
+async function cmdCardList(args: string[], io: CliIO): Promise<number> {
+  const { values } = parse('card', args, {
+    status: { type: 'string' },
+    size: { type: 'string' },
+    json: { type: 'boolean', default: false },
+    full: { type: 'boolean', default: false },
+    'needs-decision': { type: 'boolean', default: false },
+    parent: { type: 'string' },
+    unblocked: { type: 'boolean', default: false },
+    repo: { type: 'string' },
+  });
+  if (values.full && !values.json) throw new UserError('--full only applies with --json');
+  if (values.unblocked && values.parent === undefined) {
+    throw new UserError('--unblocked requires --parent <id>');
+  }
+  const size = sizeFrom(values.size);
+  const root = await requireRoot(io);
+  const store = await openStore(root, { watch: false, now: io.now });
+  // RCB-153 W5: `--repo` is a workspace-only flag; absent means exactly today's single-board
+  // listing (byte-identical — the hard constraint every existing `card list` test relies on).
+  if (values.repo !== undefined) {
+    return await cmdCardListAcrossRepos(
+      root,
+      store,
+      values.repo,
+      {
+        status: values.status,
+        size,
+        needsDecision: values['needs-decision'],
+        parent: values.parent,
+        unblocked: values.unblocked,
+      },
+      values.json,
+      values.full,
+      io,
+    );
+  }
+  const all = store.list();
+  const parentId = values.parent;
+  // RCB-153/RCB-154 W4/W5-gate: member facts for a workspace's OWN cards' `gate:` resolution — `[]`
+  // (a no-op) when `repos:` is absent/empty, so a plain board's BLOCKED column is unchanged. Also
+  // reaches `filterCards`'s own `unblocked` filter now, not just the printed BLOCKED column.
+  const members = await workspaceGateMembers(store, io.now);
+  let cards: Card[];
+  try {
+    cards = filterCards(
+      all,
+      store.config,
+      {
+        status: values.status,
+        size,
+        needsDecision: values['needs-decision'],
+        parent: parentId,
+        unblocked: values.unblocked,
+      },
+      members,
+    );
+  } catch (e) {
+    throw new UserError((e as Error).message);
+  }
+  if (values.json) {
+    // Compact rows by default (K6): bodies only with --full. Same shape as MCP list_cards.
+    io.stdout.write(
+      `${formatRows(
+        values.full ? cards : cards.map((c) => toRow(c, all, store.config, members)),
+      )}\n`,
+    );
+    return 0;
+  }
+  io.stdout.write(
+    `${
+      parentId !== undefined
+        ? formatStepsTable(cards, all, store.config, members)
+        : formatTable(cards, all, store.config, members)
+    }\n`,
+  );
+  if (store.invalid.length > 0) {
+    const err = io.stderr ?? io.stdout;
+    for (const inv of store.invalid) err.write(`invalid: ${inv.path}: ${inv.error}\n`);
+  }
+  return 0;
+}
+
+async function cmdCardShow(args: string[], io: CliIO): Promise<number> {
+  const { values, positionals } = parse('card', args, {
+    resolve: { type: 'boolean', default: false },
+    steps: { type: 'boolean', default: false },
+    json: { type: 'boolean', default: false },
+  });
+  const [ref] = positionals;
+  if (!ref) throw new UserError('usage: repoboard card show <id> [--resolve] [--steps] [--json]');
+  const root = await requireRoot(io);
+  const openedStore = await openStore(root, { watch: false, now: io.now });
+  // RCB-153 W4: `ref` resolves across the workspace by prefix; a plain board (no `repos:`) never
+  // calls `resolveCardRef` at all, so `id`/`store` below are the SAME `ref`/`openedStore` as
+  // before this card — every existing error text (e.g. `unknown card "NOPE-1"`) is byte-identical.
+  const { store, id } = await resolveCardTarget(root, openedStore, ref, io);
+  // RCB-154: only when `store` is still the ROOT board (workspace or plain) — a member resolved
+  // via `<key>:<id>`/prefix keeps its own gate single-board, same rule `list_cards`'s per-target
+  // `members` applies.
+  const stepMembers = store === openedStore ? await workspaceGateMembers(store, io.now) : [];
+  const card = store.get(id);
+  if (!card) {
+    const archivedPath = join(store.repoboardDir, 'archive', `${id}.md`);
+    const isArchived = await stat(archivedPath).then(
+      () => true,
+      () => false,
+    );
+    if (isArchived) {
+      const archivedRel = relative(store.root, archivedPath);
+      if (values.json) {
+        io.stdout.write(`${JSON.stringify({ archived: archivedRel }, null, 2)}\n`);
+        return 0;
+      }
+      io.stdout.write(`archived: ${archivedRel}\n`);
+      return 0;
+    }
+    throw new UserError(`unknown card "${id}"`);
+  }
+  if (values.json) {
+    // RCB-144: the same object `card list --json --full` emits for one row — never a second
+    // shape. `steps`/`refs` are added only on request, same as the text path below.
+    const all = store.list();
+    const out: Record<string, unknown> = { ...card };
+    if (values.steps) {
+      out.steps = stepsOf(card.id, all).map((s) => toRow(s, all, store.config, stepMembers));
+    }
+    if (values.resolve) out.refs = await resolveCardRefs(store.root, card);
+    io.stdout.write(`${JSON.stringify(out, null, 2)}\n`);
+    return 0;
+  }
+  io.stdout.write(await readFile(store.filePath(id), 'utf8'));
+  if (values.steps) {
+    // RCB-104: render-only — the card file is never written.
+    const all = store.list();
+    io.stdout.write(
+      `\n## Steps\n${formatStepsTable(stepsOf(card.id, all), all, store.config, stepMembers)}\n`,
+    );
+  }
+  if (values.resolve) {
+    // K7: each ref as a fenced block headed path:start-end, resolved now from the file.
+    const refs = await resolveCardRefs(store.root, card);
+    io.stdout.write(refs.length === 0 ? '\n(no refs)\n' : `\n${formatResolvedRefs(refs)}`);
+  }
+  return 0;
+}
+
+// ---- columns (RCB-56: CLI/MCP surface for RCB-34's PATCH /api/board / ColumnEditor) ----------
+
+interface ColumnRow {
+  id: string;
+  title: string;
+  flags: string;
+  count: number;
+}
+
+function columnFlags(c: Column): string {
+  return [
+    c.active ? 'active' : null,
+    c.wip !== undefined ? `wip:${c.wip}` : null,
+    c.done ? 'done' : null,
+    c.decision ? 'decision' : null,
+  ]
+    .filter((f): f is string => f !== null)
+    .join(',');
+}
+
+function toColumnRow(c: Column, count: number): ColumnRow {
+  return { id: c.id, title: c.title ?? c.id, flags: columnFlags(c), count };
+}
+
+export function formatColumnsTable(rows: ColumnRow[]): string {
+  const header = ['ID', 'TITLE', 'FLAGS', 'COUNT'];
+  const body = rows.map((r) => [r.id, r.title, r.flags, String(r.count)]);
+  const widths = header.map((h, i) => Math.max(h.length, ...body.map((r) => (r[i] ?? '').length)));
+  const line = (r: string[]) =>
+    r
+      .map((cell, i) => (i === r.length - 1 ? cell : cell.padEnd(widths[i] ?? 0)))
+      .join('  ')
+      .trimEnd();
+  return [line(header), ...body.map(line)].join('\n');
+}
+
+async function cmdColumns(args: string[], io: CliIO): Promise<number> {
+  const { values } = parse('columns', args, { json: { type: 'boolean', default: false } });
+  const root = await requireRoot(io);
+  const store = await openStore(root, { watch: false, now: io.now });
+  if (values.json) {
+    io.stdout.write(`${formatRows(store.config.columns)}\n`);
+    return 0;
+  }
+  const counts: Record<string, number> = {};
+  for (const c of store.list()) counts[c.status] = (counts[c.status] ?? 0) + 1;
+  const rows = store.config.columns.map((c) => toColumnRow(c, counts[c.id] ?? 0));
+  io.stdout.write(`${formatColumnsTable(rows)}\n`);
+  return 0;
+}
+
+/** The WHOLE new column list — a replace, exactly `PATCH /api/board`'s contract (RCB-34 brief). */
+function extractColumns(data: unknown): unknown[] {
+  if (Array.isArray(data)) return data;
+  if (data !== null && typeof data === 'object' && 'columns' in data) {
+    const columns = (data as { columns: unknown }).columns;
+    if (Array.isArray(columns)) return columns;
+  }
+  throw new UserError(
+    'columns set: input must be a YAML/JSON list of columns, or an object with a "columns" key',
+  );
+}
+
+async function cmdColumnsSet(args: string[], io: CliIO): Promise<number> {
+  const { values, positionals } = parse('columns', args, {
+    stdin: { type: 'boolean', default: false },
+    as: { type: 'string' },
+  });
+  const [textArg] = positionals;
+  if (!values.stdin && textArg === undefined) {
+    throw new UserError('usage: repoboard columns set (--stdin | "<text>") [--as a]');
+  }
+  const raw = values.stdin ? await readStdin(io) : textArg;
+  let data: unknown;
+  try {
+    data = YAML.parse(raw ?? '', { schema: 'core' });
+  } catch (e) {
+    throw new UserError(`columns set: not valid YAML/JSON: ${(e as Error).message}`);
+  }
+  const columns = extractColumns(data);
+  const root = await requireRoot(io);
+  const store = await openStore(root, { watch: false, now: io.now });
+  const res = await store.setColumns(columns as Column[], actorFrom(values.as, io));
+  if (!res.ok) throw new UserError(res.error);
+  io.stdout.write(`updated columns: ${res.config.columns.map((c) => c.id).join(', ')}\n`);
+  return 0;
+}
+
+// ---- lease / window (P8.2) -----------------------------------------------------------------
+
+/** ISO or `+90m`/`+2h` relative to `now` (locked decision 6); a bad spec is a UserError. */
+function resolveTime(spec: string, now: Date): string {
+  const r = resolveTimeSpec(spec, now);
+  if (!r.ok) throw new UserError(r.error);
+  return r.iso;
+}
+
+async function cmdLeaseTake(args: string[], io: CliIO): Promise<number> {
+  const { values, positionals } = parse('lease', args, {
+    as: { type: 'string' },
+    until: { type: 'string' },
+    note: { type: 'string' },
+    force: { type: 'boolean', default: false },
+  });
+  const [resource] = positionals;
+  if (!resource) throw new UserError('usage: repoboard lease take <resource> [options]');
+  const root = await requireRoot(io);
+  const store = await openStore(root, { watch: false, now: io.now });
+  const now = io.now?.() ?? new Date();
+  const until = values.until !== undefined ? resolveTime(values.until, now) : undefined;
+  const actor = actorFrom(values.as, io);
+  const res = await store.takeLease(
+    { resource, until, note: values.note, force: values.force },
+    actor,
+  );
+  if (!res.ok) throw new UserError(res.error);
+  for (const w of res.warnings) (io.stderr ?? io.stdout).write(`warning: ${w}\n`);
+  io.stdout.write(`took ${resource} as ${actor} until ${until ?? '—'}\n`);
+  return 0;
+}
+
+async function cmdLeaseRelease(args: string[], io: CliIO): Promise<number> {
+  const { values, positionals } = parse('lease', args, {
+    as: { type: 'string' },
+    force: { type: 'boolean', default: false },
+  });
+  const [resource] = positionals;
+  if (!resource)
+    throw new UserError('usage: repoboard lease release <resource> [--as a] [--force]');
+  const root = await requireRoot(io);
+  const store = await openStore(root, { watch: false, now: io.now });
+  const res = await store.releaseLease({ resource, force: values.force }, actorFrom(values.as, io));
+  if (!res.ok) throw new UserError(res.error);
+  for (const w of res.warnings) (io.stderr ?? io.stdout).write(`warning: ${w}\n`);
+  io.stdout.write(`released ${resource}\n`);
+  return 0;
+}
+
+export function formatLeaseTable(rows: LeaseRow[]): string {
+  const header = ['RESOURCE', 'HOLDER', 'SINCE', 'UNTIL', 'STATE', 'NOTE'];
+  const body = rows.map((r) => [
+    r.resource,
+    r.holder,
+    r.since,
+    r.until ?? '—',
+    r.state,
+    r.note ?? '-',
+  ]);
+  const widths = header.map((h, i) => Math.max(h.length, ...body.map((r) => (r[i] ?? '').length)));
+  const line = (r: string[]) =>
+    r
+      .map((cell, i) => (i === r.length - 1 ? cell : cell.padEnd(widths[i] ?? 0)))
+      .join('  ')
+      .trimEnd();
+  return [line(header), ...body.map(line)].join('\n');
+}
+
+async function cmdLeaseList(args: string[], io: CliIO): Promise<number> {
+  const { values } = parse('lease', args, { json: { type: 'boolean', default: false } });
+  const root = await requireRoot(io);
+  const store = await openStore(root, { watch: false, now: io.now });
+  const now = io.now?.() ?? new Date();
+  const rows = store
+    .leases()
+    .leases.map((l) => toLeaseRow(l, now))
+    .sort((a, b) => (a.resource < b.resource ? -1 : a.resource > b.resource ? 1 : 0));
+  if (values.json) {
+    io.stdout.write(`${formatRows(rows)}\n`);
+    return 0;
+  }
+  io.stdout.write(`${formatLeaseTable(rows)}\n`);
+  return 0;
+}
+
+async function cmdWindowAdd(args: string[], io: CliIO): Promise<number> {
+  const { values, positionals } = parse('window', args, { as: { type: 'string' } });
+  const [resource, startArg, endArg, ...nameParts] = positionals;
+  const name = nameParts.join(' ');
+  if (!resource || !startArg || !endArg || !name) {
+    throw new UserError('usage: repoboard window add <resource> <start> <end> <name>');
+  }
+  const root = await requireRoot(io);
+  const store = await openStore(root, { watch: false, now: io.now });
+  const now = io.now?.() ?? new Date();
+  const start = resolveTime(startArg, now);
+  const end = resolveTime(endArg, now);
+  const res = await store.addWindow({ resource, start, end, name }, actorFrom(values.as, io));
+  if (!res.ok) throw new UserError(res.error);
+  io.stdout.write(`added window ${name} ${start}–${end} ${resource}\n`);
+  return 0;
+}
+
+export function formatWindowTable(rows: WindowRow[]): string {
+  const header = ['RESOURCE', 'START', 'END', 'NAME'];
+  const body = rows.map((r) => [r.resource, r.start, r.end, r.name]);
+  const widths = header.map((h, i) => Math.max(h.length, ...body.map((r) => (r[i] ?? '').length)));
+  const line = (r: string[]) =>
+    r
+      .map((cell, i) => (i === r.length - 1 ? cell : cell.padEnd(widths[i] ?? 0)))
+      .join('  ')
+      .trimEnd();
+  return [line(header), ...body.map(line)].join('\n');
+}
+
+async function cmdWindowList(args: string[], io: CliIO): Promise<number> {
+  const { values } = parse('window', args, { json: { type: 'boolean', default: false } });
+  const root = await requireRoot(io);
+  const store = await openStore(root, { watch: false, now: io.now });
+  const rows = store
+    .leases()
+    .windows.map(toWindowRow)
+    .sort((a, b) => Date.parse(a.start) - Date.parse(b.start));
+  if (values.json) {
+    io.stdout.write(`${formatRows(rows)}\n`);
+    return 0;
+  }
+  io.stdout.write(`${formatWindowTable(rows)}\n`);
+  return 0;
+}
+
+/**
+ * Locked decision 3: exit 0 "clear <resource>" when nothing blocks it; exit 1 naming every
+ * reason (one per line) when something does — a window, a live lease, or both. This is the
+ * shell-callable contract a lock shim depends on (C1: it must never say "clear" while blocked).
+ */
+async function cmdWindowCheck(args: string[], io: CliIO): Promise<number> {
+  const { values, positionals } = parse('window', args, { at: { type: 'string' } });
+  const [resource] = positionals;
+  if (!resource) throw new UserError('usage: repoboard window check <resource> [--at ts]');
+  const root = await requireRoot(io);
+  const store = await openStore(root, { watch: false, now: io.now });
+  const now = io.now?.() ?? new Date();
+  const at = values.at !== undefined ? new Date(resolveTime(values.at, now)) : now;
+  const res = store.checkResource(resource, at);
+  if (res.clear) {
+    io.stdout.write(`clear ${resource}\n`);
+    return 0;
+  }
+  for (const reason of res.reasons) io.stdout.write(`${reason}\n`);
+  return 1;
+}
+
+// ---- state / log / check (P8.3) ------------------------------------------------------------
+
+async function cmdState(args: string[], io: CliIO): Promise<number> {
+  const { values, positionals } = parse('state', args, {
+    'set-section': { type: 'string' },
+    'trim-landings': { type: 'string' },
+    archive: { type: 'string' },
+    stdin: { type: 'boolean', default: false },
+    as: { type: 'string' },
+    json: { type: 'boolean', default: false },
+    force: { type: 'boolean', default: false },
+  });
+  if (values['set-section'] !== undefined && values['trim-landings'] !== undefined) {
+    throw new UserError('state: --set-section and --trim-landings are exclusive');
+  }
+  if (
+    values.json &&
+    (values['set-section'] !== undefined || values['trim-landings'] !== undefined)
+  ) {
+    throw new UserError('state --json is read-only: not valid with --set-section/--trim-landings');
+  }
+  // RCB-132: --archive only means anything alongside --trim-landings.
+  if (values.archive !== undefined && values['trim-landings'] === undefined) {
+    throw new UserError('state --archive is only valid with --trim-landings');
+  }
+  // RCB-196: --force only means anything alongside --set-section (it lifts the SEATS refusal).
+  if (values.force && values['set-section'] === undefined) {
+    throw new UserError('state --force is only valid with --set-section');
+  }
+  const root = await requireRoot(io);
+  const store = await openStore(root, { watch: false, now: io.now });
+  if (values['set-section'] !== undefined) {
+    const section = sectionNameFrom(values['set-section']);
+    let body: string;
+    if (values.stdin) {
+      body = await readStdin(io);
+    } else {
+      body = positionals.join(' ').trim();
+      if (!body) {
+        throw new UserError('state --set-section needs body text (or --stdin)');
+      }
+    }
+    const res = await store.setStateSection(section, body, actorFrom(values.as, io), {
+      force: values.force,
+    });
+    if (!res.ok) throw new UserError(res.error);
+    io.stdout.write(`updated STATE.md ${values['set-section']}\n`);
+    return 0;
+  }
+  if (values['trim-landings'] !== undefined) {
+    const raw = values['trim-landings'];
+    const n = Number.parseInt(raw, 10);
+    if (!Number.isInteger(n) || n < 0 || String(n) !== raw.trim()) {
+      throw new UserError(`--trim-landings must be a non-negative integer (got "${raw}")`);
+    }
+    const before = store.state();
+    const body = before ? before.sections.lastLandings : SECTION_PLACEHOLDER;
+    const total = splitLandings(body).length;
+    const { kept, archived } = trimLandings(body, n);
+    if (archived.length === 0) {
+      io.stdout.write(`nothing to trim: ${total} entries ≤ ${n}\n`);
+      return 0;
+    }
+    // RCB-71: same default-actor rule `repoboard log` uses — no $USER/'cli' fallback, since the
+    // archived entries are logged under this seat's name.
+    const env = io.env ?? process.env;
+    const typedActor = values.as || env.REPOBOARD_ACTOR;
+    if (!typedActor) {
+      throw new UserError(
+        'repoboard state --trim-landings needs --as <actor> (or REPOBOARD_ACTOR); the archived ' +
+          'entries are logged under that seat name',
+      );
+    }
+    // RCB-172: a log block under `[repoboard] builder` would be a second seat's block.
+    const actor = seatNameFor(store, typedActor).name;
+    const title = `LAST LANDINGS archived: ${archived.length} entries beyond the newest ${n}`;
+    // RCB-132: --archive sends the archived entries to a plain file instead of today's log — no
+    // log block is written at all in that case. Log FIRST still holds for the no-archive path —
+    // `check` reads the log's timestamp against STATE.md's stamp, and the state rewrite below
+    // restamps to "now"; writing the log after would leave a window where the newest log entry
+    // postdates the stamp that is supposed to cover it (stale-state). Either way, STATE's
+    // restamp (`setStateSection` below) is the LAST write.
+    let pointerLocation: string;
+    if (values.archive !== undefined) {
+      const archiveRes = await store.appendArchiveText(
+        values.archive,
+        actor,
+        archived.join('\n\n'),
+        title,
+      );
+      if (!archiveRes.ok) throw new UserError(archiveRes.error);
+      pointerLocation = archiveRes.path;
+    } else {
+      const logRes = await store.appendRepoLog(actor, archived.join('\n\n'), title);
+      if (!logRes.ok) throw new UserError(logRes.error);
+      pointerLocation = `${relative(root, store.logDir)}/${logRes.date}.md`;
+    }
+    const pointer =
+      `_(older entries: ${pointerLocation} "LAST LANDINGS archived", ` +
+      `${archived.length} moved ${toIso(store.clock)})_`;
+    const stateRes = await store.setStateSection('lastLandings', `${kept}\n\n${pointer}`, actor);
+    if (!stateRes.ok) throw new UserError(stateRes.error);
+    // RCB-83: same rule as `log`/`seat --up/--down` — sync .repoboard/local/ after the write, a
+    // no-op when there is no local layer.
+    if (await hasLocal(root)) {
+      const sync = await localSync(root, `${actor}: state trim-landings`);
+      if (sync.pushed === false) {
+        (io.stderr ?? io.stdout).write(`warning: local: push failed: ${sync.error}\n`);
+      }
+    }
+    io.stdout.write(
+      `trimmed LAST LANDINGS: kept ${n}, archived ${archived.length} → ${pointerLocation}\n`,
+    );
+    return 0;
+  }
+  const doc = store.state();
+  if (!doc) {
+    if (values.json) {
+      io.stdout.write(`${JSON.stringify(null, null, 2)}\n`);
+      return 0;
+    }
+    io.stdout.write('(no .repoboard/STATE.md — run `repoboard init --practices`)\n');
+    return 0;
+  }
+  const now = io.now?.() ?? new Date();
+  // RCB-153 W5: `repos:` absent/empty is not a workspace — `opened` stays `[]` and every branch
+  // below falls through to exactly the pre-RCB-153 computation (the slice's own byte-identity
+  // control).
+  const repos = store.config.repos ?? [];
+  const opened = repos.length > 0 ? await new Workspace(root, repos, io.now).openAll() : [];
+  if (values.json) {
+    // RCB-144/RCB-146: OWNER QUEUE is generated, not stored — same `ownerQueue` (card-query.ts)
+    // MCP's get_state calls, reused here as data rather than parsed back out of rendered text.
+    // RCB-131: `leases` is generated the same way, via the SAME `liveLeaseRows` MCP's get_state
+    // calls (mcp.ts), so the two can never disagree about which leases are "live".
+    const payload: {
+      stamp: string;
+      actor: string;
+      sections: typeof doc.sections;
+      ownerQueue: OwnerQueueRow[];
+      leases: LeaseRow[];
+      repos?: Record<
+        string,
+        { ownerQueue: OwnerQueueRow[]; leases: LeaseRow[]; seats: SeatRow[]; missing?: true }
+      >;
+    } = {
+      stamp: doc.stamp,
+      actor: doc.actor,
+      sections: doc.sections,
+      ownerQueue: ownerQueue(store.list()),
+      leases: liveLeaseRows(store.leases(), now),
+    };
+    if (opened.length > 0) {
+      // RCB-153 W5/slice 3b: `--json` adds `repos: { <key>: { ownerQueue, leases, seats, missing?
+      // } }` — one entry per configured member, in `repos:` order, `missing: true` (and empty
+      // rows, RCB-160 slice 2: `seats` too) for one whose root has no `.repoboard/`.
+      // `memberStateRepos` (workspace.ts) is the SAME function MCP's `get_state` builds its own
+      // `repos:` field from.
+      payload.repos = memberStateRepos(opened, ownerQueue, liveLeaseRows, now);
+    }
+    io.stdout.write(`${JSON.stringify(payload, null, 2)}\n`);
+    return 0;
+  }
+  // RCB-153 W5: the workspace's own OWNER QUEUE/LEASES come from `store.list()`/`store.leases()`
+  // exactly as before; `workspace` only ever ADDS member lines on top (empty arrays when `opened`
+  // is `[]`, so `renderState` renders byte-identical to before this card).
+  const text = renderState(
+    doc.sections,
+    store.list(),
+    { now: new Date(Date.parse(doc.stamp)), actor: doc.actor },
+    store.leases(),
+    now,
+    {
+      ownerQueueLines: workspaceOwnerQueueLines(
+        opened.map(({ key, store: memberStore }) => ({
+          key,
+          cards: memberStore.hasBoard ? memberStore.list() : null,
+        })),
+      ),
+      leaseLines: workspaceLeaseLines(
+        opened
+          .filter(({ store: memberStore }) => memberStore.hasBoard)
+          .map(({ key, store: memberStore }) => ({ key, leases: memberStore.leases() })),
+        now,
+      ),
+      seatLines: workspaceSeatLines(
+        opened.map(({ key, store: memberStore }) => ({
+          key,
+          seats: memberStore.hasBoard ? (memberStore.state()?.sections.seats ?? null) : null,
+        })),
+      ),
+    },
+  );
+  io.stdout.write(text);
+  return 0;
+}
+
+/**
+ * RCB-172: one seat, one name — a seat name typed on the command line (`seat <name>`, `log --as`,
+ * `log --last`, `log show --seat`, `state --trim-landings --as`) goes through the store's
+ * `seatName` (core's `normalizeSeatName` against this board's `boardDisplayName`) before it is
+ * looked up or written. `name` is the bare seat name (what `--json` prints and every store call
+ * takes); `label` is what the SEATS bullet carries (`[<board>] <name>`), which the confirmations
+ * print so nobody learns to type the prefix. A prefix naming ANOTHER board is a usage error.
+ */
+function seatNameFor(store: CardStore, raw: string): { name: string; label: string } {
+  const res = store.seatName(raw);
+  if (!res.ok) throw new UserError(res.error);
+  return { name: res.name, label: res.label };
+}
+
+/**
+ * RCB-197/RCB-198: a write the store REFUSED by decision (the seat claim, the holder-only rule) —
+ * exit 1 with the decision's own text on stderr and nothing written. The answer, not a fault, so
+ * it is not a `UserError` (no "error:" framing, no usage hint).
+ */
+function refuseWith(io: CliIO, error: string): number {
+  (io.stderr ?? io.stdout).write(`${error}\n`);
+  return 1;
+}
+
+async function cmdLogAppend(args: string[], io: CliIO): Promise<number> {
+  const { values, positionals } = parse('log', args, {
+    as: { type: 'string' },
+    title: { type: 'string' },
+    stdin: { type: 'boolean', default: false },
+    force: { type: 'boolean', default: false },
+  });
+  let text: string;
+  if (values.stdin) {
+    text = await readStdin(io);
+  } else {
+    text = positionals.join(' ').trim();
+    if (!text)
+      throw new UserError(
+        'usage: repoboard log --as <seat> [--title "…"] [--force] (<text> | --stdin)',
+      );
+  }
+  // RCB-71: a log block is found by its seat name, so an unset --as must be refused, not
+  // defaulted to $USER/'cli' the way actorFrom does for every other command.
+  const env = io.env ?? process.env;
+  const typedSeat = values.as || env.REPOBOARD_ACTOR;
+  if (!typedSeat)
+    throw new UserError(
+      'repoboard log needs --as <seat> (or REPOBOARD_ACTOR); a log block is found by its seat name, so $USER is not a seat',
+    );
+  const root = await requireRoot(io);
+  const store = await openStore(root, { watch: false, now: io.now });
+  // RCB-172: `[repoboard] builder` / `repoboard builder` are the seat `builder`.
+  const { name: seat, label } = seatNameFor(store, typedSeat);
+  // RCB-198: who is running this — measured ONCE, here at the CLI entry (RCB-194 P3), and passed
+  // down: the store lets only the pane that holds `seat` write its log (`--force` overrides, audited).
+  const holder = await holderFromEnv(env, store.config);
+  // RCB-127: `appendSeatLog` restamps STATE.md's own stamp iff `seat` has an UP bullet right
+  // now — see the store's own doc comment. A DOWN/unknown seat still just logs.
+  const res = await store.appendSeatLog(seat, text, values.title, holder, { force: values.force });
+  if (!res.ok) {
+    // A refusal is the answer, not a fault: exit 1 with the decision's own text and nothing written.
+    if (res.refused === true) return refuseWith(io, res.error);
+    throw new UserError(res.error);
+  }
+  // RCB-83: same rule as `seat --up/--down` — sync .repoboard/local/ after the write, a no-op
+  // when there is no local layer.
+  if (await hasLocal(root)) {
+    const sync = await localSync(root, `${seat}: log`);
+    if (sync.pushed === false) {
+      (io.stderr ?? io.stdout).write(`warning: local: push failed: ${sync.error}\n`);
+    }
+  }
+  const restampSuffix = res.restamped ? ` · STATE restamped (${seat} is UP)` : '';
+  io.stdout.write(`logged ${res.date} ${label}${restampSuffix}\n`);
+  return 0;
+}
+
+async function cmdLogShow(args: string[], io: CliIO): Promise<number> {
+  const { values } = parse('log', args, {
+    date: { type: 'string' },
+    seat: { type: 'string' },
+    since: { type: 'string' },
+    tail: { type: 'string' },
+    json: { type: 'boolean', default: false },
+  });
+  // RCB-132: --tail is parsed here (a non-negative integer), same style as --trim-landings —
+  // filterLogBlocks takes the already-validated number, not a second parse of the raw flag.
+  let tail: number | undefined;
+  if (values.tail !== undefined) {
+    const raw = values.tail;
+    const n = Number.parseInt(raw, 10);
+    if (!Number.isInteger(n) || n < 0 || String(n) !== raw.trim()) {
+      throw new UserError(`--tail must be a non-negative integer (got "${raw}")`);
+    }
+    tail = n;
+  }
+  const root = await requireRoot(io);
+  const store = await openStore(root, { watch: false, now: io.now });
+  // RCB-172: `--seat` names a seat — `[repoboard] builder` is `builder`, another board's prefix is
+  // refused. Resolved BEFORE the log is read so a wrong prefix is an error even on an empty day.
+  const seatFilter = values.seat !== undefined ? seatNameFor(store, values.seat).name : undefined;
+  const log = await store.log(values.date);
+  if (!log) {
+    if (values.json) {
+      const date = values.date ?? toIso(store.clock).slice(0, 10);
+      io.stdout.write(`${JSON.stringify({ date, blocks: [] }, null, 2)}\n`);
+      return 0;
+    }
+    io.stdout.write('(no log for that date)\n');
+    return 0;
+  }
+  // RCB-132: --since/--tail widen --seat's own filter-then-format shape rather than add a
+  // second code path — filterLogBlocks does seat, then since, then tail, in that order, and a
+  // plain --seat (neither --since nor --tail) keeps its own original empty-result message.
+  if (values.seat !== undefined || values.since !== undefined || tail !== undefined) {
+    const filtered = filterLogBlocks(log.blocks, log.date, {
+      seat: seatFilter,
+      since: values.since,
+      tail,
+    });
+    if (!filtered.ok) throw new UserError(`--since ${filtered.error}`);
+    if (values.json) {
+      io.stdout.write(`${JSON.stringify({ date: log.date, blocks: filtered.blocks }, null, 2)}\n`);
+      return 0;
+    }
+    if (filtered.blocks.length === 0) {
+      io.stdout.write(
+        values.since === undefined && tail === undefined
+          ? '(no entries for that seat on that date)\n'
+          : '(no matching log entries)\n',
+      );
+      return 0;
+    }
+    io.stdout.write(`${filtered.blocks.map((b) => formatLogBlock(b)).join('\n\n')}\n`);
+    return 0;
+  }
+  if (values.json) {
+    io.stdout.write(`${JSON.stringify({ date: log.date, blocks: log.blocks }, null, 2)}\n`);
+    return 0;
+  }
+  io.stdout.write(log.text);
+  return 0;
+}
+
+/**
+ * RCB-47: `repoboard log --last <seat>` — the cold-start read. Searches back across every
+ * `.repoboard/log/*.md` day (not just today), so a seat that stood down yesterday is found with
+ * no `--date`. A cold seat with no history is normal, not an error: miss is exit 0.
+ */
+async function cmdLogLast(args: string[], io: CliIO): Promise<number> {
+  const seat = args[0];
+  if (seat === undefined || seat.trim().length === 0) {
+    throw new UserError('usage: repoboard log --last <seat>');
+  }
+  const root = await requireRoot(io);
+  const store = await openStore(root, { watch: false, now: io.now });
+  const { name } = seatNameFor(store, seat);
+  const res = await store.lastRepoLogBlock(name);
+  if (!res) {
+    io.stdout.write(`(no log block for ${name})\n`);
+    return 0;
+  }
+  io.stdout.write(`${formatLogBlock(res.block)}\n`);
+  return 0;
+}
+
+/**
+ * RCB-48: `repoboard seat <name>` — the cold-start bundle, one command in place of the
+ * three-file ritual (STATE.md → your own last block → the coordinator's → todo cards → open
+ * decisions). Exit 0 on any successful read, even when every part is a placeholder — a cold seat
+ * on a fresh board is the normal case, not an error.
+ */
+/**
+ * RCB-60: THIS CLI's own monorepo root (not the board's `--root`) — `cli.ts` sits one level under
+ * the package dir, same as `http.ts`'s `packageDir()`, so two more `dirname`s up from there is the
+ * repo root. Test-only override: `REPOBOARD_SELF_ROOT` (via `CliIO.env`), since a real checkout's
+ * own path on disk can't otherwise be faked in a fixture.
+ */
+function selfRepoRoot(io: CliIO): string {
+  const override = (io.env ?? process.env).REPOBOARD_SELF_ROOT;
+  if (override) return override;
+  return dirname(dirname(dirname(dirname(fileURLToPath(import.meta.url)))));
+}
+
+async function cmdSeat(args: string[], io: CliIO): Promise<number> {
+  // RCB-207: `--up`/`--down`/`--update` take the bullet text as their VALUE, so a flag right after
+  // one (`--up --pane 1D3F "text"`, the order CLAUDE.md once taught) makes `parseArgs` answer
+  // "Option '--up' argument is ambiguous." plus the whole seat usage. Said here instead, in one
+  // line that names the order that works — before `parse`, which is what would dump the usage.
+  for (const [i, arg] of args.entries()) {
+    if (
+      (arg === '--up' || arg === '--down' || arg === '--update') &&
+      args[i + 1]?.startsWith('--') === true
+    ) {
+      throw new UserError(
+        `seat: ${arg} takes its text next: seat <name> ${arg} "<text>"${arg === '--up' ? ' [--pane <tag>]' : ''}`,
+      );
+    }
+  }
+  const { values, positionals } = parse('seat', args, {
+    json: { type: 'boolean', default: false },
+    up: { type: 'string' },
+    down: { type: 'string' },
+    update: { type: 'string' },
+    force: { type: 'boolean', default: false },
+    from: { type: 'string' },
+    pane: { type: 'string' },
+  });
+  const [typedName] = positionals;
+  if (!typedName)
+    throw new UserError(
+      'usage: repoboard seat <name> | list | whoami [--json] [--up "<text>" [--force] [--from <seat>] [--pane <tag>] | --down "<text>" [--force] | --update "<text>" [--force]]',
+    );
+  // RCB-197: both flags qualify a CLAIM — refused for every other verb before anything is opened.
+  if (values.up === undefined && (values.from !== undefined || values.pane !== undefined)) {
+    throw new UserError(
+      `seat: ${values.from !== undefined ? '--from' : '--pane'} is only valid with --up`,
+    );
+  }
+  const root = await requireRoot(io);
+  const store = await openStore(root, { watch: false, now: io.now });
+
+  // RCB-89: `seat list` — a reserved first positional, one row per SEATS bullet instead of one
+  // seat's own bundle. --up/--down/--update make no sense against every seat at once.
+  if (typedName === 'list') {
+    if (values.up !== undefined || values.down !== undefined || values.update !== undefined) {
+      throw new UserError('seat list: --up, --down and --update are not valid with list');
+    }
+    const seats = store.state()?.sections.seats ?? '';
+    // RCB-199: each row also says who holds the seat (PANE = the recorded holder's tag, LABEL = what
+    // the bullet says, LIVE = whether that process is still running). `seats.yml` unreadable is a
+    // warning, not a failure: the rows are still printed, their holder columns `-` / `null`.
+    const held = await store.seatHolders();
+    const rows = seatListRows(seats, held.holders);
+    if (held.error !== null) (io.stderr ?? io.stdout).write(`warning: ${held.error}\n`);
+    if (values.json) {
+      io.stdout.write(`${JSON.stringify(rows, null, 2)}\n`);
+    } else {
+      io.stdout.write(renderSeatList(rows));
+    }
+    return 0;
+  }
+
+  // RCB-199: `seat whoami` — a reserved first positional like `list`: which seat does THIS pane
+  // hold? Measured ONCE here, from the same env every other seat verb reads (`io.env`), and answered
+  // from `seats.yml` (a READ: no file or lock is created). A pane that holds nothing is not an
+  // error — it is `<tag> · no seat`, exit 0. `seats.yml` unreadable is: the answer would be a guess.
+  if (typedName === 'whoami') {
+    if (values.up !== undefined || values.down !== undefined || values.update !== undefined) {
+      throw new UserError('seat whoami: --up, --down and --update are not valid with whoami');
+    }
+    const me = await holderFromEnv(io.env ?? process.env, store.config);
+    const held = await store.seatHolders();
+    if (held.error !== null) {
+      (io.stderr ?? io.stdout).write(`seat whoami: ${held.error}\n`);
+      return 1;
+    }
+    const who = seatWhoami(me, held.holders, boardShortName(store.config));
+    if (values.json) {
+      const seats = store.state()?.sections.seats ?? '';
+      io.stdout.write(
+        `${JSON.stringify(
+          {
+            label: who.label,
+            tag: who.tag,
+            seat: who.seat,
+            alsoHolds: who.alsoHolds,
+            holder: me,
+            lease: held.holders.find((h) => h.seat === who.seat) ?? null,
+            bullet: who.seat === null ? null : findSeatLine(seats, who.seat),
+          },
+          null,
+          2,
+        )}\n`,
+      );
+    } else {
+      const also = who.alsoHolds.length === 0 ? '' : ` (also holds ${who.alsoHolds.join(', ')})`;
+      io.stdout.write(`${who.label}${also}\n`);
+    }
+    return 0;
+  }
+
+  // RCB-172: one seat, one name — `[repoboard] builder` and `repoboard builder` are the seat
+  // `builder` (a prefix naming another board is refused here, before anything is read or written).
+  // `label` is what the bullet carries; the confirmations below print it.
+  const { name, label } = seatNameFor(store, typedName);
+
+  // RCB-195: who is running this — measured ONCE, here at the CLI entry (RCB-194 P3), from the
+  // same env `io.env` hands every other verb, and passed down to every seat write below (RCB-198:
+  // `--update` and `--down` too, not just `--up`). The store records it in
+  // `.repoboard/local/seats.yml` on an --up when the board has a local layer, and checks it against
+  // the recorded holder on a stand-down or an --update; with no local layer it is ignored.
+  const holder = await holderFromEnv(io.env ?? process.env, store.config);
+
+  // RCB-88: --update rewrites only the body, keeping the standing status + stamp — no presence
+  // guard, no claim; RCB-198: only the pane that holds the seat may (`--force` overrides, audited
+  // in the log). Handled separately from the --up/--down restamp path below.
+  if (values.update !== undefined) {
+    if (values.up !== undefined || values.down !== undefined) {
+      throw new UserError('seat: --up, --down and --update are exclusive');
+    }
+    if (values.update.trim().length === 0) {
+      throw new UserError('seat --update needs the bullet text');
+    }
+    const res = await store.updateSeatBullet(name, values.update, holder, { force: values.force });
+    if (!res.ok) {
+      if (res.refused === true) return refuseWith(io, res.error);
+      throw new UserError(res.error);
+    }
+    if (await hasLocal(root)) {
+      const sync = await localSync(root, `${name}: seat update`);
+      if (sync.pushed === false) {
+        (io.stderr ?? io.stdout).write(`warning: local: push failed: ${sync.error}\n`);
+      }
+    }
+    const bullet = findSeatLine(res.doc.sections.seats, name) ?? '';
+    if (values.json) {
+      io.stdout.write(
+        `${JSON.stringify({ name, status: res.status, stamp: res.stamp, bullet }, null, 2)}\n`,
+      );
+    } else {
+      io.stdout.write(`updated SEATS ${label}: ${res.status} ${res.stamp} kept\n`);
+    }
+    const staleness = await distStaleness(selfRepoRoot(io));
+    if (staleness) (io.stderr ?? io.stdout).write(`warning: ${staleness}\n`);
+    return 0;
+  }
+
+  // RCB-58: a seat restamps ONLY its own SEATS bullet — a write, kept separate from the bundle
+  // read below (never printed together) so the permission classifier sees one small write.
+  if (values.up !== undefined || values.down !== undefined) {
+    if (values.up !== undefined && values.down !== undefined) {
+      throw new UserError('seat: --up and --down are exclusive');
+    }
+    const status: 'UP' | 'DOWN' = values.up !== undefined ? 'UP' : 'DOWN';
+    const text = values.up ?? values.down ?? '';
+    if (text.trim().length === 0) {
+      throw new UserError('seat --up/--down needs the bullet text');
+    }
+
+    // RCB-89: a stand-down bullet must record where the seat's work stands — before any write.
+    if (status === 'DOWN') {
+      const err = checkDownFields(text);
+      if (err) throw new UserError(err);
+    }
+
+    // RCB-197: `--pane <tag>` asserts which pane this is (a restart paste-in carries the pane it
+    // was written for) — checked before anything is decided or written, so a paste that landed in
+    // the wrong pane changes nothing.
+    if (values.pane !== undefined) {
+      let paneError = checkPaneAssertion(holder.pane, values.pane);
+      if (paneError !== null) {
+        // RCB-207: every other seat refusal ends `you are <label>`; this one named only tags. The
+        // label is `seat whoami`'s own (`seatWhoami` over `seatHolders`, a lock-free READ on the
+        // store already open) and is looked up only here, on the refusal — the happy path reads
+        // nothing new. `seats.yml` unreadable: the tag alone, never a `no seat` guessed from `[]`.
+        const held = await store.seatHolders();
+        const who = seatWhoami(holder, held.holders, boardShortName(store.config));
+        paneError = checkPaneAssertion(
+          holder.pane,
+          values.pane,
+          held.error === null ? who.label : who.tag,
+        );
+        (io.stderr ?? io.stdout).write(`${paneError}\n`);
+        return 1;
+      }
+    }
+
+    // RCB-197: an --up is a CLAIM and the store decides it, inside the locks (RCB-87's window rule,
+    // RCB-169's sightings, RCB-194's holder liveness, `--from`, `--force`). Deciding it here, on the
+    // state loaded at open, is how two panes both got the seat. RCB-198: a --down is the holder's —
+    // refused from a pane that does not hold the seat unless --force (audited), and it drops the
+    // seat's lease; the store decides that too, in the same locks.
+    const res = await store.setSeatBullet(name, status, text, holder, {
+      force: values.force,
+      from: values.from,
+    });
+    if (!res.ok) {
+      if (res.refused === true) return refuseWith(io, res.error);
+      throw new UserError(res.error);
+    }
+    // RCB-83: keep .repoboard/local/ in step with every SEATS write — a no-op when there is no
+    // local layer (`hasLocal` false), so nothing changes for repos without one.
+    if (await hasLocal(root)) {
+      const sync = await localSync(root, `${name}: seat ${status}`);
+      if (sync.pushed === false) {
+        (io.stderr ?? io.stdout).write(`warning: local: push failed: ${sync.error}\n`);
+      }
+    }
+    const stamp = `${res.doc.stamp.slice(0, 10)} ${res.doc.stamp.slice(11, 16)}Z`;
+    const bullet = findSeatLine(res.doc.sections.seats, name) ?? '';
+    // RCB-195: the label the bullet ended up with (`A7B2 · acme builder`) — read back from the
+    // bullet itself, so what is printed is what was written; `null` when it carries none (a DOWN,
+    // a holder with no pane, a board with no local layer).
+    const heldBy = parseSeatHolderLabel(bullet);
+    // RCB-197: `released` is the seat `--from` stood DOWN in the same write, `audit` the title of
+    // the log block written before a takeover — both `null` when there was none.
+    if (values.json) {
+      io.stdout.write(
+        `${JSON.stringify(
+          {
+            name,
+            status,
+            stamp,
+            bullet,
+            holderLabel: heldBy,
+            released: res.released,
+            audit: res.audit,
+          },
+          null,
+          2,
+        )}\n`,
+      );
+    } else {
+      io.stdout.write(
+        `restamped SEATS ${label}: ${status} ${stamp}${heldBy === null ? '' : ` · ${heldBy}`}\n`,
+      );
+      if (res.released !== null) {
+        io.stdout.write(
+          `restamped SEATS ${seatNameFor(store, res.released).label}: DOWN ${stamp} (moved to ${name})\n`,
+        );
+      }
+    }
+    // RCB-60: printed after, same as the read path below — harmless on a write.
+    const staleness = await distStaleness(selfRepoRoot(io));
+    if (staleness) (io.stderr ?? io.stdout).write(`warning: ${staleness}\n`);
+    return 0;
+  }
+
+  // RCB-154: the workspace's own member gate facts, `[]` on a plain board — the same members
+  // `card list`/`show`/`move` already resolve a `gate:` against, now reaching the seat bundle too.
+  const seatMembers = await workspaceGateMembers(store, io.now);
+  const bundle = await store.seatBundle(name, seatMembers);
+  // RCB-199: the bundle still renders; a `seats.yml` that could not be read says so, once, on stderr.
+  if (bundle.holderError !== null) {
+    (io.stderr ?? io.stdout).write(`warning: ${bundle.holderError}\n`);
+  }
+  if (values.json) {
+    io.stdout.write(`${JSON.stringify(bundle, null, 2)}\n`);
+  } else {
+    io.stdout.write(renderSeatBundle(bundle, store.clock));
+  }
+  // RCB-60: printed after the bundle so a seat's cold-start read is never blocked or reordered.
+  const staleness = await distStaleness(selfRepoRoot(io));
+  if (staleness) (io.stderr ?? io.stdout).write(`warning: ${staleness}\n`);
+  return 0;
+}
+
+/** RCB-129: `repoboard decisions`' table — `DECIDED BY CARD CHOSEN ACK QUESTION`, same fixed-width
+ * helper `formatTable`/`formatLeaseTable`/`formatStepsTable` use. `formatAnsweredChoice` (core) is
+ * the ONE CHOSEN-cell formatter — the seat bundle's "Answered, not acknowledged" block renders the
+ * same text for the same row. */
+export function formatDecisionsTable(rows: AnsweredDecisionRow[]): string {
+  const header = ['DECIDED', 'BY', 'CARD', 'CHOSEN', 'ACK', 'QUESTION'];
+  const body = rows.map((r) => [
+    r.decidedAt,
+    r.decidedBy ?? '-',
+    r.id,
+    formatAnsweredChoice(r),
+    r.acknowledged ? 'yes' : 'no',
+    r.question,
+  ]);
+  return renderFixedWidthTable(header, body);
+}
+
+/**
+ * RCB-129 (observed on a member board: the owner answers a decision on the web and nothing a seat
+ * reads changes — the card just leaves the OWNER QUEUE). Default: unacknowledged rows only; `--all`
+ * also shows already-acknowledged ones; `--since` filters on `decidedAt` (`resolveSince`: an
+ * ISO-8601 datetime, or `HH:MMZ` for that UTC time today).
+ */
+async function cmdDecisions(args: string[], io: CliIO): Promise<number> {
+  const { values } = parse('decisions', args, {
+    since: { type: 'string' },
+    all: { type: 'boolean', default: false },
+    json: { type: 'boolean', default: false },
+  });
+  const root = await requireRoot(io);
+  const store = await openStore(root, { watch: false, now: io.now });
+  let since: string | undefined;
+  if (values.since !== undefined) {
+    const now = io.now?.() ?? new Date();
+    const r = resolveSince(values.since, now);
+    if (!r.ok) throw new UserError(r.error);
+    since = r.iso;
+  }
+  const all = answeredDecisions(store.list(), { since });
+  const rows = values.all ? all : all.filter((r) => !r.acknowledged);
+  if (values.json) {
+    io.stdout.write(`${formatRows(rows)}\n`);
+    return 0;
+  }
+  if (rows.length === 0) {
+    io.stdout.write(
+      `${values.all ? '(no answered decisions)' : '(no answered decisions awaiting acknowledgement)'}\n`,
+    );
+    return 0;
+  }
+  io.stdout.write(`${formatDecisionsTable(rows)}\n`);
+  return 0;
+}
+
+async function cmdCheck(args: string[], io: CliIO): Promise<number> {
+  const { values } = parse('check', args, {
+    json: { type: 'boolean', default: false },
+    strict: { type: 'boolean', default: false },
+  });
+  const root = await requireRoot(io);
+  const store = await openStore(root, { watch: false, now: io.now });
+  // RCB-153 W5/W3: `repos:` absent/empty is not a workspace — `allFindings`/`exitCode` fall
+  // straight through to `findings`/`store.check`'s own exit code, byte-identical to before this
+  // card (the slice's own regression control).
+  const repos = store.config.repos ?? [];
+  const opened = repos.length > 0 ? await new Workspace(root, repos, io.now).openAll() : [];
+  // RCB-154: the workspace's own gate-member facts — `[]` on a plain board — so the top board's
+  // OWN `gated-steps` count resolves a step's `gate:` against a member the same way `card list`
+  // already does, `opened` reused rather than opened a second time.
+  const { findings } = await store.check(values.strict, gateMemberFacts(opened));
+  let allFindings: readonly Finding[] = findings;
+  if (repos.length > 0) {
+    // W3/W5, slice 3b: `checkMembers` (workspace.ts) is the SAME member loop MCP's `check` tool
+    // runs — a root with no `.repoboard/` is one `workspace-member-missing` error finding, every
+    // other member's own findings prefixed `[<key>] `. Moved, not changed: this call reproduces
+    // the loop that used to be inline here, findings identical.
+    const memberFindings = await checkMembers(opened, values.strict, io.now);
+    allFindings = [...findings, ...memberFindings];
+  }
+  // W5: "exit code = the worst" — one `exitCodeForFindings` call over the combined list, the same
+  // function every other surface uses, so `--strict` cannot mean something different here.
+  const exitCode = exitCodeForFindings(allFindings, values.strict);
+  if (values.json) {
+    io.stdout.write(`${formatRows(allFindings)}\n`);
+    return exitCode;
+  }
+  if (allFindings.length === 0) {
+    io.stdout.write('ok\n');
+    return 0;
+  }
+  for (const f of allFindings) io.stdout.write(`${f.message}\n`);
+  return exitCode;
+}
+
+// ---- gate ledger (RCB-112 A) ----------------------------------------------------------------
+
+function parseIntFlag(name: string, v: string | undefined): number | null {
+  if (v === undefined) return null;
+  const n = Number.parseInt(v, 10);
+  if (!Number.isInteger(n) || String(n) !== v.trim()) {
+    throw new UserError(`--${name} must be an integer (got "${v}")`);
+  }
+  return n;
+}
+
+/** `--tests <passed>|<skipped>` — both integers, pipe-separated (the CLI-friendly form of the
+ * two numbers `pnpm vitest` prints). */
+function parseTestsFlag(v: string | undefined): { passed: number | null; skipped: number | null } {
+  if (v === undefined) return { passed: null, skipped: null };
+  const parts = v.split('|');
+  if (parts.length !== 2) {
+    throw new UserError('--tests must be <passed>|<skipped> (e.g. --tests 1271|4)');
+  }
+  return {
+    passed: parseIntFlag('tests (passed)', parts[0]),
+    skipped: parseIntFlag('tests (skipped)', parts[1]),
+  };
+}
+
+/**
+ * RCB-112 A: `repoboard gate record --as <seat> [--tests p|s --failed n] [--files n]
+ * [--typecheck n] [--lint n] [--build n] [--sha s] [--note t]` — flag parsing only; the append
+ * itself (validation, `sha` default, the JSONL line) is `recordGate` (RCB-146, `repo-health.ts`),
+ * shared with MCP `record_gate`. No check given (none of `--tests`/`--typecheck`/`--lint`/
+ * `--build`) is a usage error: exit 1, nothing written. `--tests` without `--failed` is also a
+ * usage error (RCB-116): a recorded run with an unstated failed count reads as `tests: FAIL`
+ * (null = unknown = not ok), which is not what the caller meant to write down.
+ */
+async function cmdGateRecord(args: string[], io: CliIO): Promise<number> {
+  const { values } = parse('gate', args, {
+    as: { type: 'string' },
+    tests: { type: 'string' },
+    failed: { type: 'string' },
+    files: { type: 'string' },
+    typecheck: { type: 'string' },
+    lint: { type: 'string' },
+    build: { type: 'string' },
+    sha: { type: 'string' },
+    note: { type: 'string' },
+  });
+  if (!values.as || values.as.trim().length === 0) {
+    throw new UserError('gate record needs --as <seat>');
+  }
+  const failed = parseIntFlag('failed', values.failed);
+  const files = parseIntFlag('files', values.files);
+  const { passed, skipped } = parseTestsFlag(values.tests);
+  const typecheck = parseIntFlag('typecheck', values.typecheck);
+  const lint = parseIntFlag('lint', values.lint);
+  const build = parseIntFlag('build', values.build);
+
+  const root = await requireRoot(io);
+  let record: GateRecord;
+  try {
+    record = await recordGate(
+      root,
+      {
+        as: values.as,
+        passed: passed ?? undefined,
+        skipped: skipped ?? undefined,
+        failed: failed ?? undefined,
+        files: files ?? undefined,
+        typecheck: typecheck ?? undefined,
+        lint: lint ?? undefined,
+        build: build ?? undefined,
+        sha: values.sha,
+        note: values.note,
+      },
+      io.now?.() ?? new Date(),
+    );
+  } catch (e) {
+    throw new UserError((e as Error).message);
+  }
+  io.stdout.write(`recorded ${values.as} @ ${record.at}${record.sha ? ` (${record.sha})` : ''}\n`);
+  return 0;
+}
+
+const GATE_CHECK_ORDER: readonly GateCheckName[] = ['tests', 'typecheck', 'lint', 'build'];
+
+function gateCheckLine(name: GateCheckName, result: GateCheckResult | null): string {
+  if (!result) return `${name}: no gate recorded`;
+  const status = result.ok ? 'ok' : 'FAIL';
+  const sha = result.sha ? ` ${result.sha}` : '';
+  return `${name}: ${status} — ${result.value} (${result.at}${sha}, as ${result.as})`;
+}
+
+/** `repoboard gate show [--json]` — the ledger's newest result per check (RCB-112 A); never
+ * re-runs anything, just reads `gateLedgerPath` the way `GET /api/dashboard` does. */
+async function cmdGateShow(args: string[], io: CliIO): Promise<number> {
+  const { values } = parse('gate', args, { json: { type: 'boolean', default: false } });
+  const root = await requireRoot(io);
+  const health = await loadGateHealth(root);
+  if (values.json) {
+    io.stdout.write(`${JSON.stringify(health, null, 2)}\n`);
+    return 0;
+  }
+  for (const name of GATE_CHECK_ORDER)
+    io.stdout.write(`${gateCheckLine(name, health.checks[name])}\n`);
+  if (health.errors.length > 0) {
+    const err = io.stderr ?? io.stdout;
+    for (const e of health.errors) err.write(`${health.ledger ?? 'gate ledger'}: ${e}\n`);
+  }
+  return 0;
+}
+
+async function cmdGate(sub: string | undefined, args: string[], io: CliIO): Promise<number> {
+  if (sub === 'record') return cmdGateRecord(args, io);
+  if (sub === 'show') return cmdGateShow(args, io);
+  throw new UserError(`unknown gate command "${sub ?? ''}" (record, show)`);
+}
+
+/**
+ * RCB-83: `repoboard local init|sync|status` — the local-only layer, `.repoboard/local/`, a
+ * separate gitignored git repo for machine facts (RIG.md). RCB-93: the running record (STATE.md,
+ * log/) follows it too, but only when the top level has none — a record already tracked in git
+ * stays exactly where it is unless `local init --move-record` says otherwise. See `local.ts` for
+ * the git mechanics.
+ */
+async function cmdLocal(sub: string | undefined, args: string[], io: CliIO): Promise<number> {
+  const root = await requireRoot(io);
+  if (sub === 'init') {
+    const { values } = parse('local', args, {
+      remote: { type: 'string' },
+      'move-record': { type: 'boolean', default: false },
+    });
+    await localInit(root, {
+      remote: values.remote,
+      io,
+      now: io.now,
+      moveRecord: values['move-record'],
+    });
+    // RCB-128: no --remote given this run — say so ONLY if there is still nothing backing this
+    // local layer up (no remote AND no ack), so a bare `local init` doesn't nag a repo that
+    // already opted out or already has a remote from an earlier run.
+    if (values.remote === undefined) {
+      const status = await localStatus(root);
+      if (status && !status.hasRemote && !status.remoteAck) {
+        io.stdout.write(
+          'local: no remote — back up with --remote <url>, or --remote none to stop check asking\n',
+        );
+      }
+    }
+    io.stdout.write(`see also: repoboard init --practices (${PRACTICES_OUTPUTS_DESC})\n`);
+    return 0;
+  }
+  if (sub === 'sync') {
+    const { values } = parse('local', args, { message: { type: 'string', short: 'm' } });
+    const message = values.message ?? 'repoboard local: sync';
+    const res = await localSync(root, message);
+    if (res.status === 'no-local') {
+      io.stdout.write('no .repoboard/local/ — run repoboard local init\n');
+      return 0;
+    }
+    const pushedText =
+      res.pushed === true ? ', pushed' : res.pushed === false ? ', push failed' : '';
+    io.stdout.write(`local: ${res.status}${pushedText}\n`);
+    if (res.pushed === false && res.error) {
+      (io.stderr ?? io.stdout).write(`warning: local: push failed: ${res.error}\n`);
+    } else if (res.pushed === null && res.error) {
+      (io.stderr ?? io.stdout).write(`warning: local: sync failed: ${res.error}\n`);
+    }
+    return 0;
+  }
+  if (sub === 'status') {
+    const status = await localStatus(root);
+    if (!status) {
+      io.stdout.write('no .repoboard/local/ — run repoboard local init\n');
+      return 0;
+    }
+    const ahead = status.ahead === null ? '—' : String(status.ahead);
+    const remoteText = status.hasRemote
+      ? 'remote'
+      : status.remoteAck
+        ? 'no remote (ack: none)'
+        : 'no remote';
+    io.stdout.write(`local: ${ahead} ahead, ${status.dirty ? 'dirty' : 'clean'}, ${remoteText}\n`);
+    return 0;
+  }
+  throw new UserError(`unknown local command "${sub ?? ''}" (init, sync, status)`);
+}
+
+/**
+ * P8.4 locked decision 6: `--root` measures ANY directory, with or without `.repoboard/` — a
+ * `.repoboard/`-less repo (measured read-only) is exactly the motivating case.
+ * With no `--root`, climb to the nearest `.repoboard/` like every other command (so a bare
+ * `repoboard cost` inside a repoboard-managed repo needs no flag).
+ */
+async function costRoot(rootFlag: string | undefined, io: CliIO): Promise<string> {
+  if (rootFlag === undefined) return requireRoot(io);
+  const root = resolve(io.cwd, rootFlag);
+  const isDir = await stat(root).then(
+    (s) => s.isDirectory(),
+    () => false,
+  );
+  if (!isDir) throw new UserError(`--root ${root} is not a directory`);
+  return root;
+}
+
+/** CLI flag wins over `board.yml`'s `claudeMdBudgetBytes`, which wins over the built-in default
+ * (locked decision 2). `root` may have no `.repoboard/board.yml` at all (costRoot above) — that
+ * is not an error here, just "no configured budget". */
+async function budgetFor(root: string, flag: string | undefined): Promise<number> {
+  if (flag !== undefined) {
+    const n = Number.parseInt(flag, 10);
+    if (!Number.isInteger(n) || n <= 0) {
+      throw new UserError(`--budget must be a positive integer (got "${flag}")`);
+    }
+    return n;
+  }
+  try {
+    const text = await readFile(join(root, '.repoboard', 'board.yml'), 'utf8');
+    const parsed = parseBoard(text);
+    if (parsed.ok && parsed.config.claudeMdBudgetBytes !== undefined) {
+      return parsed.config.claudeMdBudgetBytes;
+    }
+  } catch {
+    // no board.yml (or it does not parse) — fall through to the built-in default.
+  }
+  return DEFAULT_CLAUDE_MD_BUDGET_BYTES;
+}
+
+async function cmdCost(args: string[], io: CliIO): Promise<number> {
+  const { values } = parse('cost', args, {
+    root: { type: 'string' },
+    budget: { type: 'string' },
+    json: { type: 'boolean', default: false },
+  });
+  const root = await costRoot(values.root, io);
+  const budget = await budgetFor(root, values.budget);
+  const report = await gatherCost(root, budget);
+  if (values.json) {
+    io.stdout.write(`${JSON.stringify(report, null, 2)}\n`);
+    return report.over ? 1 : 0;
+  }
+  io.stdout.write(`${formatCostTable(report)}\n`);
+  return report.over ? 1 : 0;
+}
+
+/**
+ * RCB-163: the `systems-unblocker-unknown` messages for `doc` on `store` — the SAME
+ * `GateMemberFacts[]` `cmdCheck` passes for this root (`workspaceGateMembers`, already the one
+ * function every "members of the board whose cards I am reading" caller uses, so no new gathering
+ * logic here), and this store's own `list()` for `cards`. The planned-without-unblocker kind is
+ * filtered out — that one stays `check`'s alone.
+ */
+async function systemsUnblockerWarnings(
+  store: CardStore,
+  doc: SystemsDoc,
+  now?: () => Date,
+): Promise<string[]> {
+  const members = await workspaceGateMembers(store, now);
+  return systemsUnblockerFindings(doc, store.list(), members)
+    .filter((f) => f.kind === 'systems-unblocker-unknown')
+    .map((f) => f.message);
+}
+
+/**
+ * RCB-173: the parse-time warnings of a systems.yml that PARSED — `systems-unknown-key` (a key
+ * no schema knows, named by path + key) and `systems-over-budget` (bytes vs budget). The store
+ * keeps only the parsed doc, so this re-reads the file and parses it again (one small file) rather
+ * than widening the store's state. `[]` on any read/parse failure: a broken file is `errors`' job,
+ * never a warning's.
+ */
+async function systemsParseWarnings(store: CardStore): Promise<string[]> {
+  let text: string;
+  try {
+    text = await readFile(store.systemsPath, 'utf8');
+  } catch {
+    return [];
+  }
+  const parsed = parseSystems(text);
+  return parsed.ok ? parsed.warnings.map((w) => w.message) : [];
+}
+
+/** Every warning `repoboard systems` shows, in one order: the file's own (RCB-173) first, then
+ * the cross-board `unblocked_by` ones (RCB-163). */
+async function systemsWarnings(
+  store: CardStore,
+  doc: SystemsDoc,
+  now?: () => Date,
+): Promise<string[]> {
+  return [
+    ...(await systemsParseWarnings(store)),
+    ...(await systemsUnblockerWarnings(store, doc, now)),
+  ];
+}
+
+/**
+ * RCB-97 (plan §3.3): `repoboard systems [--json]` — the whole `.repoboard/systems.yml` table.
+ * No file: the one `systemsSummary(null, []).line` ("no systems.yml yet"), exit 0. Invalid: each
+ * parse error on stderr, exit 1. `--json` mirrors `store.systems()` (`{doc, errors, exists}`) in
+ * every state. RCB-163: a valid doc also gets `warnings` — every `systems-unblocker-unknown`
+ * message (an `unblocked_by` id naming no card of this board or any member), preceded (RCB-173) by
+ * the file's own `systems-unknown-key` / `systems-over-budget` messages, text mode as one
+ * `warning: <message>` stderr line after the table, `--json` as `warnings: string[]` — always
+ * present (`[]` when none, including no-doc/invalid-doc, where it is never computed). The exit
+ * code is unchanged either way: `systems` stays display-only, `check` alone exits non-zero for
+ * this.
+ */
+async function cmdSystems(args: string[], io: CliIO): Promise<number> {
+  const { values } = parse('systems', args, { json: { type: 'boolean', default: false } });
+  const root = await requireRoot(io);
+  const store = await openStore(root, { watch: false, now: io.now });
+  const { doc, errors, exists } = store.systems();
+  if (values.json) {
+    const warnings = doc ? await systemsWarnings(store, doc, io.now) : [];
+    io.stdout.write(`${JSON.stringify({ doc, errors, exists, warnings }, null, 2)}\n`);
+    return errors.length > 0 ? 1 : 0;
+  }
+  if (errors.length > 0) {
+    const err = io.stderr ?? io.stdout;
+    for (const e of errors) err.write(`${e}\n`);
+    return 1;
+  }
+  if (doc === null) {
+    io.stdout.write(`${systemsSummary(null, []).line}\n`);
+    return 0;
+  }
+  io.stdout.write(formatSystemsTable(doc));
+  const warnings = await systemsWarnings(store, doc, io.now);
+  const err = io.stderr ?? io.stdout;
+  for (const w of warnings) err.write(`warning: ${w}\n`);
+  return 0;
+}
+
+/** Text lines for one `UnblockerInfo` — the brief's `  <ID> <title> [<card status>]` plus an
+ * indented `decision:`/`next step:` line, or `  <ID> (not on this board)` when unknown. */
+function formatUnblockerLines(info: UnblockerInfo): string[] {
+  if (!info.card) return [`  ${info.id} (not on this board)`];
+  const lines = [`  ${info.id} ${info.card.title} [${info.card.status}]`];
+  if (info.decision) {
+    const opts = info.decision.options.map((o) => `${o.letter}: ${o.text}`).join(' · ');
+    lines.push(`    decision: ${info.decision.question}${opts ? ` — ${opts}` : ''}`);
+  } else if (info.nextStep) {
+    lines.push(`    next step: ${info.nextStep.id} ${info.nextStep.title}`);
+  }
+  return lines;
+}
+
+/**
+ * RCB-97 (plan §3.3): `repoboard systems show <id> [--json]` — one row plus its `pointers`
+ * resolved the way `card show --resolve` does (`cmdCardShow`). Unknown id (or no systems.yml at
+ * all/invalid) → stderr, exit 1. `--json` returns `{ system, connections, pointers, tests,
+ * unblockers }`. RCB-110: `tests` (core's `SystemTests`) is printed as one line per pointer
+ * between the row and the resolved refs. RCB-113: `tests.measured` (source B, % lines from the
+ * gate's own coverage report) prints its own line right after `tests.line`, and each pointer line
+ * gains a `· <pct>%` or `· <reason>` suffix from `tests.measured.pointers`. RCB-161 slice 1: under the
+ * row's `unblocked by:`, one block per `system.unblockedBy` id (`unblockerInfo`/`formatUnblockerLines`
+ * above) — this board's cards only, same as `card show`'s own gate resolution without workspace
+ * members.
+ */
+async function cmdSystemsShow(args: string[], io: CliIO): Promise<number> {
+  const { values, positionals } = parse('systems', args, {
+    json: { type: 'boolean', default: false },
+  });
+  const [id] = positionals;
+  if (!id) throw new UserError('usage: repoboard systems show <id> [--json]');
+  const root = await requireRoot(io);
+  const store = await openStore(root, { watch: false, now: io.now });
+  const { doc } = store.systems();
+  const system = doc?.systems.find((s) => s.id === id);
+  if (!doc || !system) throw new UserError(`unknown system "${id}"`);
+  const connections = doc.connections.filter((c) => c.from === id || c.to === id);
+  const pointers = await Promise.all(system.pointers.map((p) => resolveRefSpec(root, p)));
+  const tests = await systemTests(root, system.pointers);
+  const unblockers = system.unblockedBy.map((uid) =>
+    unblockerInfo(uid, store.list(), store.config),
+  );
+  if (values.json) {
+    io.stdout.write(
+      `${JSON.stringify({ system, connections, pointers, tests, unblockers }, null, 2)}\n`,
+    );
+    return 0;
+  }
+  const byId = new Map(unblockers.map((u) => [u.id, u]));
+  const row = formatSystemRow(doc, id, (uid) => {
+    const info = byId.get(uid);
+    return info ? formatUnblockerLines(info) : [`  ${uid}`];
+  });
+  io.stdout.write(row ?? '');
+  io.stdout.write(`${tests.line}\n`);
+  io.stdout.write(`${tests.measured.line}\n`);
+  for (const pt of tests.pointers) {
+    // RCB-113: `measured.pointers` walks the SAME `pointers` array in the SAME order, so a match
+    // by pointer string is always exact — `undefined` only when this pointer had no counterpart
+    // at all (never true today, but a suffix of '' degrades safely rather than throwing).
+    const m = tests.measured.pointers.find((p) => p.pointer === pt.pointer);
+    const suffix =
+      m === undefined ? '' : m.pct !== null ? ` · ${m.pct.toFixed(1)}%` : ` · ${m.reason}`;
+    if (pt.tests === null) {
+      io.stdout.write(`  ${pt.pointer}: ${pt.reason}${suffix}\n`);
+    } else if (pt.tests.length === 0) {
+      io.stdout.write(`  ${pt.pointer}: none${suffix}\n`);
+    } else {
+      io.stdout.write(`  ${pt.pointer}: ${pt.tests.length} — ${pt.tests.join(', ')}${suffix}\n`);
+    }
+  }
+  io.stdout.write(`  source: ${tests.source}\n`);
+  if (pointers.length > 0) {
+    io.stdout.write(`\n${formatResolvedRefs(pointers)}`);
+  }
+  return 0;
+}
+
+/**
+ * RCB-96 B: `--root` reuses `costRoot` (K7's own read-only root resolution) — detect can run
+ * against any directory, `.repoboard/` or not; only `--apply` requires one (brief). Errors
+ * (an existing systems.yml that fails to parse, or `--apply` with no `.repoboard/`) skip the
+ * table and print one line each on stderr, exit 1 — a table over a plan that is empty because
+ * nothing could be merged would be misleading, not useful.
+ */
+async function cmdSystemsDetect(args: string[], io: CliIO): Promise<number> {
+  const { values } = parse('systems', args, {
+    root: { type: 'string' },
+    apply: { type: 'boolean', default: false },
+    json: { type: 'boolean', default: false },
+  });
+  const root = await costRoot(values.root, io);
+  const now = io.now?.() ?? new Date();
+  const result = await runDetect(root, { apply: values.apply, now });
+  if (values.json) {
+    io.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+    return result.errors.length > 0 ? 1 : 0;
+  }
+  if (result.errors.length > 0) {
+    const err = io.stderr ?? io.stdout;
+    for (const e of result.errors) err.write(`${e}\n`);
+    return 1;
+  }
+  io.stdout.write(`${formatDetectReport(result.candidates, result.plan)}\n`);
+  io.stdout.write(
+    result.applied
+      ? `wrote .repoboard/systems.yml (${result.plan.added.length} added, ${result.plan.updated.length} updated, ${result.plan.skipped.length} hand rows kept)\n`
+      : 'dry run — nothing written; --apply merges into .repoboard/systems.yml\n',
+  );
+  return 0;
+}
+
+// ---- archive / sync-issues (P8.5) -----------------------------------------------------------
+
+async function cmdArchive(args: string[], io: CliIO): Promise<number> {
+  const { values } = parse('archive', args, {
+    'older-than': { type: 'string', default: '14d' },
+    'dry-run': { type: 'boolean', default: false },
+    as: { type: 'string' },
+  });
+  const root = await requireRoot(io);
+  const store = await openStore(root, { watch: false, now: io.now });
+  const now = io.now?.() ?? new Date();
+  const older = resolveOlderThan(values['older-than'] ?? '14d', now);
+  if (!older.ok) throw new UserError(older.error);
+  const ids = store.selectArchivable(older.cutoff);
+  if (values['dry-run']) {
+    io.stdout.write(
+      ids.length === 0 ? 'would archive 0\n' : `would archive ${ids.length}: ${ids.join(', ')}\n`,
+    );
+    return 0;
+  }
+  if (ids.length === 0) {
+    io.stdout.write('archived 0\n');
+    return 0;
+  }
+  const res = await store.archiveCards(ids, actorFrom(values.as, io));
+  if (!res.ok) throw new UserError(res.error);
+  io.stdout.write(`archived ${res.archived.length}: ${res.archived.join(', ')}\n`);
+  return 0;
+}
+
+/** `<path>#<heading>` — the first `#` splits the two; both halves are required. */
+function splitPathHeading(arg: string): { path: string; heading: string } {
+  const i = arg.indexOf('#');
+  const path = i === -1 ? arg : arg.slice(0, i);
+  const heading = i === -1 ? '' : arg.slice(i + 1);
+  if (!path || !heading) {
+    throw new UserError('usage: repoboard sync-issues <path>#<heading> [options]');
+  }
+  return { path, heading };
+}
+
+async function cmdSyncIssues(args: string[], io: CliIO): Promise<number> {
+  const { values, positionals } = parse('sync-issues', args, {
+    status: { type: 'string', default: 'todo' },
+    label: { type: 'string', default: 'issue' },
+    'dry-run': { type: 'boolean', default: false },
+    as: { type: 'string' },
+    root: { type: 'string' },
+  });
+  const [arg] = positionals;
+  if (!arg) throw new UserError('usage: repoboard sync-issues <path>#<heading> [options]');
+  const { path, heading } = splitPathHeading(arg);
+  // K7's own read-only root resolution (`costRoot`): --root measures ANY directory, board or
+  // not — the sibling-repo measurement (locked decision 6) is exactly this case.
+  const root = await costRoot(values.root, io);
+  const store = await openStore(root, { watch: false, now: io.now });
+  const input = {
+    path,
+    heading,
+    status: values.status ?? 'todo',
+    label: values.label ?? 'issue',
+  };
+  const outcome = await computeSyncPlan(store, input);
+  if (!outcome.ok) throw new UserError(outcome.error);
+  const { plan, malformed } = outcome;
+  for (const line of malformed) io.stdout.write(`skipped: malformed strike: ${line}\n`);
+  const createKs = plan.create.map((c) => `K${c.n}`);
+  const closeKs = plan.close.map((c) => `K${c.n}`);
+  if (values['dry-run']) {
+    io.stdout.write(
+      `would create ${plan.create.length}, close ${plan.close.length}, ` +
+        `malformed ${malformed.length}, unchanged ${plan.unchanged}\n`,
+    );
+    if (createKs.length > 0) io.stdout.write(`create: ${createKs.join(' ')}\n`);
+    if (closeKs.length > 0) io.stdout.write(`close: ${closeKs.join(' ')}\n`);
+    return 0;
+  }
+  const actor = actorFrom(values.as, io);
+  const applied = await applySyncPlan(store, input, plan, actor);
+  io.stdout.write(
+    `created ${applied.created.length}, closed ${applied.closed.length}, ` +
+      `malformed ${malformed.length}\n`,
+  );
+  for (const e of applied.errors) (io.stderr ?? io.stdout).write(`error: ${e}\n`);
+  return applied.errors.length > 0 ? 1 : 0;
+}
+
+/**
+ * RCB-42: `--sibling <name>=<url>` — split on the FIRST `=` (a URL can contain `=` itself, e.g. a
+ * query string; a name cannot, by this rule, so the first one is unambiguous). Both halves
+ * trimmed and required; the url must pass the same `isSiblingUrl` rule `SiblingSchema` enforces
+ * on board.yml's own `siblings:` list, so the two entry points can never disagree.
+ */
+function parseSiblingFlag(raw: string): Sibling {
+  const i = raw.indexOf('=');
+  const name = (i === -1 ? raw : raw.slice(0, i)).trim();
+  const url = (i === -1 ? '' : raw.slice(i + 1)).trim();
+  if (!name || !url) {
+    throw new UserError(`--sibling must be "<name>=<url>" (got "${raw}")`);
+  }
+  if (!isSiblingUrl(url)) {
+    throw new UserError(`--sibling url must be an http(s) URL (got "${raw}")`);
+  }
+  return { name, url };
+}
+
+/**
+ * RCB-153 W6: `serve` with no `--root` at a workspace root — roots = [workspace, ...members in
+ * `repos:` order]. The workspace keeps `assignRepoKeys`'s own basename key; every member keeps
+ * its CONFIGURED `repos[].key` (never re-derived from its folder name — the config already
+ * promised that key to whoever wrote `board.yml`, and this is the SAME key `RepoRegistry`,
+ * `GET /api/repos` and `serve`'s own startup line all end up printing, because they all read it
+ * off the one `RootEntry[]` this function returns). `repos[].key`'s shape and uniqueness AMONG
+ * MEMBERS is already enforced by `BoardConfigSchema` at parse time (`openStore` → `parseBoard`);
+ * the only NEW collision checked here is a member key vs. the workspace's OWN key, or the
+ * reserved `repos` word (RCB-43 slice 2: `GET /api/repos` is the list route). A member whose
+ * `root` does not exist (or has no `.repoboard/`) is not an error here — `hasBoardDir`/`RepoRegistry`
+ * already treat that as map-only, and `cmdServe`'s per-root startup line says which key got which
+ * (`(board)` vs `(map-only)`), so a missing member is still named, never silently dropped.
+ */
+function workspaceServeRoots(workspaceRoot: string, config: BoardConfig): RootEntry[] {
+  const wsKey = basename(workspaceRoot).toLowerCase();
+  const entries: RootEntry[] = [{ key: wsKey, root: workspaceRoot }];
+  const seenKeys = new Set<string>([wsKey, 'repos']);
+  for (const repo of config.repos ?? []) {
+    if (repo.key === wsKey) {
+      throw new UserError(
+        `workspace member key "${repo.key}" collides with the workspace's own key ` +
+          `(rename one in board.yml)`,
+      );
+    }
+    if (repo.key === 'repos') {
+      throw new UserError(
+        'workspace member key "repos" is reserved (GET /api/repos lists every root); ' +
+          'rename it in board.yml',
+      );
+    }
+    if (seenKeys.has(repo.key)) {
+      throw new UserError(`duplicate workspace member key "${repo.key}" in board.yml`);
+    }
+    seenKeys.add(repo.key);
+    entries.push({ key: repo.key, root: resolveMemberRoot(workspaceRoot, repo.root) });
+  }
+  return entries;
+}
+
+function openInBrowser(url: string): void {
+  const [cmd, args] =
+    process.platform === 'darwin'
+      ? ['open', [url]]
+      : process.platform === 'win32'
+        ? ['cmd', ['/c', 'start', '', url]]
+        : ['xdg-open', [url]];
+  try {
+    spawn(cmd, args, { detached: true, stdio: 'ignore' })
+      .on('error', () => undefined)
+      .unref();
+  } catch {
+    // Not fatal: the URL is printed anyway.
+  }
+}
+
+async function cmdServe(args: string[], io: CliIO): Promise<number> {
+  const { values } = parse('serve', args, {
+    root: { type: 'string', multiple: true },
+    port: { type: 'string', default: '4242' },
+    open: { type: 'boolean', default: false },
+    'no-fun': { type: 'boolean', default: false },
+    'watch-cap': { type: 'string' },
+    sibling: { type: 'string', multiple: true },
+  });
+  const siblingsFlag = (values.sibling ?? []).map(parseSiblingFlag);
+  const port = Number.parseInt(values.port ?? '', 10);
+  if (!Number.isInteger(port) || port < 0 || port > 65535) {
+    throw new UserError(`--port must be 0–65535 (got "${values.port}")`);
+  }
+  // K12: hard cap on what the repo watcher may hold before it turns itself off (`DEFAULT_WATCH_CAP`,
+  // 20,000, when the flag is absent).
+  let watchCap: number | undefined;
+  if (values['watch-cap'] !== undefined) {
+    watchCap = Number.parseInt(values['watch-cap'], 10);
+    if (!Number.isInteger(watchCap) || watchCap <= 0) {
+      throw new UserError(`--watch-cap must be a positive integer (got "${values['watch-cap']}")`);
+    }
+  }
+  // RCB-43 slice 1: `--root` is repeatable, in order; zero `--root` keeps today's climb-from-cwd
+  // (`serveRoot(undefined, io)`). Each given `--root` goes through the same directory check as
+  // before — `serveRoot` never searches upward for a `--root` it was actually given.
+  const rootFlags = values.root ?? [];
+  const roots =
+    rootFlags.length > 0
+      ? await Promise.all(rootFlags.map((r) => serveRoot(r, io)))
+      : [await serveRoot(undefined, io)];
+  const primaryRoot = roots[0] as string;
+  const err = io.stderr ?? io.stdout;
+  const store = await openStore(primaryRoot, { watch: true, now: io.now });
+  store.on('warning', (m) => err.write(`warning: ${m}\n`));
+  // RCB-153 W6: NO `--root` at all, and the found board has `repos:` → the workspace plus every
+  // member, keyed by `repos[].key` (`workspaceServeRoots`) instead of `assignRepoKeys`. Any
+  // `--root` flag is the override (W6: "explicit `--root` flags still work exactly as today —
+  // no workspace expansion when any `--root` is given"), so `rootFlags.length > 0` skips this
+  // entirely and `roots`/the print loop below stay byte-identical to before this card.
+  let keyedRoots: RootEntry[] | undefined;
+  if (rootFlags.length === 0 && (store.config.repos?.length ?? 0) > 0) {
+    try {
+      keyedRoots = workspaceServeRoots(primaryRoot, store.config);
+    } catch (e) {
+      await store.close();
+      throw e;
+    }
+  }
+  let server: RunningServer;
+  try {
+    server = await startServer({
+      store,
+      port,
+      fun: !values['no-fun'],
+      ...(watchCap !== undefined ? { watchCap } : {}),
+      siblingsFlag,
+      warn: (m) => err.write(`warning: ${m}\n`),
+      roots,
+      ...(keyedRoots ? { keyedRoots } : {}),
+      now: io.now,
+    });
+  } catch (e) {
+    await store.close();
+    const code = (e as NodeJS.ErrnoException).code;
+    if (code === 'EADDRINUSE') throw new UserError(`port ${port} is already in use`);
+    throw e;
+  }
+  io.stdout.write(`repoboard: serving ${primaryRoot}\n  ${server.url}\n`);
+  // RCB-43 slice 1 / RCB-153 W6: one line per root, primary first and marked — the SAME keys
+  // `GET /api/repos` uses (`keyedRoots` when this is a workspace serve, `assignRepoKeys(roots)`
+  // otherwise), so a line here and an entry there always agree.
+  for (const { key, root: r } of keyedRoots ?? assignRepoKeys(roots)) {
+    const isPrimary = r === primaryRoot;
+    const board = (isPrimary ? store.hasBoard : hasBoardDir(r)) ? 'board' : 'map-only';
+    io.stdout.write(`  ${key}  ${r}  (${board})${isPrimary ? '  primary' : ''}\n`);
+  }
+  io.stdout.write(`  repo watcher: ${server.watchedPaths().length} paths\n`);
+  if (!store.hasBoard) {
+    io.stdout.write('  (no .repoboard/ here: map-only, and nothing will be written)\n');
+  }
+  if (!server.webDir) io.stdout.write('  (web not built: API only, see the page)\n');
+  if (values.open) (io.openUrl ?? openInBrowser)(server.url);
+  io.onServe?.(server);
+
+  await new Promise<void>((done) => {
+    const stop = () => {
+      process.off('SIGINT', stop);
+      process.off('SIGTERM', stop);
+      done();
+    };
+    if (io.signal?.aborted) return stop();
+    io.signal?.addEventListener('abort', stop, { once: true });
+    process.on('SIGINT', stop);
+    process.on('SIGTERM', stop);
+  });
+  await server.close();
+  await store.close();
+  return 0;
+}
+
+/**
+ * `repoboard mcp [--root <dir>]`: the MCP server on stdin/stdout. Nothing else may write to stdout
+ * while it runs (the transport owns it); warnings go to stderr. Returns when stdin closes.
+ */
+async function cmdMcp(args: string[], io: CliIO): Promise<number> {
+  const { values } = parse('mcp', args, { root: { type: 'string' } });
+  const root = await requireRoot(values.root === undefined ? io : { ...io, cwd: values.root });
+  const env = io.env ?? process.env;
+  const err = io.stderr ?? process.stderr;
+  await serveMcp({
+    root,
+    defaultActor: env.REPOBOARD_ACTOR || 'mcp',
+    now: io.now,
+    signal: io.signal,
+    warn: (m) => err.write(`repoboard mcp: warning: ${m}\n`),
+  });
+  return 0;
+}
+
+// ---- dispatch ---------------------------------------------------------------------------
+
+export async function run(argv: string[], io: CliIO): Promise<number> {
+  const err = io.stderr ?? io.stdout;
+  let cmd: string | undefined;
+  let sub: string | undefined;
+  try {
+    cmd = argv[0];
+    sub = argv[1];
+    const rest = argv.slice(2);
+    if (cmd === undefined) {
+      io.stdout.write(QUICKSTART);
+      return 0;
+    }
+    if (cmd === '--help' || cmd === '-h' || cmd === 'help') {
+      io.stdout.write(`${QUICKSTART}\n${HELP}`);
+      return 0;
+    }
+    if (cmd === '--version' || cmd === '-v') {
+      io.stdout.write(`${VERSION}\n`);
+      return 0;
+    }
+    // RCB-134: `--help`/`-h` anywhere after a known command prints just that command's usage
+    // block (derived from HELP by usageFor) and exits 0 — no store is opened, nothing written.
+    if (argv.includes('--help') || argv.includes('-h')) {
+      const clean = argv.filter((a) => a !== '--help' && a !== '-h');
+      const usage = usageFor(clean[0] ?? cmd, clean[1]);
+      if (usage !== null) {
+        io.stdout.write(`${usage}\nrun \`repoboard --help\` for every command\n`);
+        return 0;
+      }
+      // Not a known command/subcommand: fall through so normal dispatch reports it.
+    }
+    if (cmd === 'init') return await cmdInit(argv.slice(1), io);
+    if (cmd === 'serve') return await cmdServe(argv.slice(1), io);
+    if (cmd === 'mcp') return await cmdMcp(argv.slice(1), io);
+    if (cmd === 'card') {
+      if (sub === 'add') return await cmdCardAdd(rest, io);
+      if (sub === 'move') return await cmdCardMove(rest, io);
+      if (sub === 'update') return await cmdCardUpdate(rest, io);
+      if (sub === 'list') return await cmdCardList(rest, io);
+      if (sub === 'show') return await cmdCardShow(rest, io);
+      if (sub === 'ask') return await cmdCardAsk(rest, io);
+      if (sub === 'decide') return await cmdCardDecide(rest, io);
+      if (sub === 'note') return await cmdCardNote(rest, io);
+      throw new UserError(
+        `unknown card command "${sub ?? ''}" (add, move, update, list, show, ask, decide, note)`,
+      );
+    }
+    if (cmd === 'lease') {
+      if (sub === 'take') return await cmdLeaseTake(rest, io);
+      if (sub === 'release') return await cmdLeaseRelease(rest, io);
+      if (sub === 'list') return await cmdLeaseList(rest, io);
+      throw new UserError(`unknown lease command "${sub ?? ''}" (take, release, list)`);
+    }
+    if (cmd === 'window') {
+      if (sub === 'add') return await cmdWindowAdd(rest, io);
+      if (sub === 'list') return await cmdWindowList(rest, io);
+      if (sub === 'check') return await cmdWindowCheck(rest, io);
+      throw new UserError(`unknown window command "${sub ?? ''}" (add, list, check)`);
+    }
+    if (cmd === 'columns') {
+      if (sub === 'set') return await cmdColumnsSet(rest, io);
+      return await cmdColumns(argv.slice(1), io);
+    }
+    if (cmd === 'state') return await cmdState(argv.slice(1), io);
+    if (cmd === 'log') {
+      if (sub === 'show') return await cmdLogShow(rest, io);
+      if (sub === '--last') return await cmdLogLast(rest, io);
+      return await cmdLogAppend(argv.slice(1), io);
+    }
+    if (cmd === 'seat') return await cmdSeat(argv.slice(1), io);
+    if (cmd === 'decisions') return await cmdDecisions(argv.slice(1), io);
+    if (cmd === 'check') return await cmdCheck(argv.slice(1), io);
+    if (cmd === 'gate') return await cmdGate(sub, rest, io);
+    if (cmd === 'local') return await cmdLocal(sub, rest, io);
+    if (cmd === 'cost') return await cmdCost(argv.slice(1), io);
+    if (cmd === 'systems') {
+      if (sub === 'detect') return await cmdSystemsDetect(rest, io);
+      if (sub === 'show') return await cmdSystemsShow(rest, io);
+      return await cmdSystems(argv.slice(1), io);
+    }
+    if (cmd === 'archive') return await cmdArchive(argv.slice(1), io);
+    if (cmd === 'sync-issues') return await cmdSyncIssues(argv.slice(1), io);
+    throw new UserError(`unknown command "${cmd}" (try repoboard --help)`);
+  } catch (e) {
+    if (e instanceof ParseError) {
+      const usage = cmd !== undefined ? usageFor(cmd, sub) : null;
+      err.write(
+        `${e.message}\n${usage !== null ? `${usage}\n` : ''}run \`repoboard --help\` for every command\n`,
+      );
+      return 1;
+    }
+    if (e instanceof UserError) {
+      err.write(`repoboard: ${e.message}\n`);
+      return 1;
+    }
+    const debug = (io.env ?? process.env).REPOBOARD_DEBUG === '1';
+    err.write(formatCrash(e, debug));
+    return 2;
+  }
+}
+
+function isMainModule(): boolean {
+  const entry = process.argv[1];
+  if (!entry) return false;
+  try {
+    return realpathSync(entry) === fileURLToPath(import.meta.url);
+  } catch {
+    return false;
+  }
+}
+
+if (isMainModule()) {
+  run(process.argv.slice(2), {
+    cwd: process.cwd(),
+    stdout: process.stdout,
+    stderr: process.stderr,
+    env: process.env,
+  })
+    .then((code) => {
+      process.exitCode = code;
+    })
+    .catch((e: unknown) => {
+      // Defense in depth: `run()` catches everything itself, but nothing may ever print a raw
+      // Node stack with absolute paths — not even something that somehow escapes `run()`.
+      process.stderr.write(formatCrash(e, process.env.REPOBOARD_DEBUG === '1'));
+      process.exitCode = 2;
+    });
+}

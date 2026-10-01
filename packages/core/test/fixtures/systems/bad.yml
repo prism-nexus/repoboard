@@ -1,0 +1,54 @@
+environments:
+  dev:  { note: "dev" }
+  prod: { note: "prod" }
+systems:
+  - id: api
+    name: API
+    kind: service
+    layer: middleware
+    env: [dev, prod]
+    runtime: { dev: "x", prod: "y" }
+    owner: null
+    pointers: []
+    docs: []
+    why: null
+    source: { hand: "owner", at: "2026-09-22T00:00:00Z" }
+  - id: db
+    name: Database
+    kind: db
+    layer: data
+    env: []
+    runtime: { dev: "x", prod: "y" }
+    owner: null
+    pointers: []
+    docs: []
+    why: null
+    source: { hand: "owner", at: "2026-09-22T00:00:00Z" }
+  - id: worker
+    name: Worker
+    kind: lambda
+    layer: app
+    env: [dev, prod]
+    runtime: { dev: "x", prod: "y" }
+    owner: null
+    pointers: []
+    docs: []
+    why: null
+    source: { hand: "owner", at: "2026-09-22T00:00:00Z" }
+  - id: worker
+    name: Worker two
+    kind: service
+    layer: app
+    env: [dev, prod]
+    runtime: { dev: "x", prod: "y" }
+    owner: null
+    pointers: []
+    docs: []
+    why: null
+    source: { hand: "owner", at: "2026-09-22T00:00:00Z" }
+connections:
+  - from: api
+    to: postgres
+    via: null
+    env: [dev, prod]
+    source: { hand: "owner", at: "2026-09-22T00:00:00Z" }

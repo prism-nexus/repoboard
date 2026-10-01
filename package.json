@@ -1,0 +1,27 @@
+{
+  "name": "repoboard-monorepo",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "repoboard (Remember · Connect · Build) — local-first repo dashboard and agent-driven Kanban board",
+  "license": "MIT",
+  "packageManager": "pnpm@11.18.0",
+  "engines": {
+    "node": ">=20.19.0"
+  },
+  "scripts": {
+    "test": "vitest run --coverage && pnpm --filter @repoboard/web check:size",
+    "typecheck": "pnpm -r typecheck",
+    "lint": "biome check .",
+    "format": "biome format --write .",
+    "build": "pnpm -r build && node scripts/copy-web.mjs && node scripts/stamp-dist.mjs",
+    "dev": "pnpm -r --parallel dev"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "^2.5.11",
+    "@types/node": "^26.4.1",
+    "@vitest/coverage-v8": "4.1.11",
+    "typescript": "^7.0.2",
+    "vitest": "^4.1.11"
+  }
+}

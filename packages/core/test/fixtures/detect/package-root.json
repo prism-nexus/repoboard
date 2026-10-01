@@ -1,0 +1,5 @@
+{
+  "name": "detect-fixture-root",
+  "private": true,
+  "workspaces": ["packages/*", "apps/*", "!apps/archived"]
+}

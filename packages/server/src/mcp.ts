@@ -1,0 +1,1637 @@
+/**
+ * P5.1 MCP server (BUILD-PLAN D4: three agent surfaces, one core). Every tool calls the same
+ * `CardStore` the CLI and HTTP use, which calls @repoboard/core — one code path. Transport is stdio,
+ * so while `repoboard mcp` runs, stdout belongs to the protocol and warnings go to stderr.
+ *
+ * Tool descriptions are written for an agent that has never seen this board: they say what a
+ * card is, that `status` is a column id, and that `list_cards` is the cheap first call.
+ */
+import { basename } from 'node:path';
+import {
+  answeredDecisions,
+  type BoardConfig,
+  blockedReason,
+  type Card,
+  type CardPatch,
+  type Column,
+  type CreateCardInput,
+  computeBoardSummary,
+  exitCodeForFindings,
+  type Finding,
+  filterLogBlocks,
+  type GateMemberFacts,
+  isStale,
+  type Lease,
+  type LeasesDoc,
+  liveLeases,
+  needsDecision,
+  renderState,
+  resolveOlderThan,
+  resolveSince,
+  type SeatHolder,
+  type StateSectionName,
+  toIso,
+  type Window,
+  workspaceLeaseLines,
+  workspaceOwnerQueueLines,
+  workspaceSeatLines,
+} from '@repoboard/core';
+import { z } from 'zod';
+import { filterCards, ownerQueue } from './card-query.js';
+import { holderFromEnv } from './holder.js';
+import { applySyncPlan, computeSyncPlan } from './issues.js';
+import { type CallToolResult, McpServer, StdioServerTransport } from './mcp-rpc.js';
+import { resolveCardRefs, resolveRefSpec } from './refs.js';
+import { loadGateHealth, recordGate } from './repo-health.js';
+import { type CardStore, openStore } from './store.js';
+import { systemTests } from './systems-tests.js';
+import { VERSION } from './version.js';
+import {
+  checkMembers,
+  gateMemberFacts,
+  memberStateRepos,
+  openWorkspaceBoards,
+  resolveWorkspaceCardRef,
+  resolveWorkspaceWriteTarget,
+  Workspace,
+  workspaceGateMembers,
+} from './workspace.js';
+
+export const MCP_TOOL_NAMES = [
+  'list_cards',
+  'get_card',
+  'create_card',
+  'move_card',
+  'update_card',
+  'append_log',
+  'add_note',
+  'board_summary',
+  'set_columns',
+  'ask_owner',
+  'record_decision',
+  'list_decisions',
+  'take_lease',
+  'release_lease',
+  'list_leases',
+  'add_window',
+  'check_window',
+  'get_state',
+  'set_state_section',
+  'append_repo_log',
+  'get_log',
+  'get_seat',
+  'record_gate',
+  'get_gate',
+  'check',
+  'cost',
+  'list_systems',
+  'get_system',
+  'archive_cards',
+  'sync_issues',
+] as const;
+
+export interface McpServerOptions {
+  store: CardStore;
+  /** Used when a tool call carries no `actor`: `$REPOBOARD_ACTOR`, then `mcp` (see `serveMcp`). */
+  defaultActor: string;
+  /** Clock, for tests. */
+  now?: () => Date;
+  /**
+   * RCB-198: who is running this server, for `append_repo_log` — the store lets only the pane that
+   * holds a seat write its log (`force: true` overrides, audited). `serveMcp` measures it once at
+   * startup (`holderFromEnv`, RCB-194 P3); omitted or `null` is a caller with no pane, "web", which
+   * is refused a seat that has a recorded holder unless it says `force`.
+   */
+  holder?: SeatHolder | null;
+}
+
+/** The compact row `list_cards` returns: everything but the body. Absent scalars are null. */
+export interface CardRow {
+  id: string;
+  title: string;
+  status: string;
+  assignee: string | null;
+  priority: string | null;
+  size: string | null;
+  labels: string[];
+  files: string[];
+  /** RCB-68: this card is a STEP of that phase card, or null. */
+  parent: string | null;
+  /** RCB-68: the free short label (e.g. `PH.3`) marking which step, or null. */
+  phase: string | null;
+  /** RCB-68: the raw `gate:` value (a card id or a sentence), or null. */
+  gate: string | null;
+  /** RCB-68: `blockedReason` against THIS board — null when not blocked. */
+  blocked: string | null;
+  updated: string;
+}
+
+/** Every list surface (CLI `--json`, MCP `list_cards`) formats rows here: one JSON object per
+ * line inside a JSON array. Still valid JSON; one `grep` finds a card; measured half the bytes of
+ * 2-space pretty printing on this repo's 27 cards (K6). */
+export function formatRows(rows: readonly unknown[]): string {
+  if (rows.length === 0) return '[]';
+  return `[\n${rows.map((r) => JSON.stringify(r)).join(',\n')}\n]`;
+}
+
+/**
+ * RCB-68: the signature grows on purpose — a row cannot be built without the facts that decide
+ * `blocked` (every OTHER card on the board, and the board's own columns).
+ *
+ * RCB-154: `members` is REQUIRED (never defaulted here) — the same workspace gate-member facts
+ * `card list`/`show`/`move` already resolve a `gate:` against, so `list_cards`/`board_summary`'s
+ * `blocked` field stops reading "no such card" for a gate that names an already-clear MEMBER
+ * card. A caller with no workspace passes `[]`.
+ */
+export function toRow(
+  card: Card,
+  cards: readonly Card[],
+  config: BoardConfig,
+  members: readonly GateMemberFacts[],
+): CardRow {
+  return {
+    id: card.id,
+    title: card.title,
+    status: card.status,
+    assignee: card.assignee ?? null,
+    priority: card.priority ?? null,
+    size: card.size ?? null,
+    labels: card.labels ?? [],
+    files: card.files ?? [],
+    parent: card.parent ?? null,
+    phase: card.phase ?? null,
+    gate: card.gate ?? null,
+    blocked: blockedReason(card, cards, config, members),
+    updated: card.updated,
+  };
+}
+
+/** P8.2: the row shape `lease list --json`/`list_leases` share (locked decision 7). */
+export interface LeaseRow {
+  resource: string;
+  holder: string;
+  since: string;
+  until: string | null;
+  state: 'live' | 'stale';
+  note: string | null;
+}
+
+export function toLeaseRow(l: Lease, now: Date): LeaseRow {
+  return {
+    resource: l.resource,
+    holder: l.holder,
+    since: l.since,
+    until: l.until ?? null,
+    state: isStale(l, now) ? 'stale' : 'live',
+    note: l.note ?? null,
+  };
+}
+
+/**
+ * RCB-131: `state --json`'s and `get_state`'s `leases` field share this ONE function — live
+ * leases only (`liveLeases`), each shaped by `toLeaseRow` (same row shape `lease list --json`/
+ * `list_leases` already use) — so the CLI and MCP can never disagree about which leases are
+ * "live" or how a row looks.
+ */
+export function liveLeaseRows(doc: LeasesDoc, now: Date): LeaseRow[] {
+  return liveLeases(doc, now).map((l) => toLeaseRow(l, now));
+}
+
+export interface WindowRow {
+  resource: string;
+  start: string;
+  end: string;
+  name: string;
+}
+
+export function toWindowRow(w: Window): WindowRow {
+  return { resource: w.resource, start: w.start, end: w.end, name: w.name };
+}
+
+function ok(payload: unknown): CallToolResult {
+  return { content: [{ type: 'text', text: JSON.stringify(payload, null, 2) }] };
+}
+
+function fail(message: string): CallToolResult {
+  return { isError: true, content: [{ type: 'text', text: message }] };
+}
+
+/** Prefix a store/core error with the input field it is about, so the agent knows what to fix. */
+function nameField(error: string): string {
+  if (error.startsWith('unknown column')) return `status: ${error}`;
+  if (error.startsWith('unknown card')) return `id: ${error}`;
+  if (error === 'patch is empty') {
+    return 'nothing to update: pass at least one of title, assignee, priority, size, labels, files';
+  }
+  if (error.startsWith('unknown option')) return `letter: ${error}`;
+  if (error.startsWith('duplicate option letter')) return `options: ${error}`;
+  return error;
+}
+
+const CARD_INTRO =
+  "A card is one task on this repository's Kanban board: the file `.repoboard/cards/<id>.md`, " +
+  'YAML frontmatter (id, title, status, assignee, priority, size, labels, files, refs, parent, ' +
+  'phase, gate, decision, created, updated) plus a markdown body with a `## Log` section. `status` is ' +
+  'always a column id from `.repoboard/board.yml`. A card may carry a `decision` block (P8.1): ' +
+  'a question, optional lettered options, and — once answered — `chosen`/`words`. ' +
+  'A DECIDED card is authority: do not re-ask it and do not wait for a relay — read ' +
+  '`decision.chosen` and `decision.words` yourself. RCB-68: `parent` makes a card a STEP of ' +
+  'that phase card; `phase` (e.g. `PH.3`) marks which step; `gate` (a card id or a sentence) is ' +
+  'what blocks it — a card-id gate clears once that card is done or decided. ';
+
+const ACTOR_DESC =
+  'Who is acting, written `<tool>/<role>` (e.g. `claude/web-agent`) so the board can draw a ' +
+  'stable avatar. Defaults to $REPOBOARD_ACTOR, then "mcp".';
+
+/** P8.2: the five lease/window tools stay terse (orchestrator note: aim <=700 B each) — no CARD_INTRO. */
+const ACTOR_SHORT = 'Who is acting, e.g. claude/agent. Default: $REPOBOARD_ACTOR, then "mcp".';
+
+const PRIORITY = z.enum(['high', 'medium', 'low']);
+const SIZE = z.enum(['S', 'M', 'L', 'XL']);
+
+/** Build the server. Call `server.connect(transport)` to serve; tests use an in-memory pair. */
+export function createMcpServer(opts: McpServerOptions): McpServer {
+  const { store, defaultActor } = opts;
+  const holder = opts.holder ?? null;
+  const now = opts.now ?? (() => new Date());
+  const columnIds = () => store.config.columns.map((c) => c.id).join(', ');
+  // RCB-153 W7: fixed for the life of this server (like `columnIds` above) — a `repos:` added to
+  // board.yml after startup gains the `repo` argument only on the next `repoboard mcp` restart,
+  // same limitation `columnIds()`'s baked-in column list already has for a column added live.
+  const repos = store.config.repos ?? [];
+  const isWorkspace = repos.length > 0;
+  const workspaceKey = () => basename(store.root).toLowerCase();
+  const REPO_DESC =
+    'Workspace member key (this board only when omitted). `list_cards`/`list_leases` also take "all".';
+  const server = new McpServer(
+    { name: 'repoboard', version: VERSION },
+    {
+      instructions:
+        `${CARD_INTRO}Column ids on this board: ${columnIds()}. Call list_cards or ` +
+        'board_summary first to see what exists. Before starting a task, move its card to the ' +
+        'active column (usually `doing`) with your actor name; when done, append_log what you ' +
+        'verified (or move it to `done` if you own that call). Use ask_owner when a task needs a ' +
+        'human decision instead of guessing or waiting on a chat relay.',
+    },
+  );
+
+  const listCardsFields = {
+    status: z
+      .string()
+      .optional()
+      .describe(`Only cards in this column id (one of: ${columnIds()}).`),
+    assignee: z.string().optional().describe('Only cards whose assignee equals this string.'),
+    label: z.string().optional().describe('Only cards whose labels include this label.'),
+    size: SIZE.optional().describe('Only cards of this size.'),
+    needsDecision: z
+      .boolean()
+      .optional()
+      .describe('Only cards with an OPEN decision (asked, not yet answered) — the owner queue.'),
+    parent: z
+      .string()
+      .optional()
+      .describe("RCB-68: only that card's STEPS, in phase order (not id order)."),
+    unblocked: z
+      .boolean()
+      .optional()
+      .describe('With parent: keep only its not-done, not-blocked steps.'),
+    full: z
+      .boolean()
+      .optional()
+      .describe("Include each card's markdown body and `## Log`. Default false."),
+  };
+  const listCardsDescription =
+    'Returns a compact JSON array of {id, title, status, assignee, priority, ' +
+    'size, labels, files, parent, phase, gate, blocked, updated} without bodies (RCB-68: parent, ' +
+    'phase, gate mirror the frontmatter; blocked is the reason or null). Call this first: ' +
+    `it is the cheap way to learn what exists and which column ids are in use (this board: ` +
+    `${columnIds()}). Filters are ` +
+    'exact matches and combine with AND; omit them all for every card. Pass full: true ' +
+    'only when you need every body at once (several times the bytes); get_card is cheaper ' +
+    'for one.' +
+    (isWorkspace
+      ? ' RCB-153: repo narrows to one workspace member (or "all" for every board, each row ' +
+        'gaining a repo field); omitted, this is the board you opened only.'
+      : '');
+  const listCardsHandler = async ({
+    status,
+    assignee,
+    label,
+    size,
+    needsDecision: needsDecisionFilter,
+    parent,
+    unblocked,
+    full,
+    repo,
+  }: {
+    status?: string;
+    assignee?: string;
+    label?: string;
+    size?: z.infer<typeof SIZE>;
+    needsDecision?: boolean;
+    parent?: string;
+    unblocked?: boolean;
+    full?: boolean;
+    repo?: string;
+  }): Promise<CallToolResult> => {
+    const filters = {
+      status,
+      assignee,
+      label,
+      size,
+      needsDecision: needsDecisionFilter,
+      parent,
+      unblocked,
+    };
+    if (repo !== undefined) {
+      // RCB-153 W7: fresh Workspace per call (never memoised across calls — see
+      // `openWorkspaceBoards`'s doc comment on why).
+      const workspace = new Workspace(store.root, repos, now);
+      const wsKey = workspaceKey();
+      // RCB-154: only the workspace's OWN row carries the W4/W5-gate member list — a member's own
+      // gate stays single-board, the same "clear-ness from the MEMBER's own config" rule
+      // `cli.ts`'s `cmdCardListAcrossRepos` already applies.
+      let targets: { key: string; store: CardStore; members: readonly GateMemberFacts[] }[];
+      if (repo === 'all') {
+        const opened = await workspace.openAll();
+        const members = gateMemberFacts(opened);
+        targets = [
+          { key: wsKey, store, members },
+          ...opened.map((m) => ({ key: m.key, store: m.store, members: [] as GateMemberFacts[] })),
+        ];
+      } else if (repo === wsKey) {
+        targets = [{ key: wsKey, store, members: await workspaceGateMembers(store, now) }];
+      } else {
+        const opening = workspace.open(repo);
+        if (!opening) return fail(`repo: unknown workspace member "${repo}"`);
+        targets = [{ key: repo, store: await opening, members: [] }];
+      }
+      const rows: unknown[] = [];
+      for (const t of targets) {
+        const all = t.store.list();
+        let cards: Card[];
+        try {
+          cards = filterCards(all, t.store.config, filters, t.members);
+        } catch (e) {
+          return fail((e as Error).message);
+        }
+        const tRows: readonly unknown[] = full
+          ? cards
+          : cards.map((c) => toRow(c, all, t.store.config, t.members));
+        for (const r of tRows) rows.push({ ...(r as Record<string, unknown>), repo: t.key });
+      }
+      return { content: [{ type: 'text', text: formatRows(rows) }] };
+    }
+    // RCB-154: this board's own gate-member facts — `[]` on a plain board — so a plain
+    // `list_cards` (no `repo`) at a workspace resolves a step's `gate:` against a member too.
+    const members = await workspaceGateMembers(store, now);
+    const all = store.list();
+    let cards: Card[];
+    try {
+      cards = filterCards(all, store.config, filters, members);
+    } catch (e) {
+      return fail((e as Error).message);
+    }
+    const rows: readonly unknown[] = full
+      ? cards
+      : cards.map((c) => toRow(c, all, store.config, members));
+    return { content: [{ type: 'text', text: formatRows(rows) }] };
+  };
+  if (isWorkspace) {
+    server.registerTool(
+      'list_cards',
+      {
+        title: 'List cards',
+        description: listCardsDescription,
+        inputSchema: { ...listCardsFields, repo: z.string().optional().describe(REPO_DESC) },
+        annotations: { readOnlyHint: true },
+      },
+      listCardsHandler,
+    );
+  } else {
+    server.registerTool(
+      'list_cards',
+      {
+        title: 'List cards',
+        description: listCardsDescription,
+        inputSchema: listCardsFields,
+        annotations: { readOnlyHint: true },
+      },
+      listCardsHandler,
+    );
+  }
+
+  server.registerTool(
+    'get_card',
+    {
+      title: 'Get one card',
+      description:
+        'A DECIDED card is authority: read `decision.chosen`/`words`, do not re-ask. ' +
+        'Returns the full card as JSON, including its markdown body and ' +
+        '`## Log` history. Use list_cards to find ids. With resolveRefs: true, `refs` becomes ' +
+        'the referenced lines read live from each file: [{spec, path, start, end, text, ' +
+        'truncated, error}], text null with an error when a ref does not resolve.',
+      inputSchema: {
+        id: z.string().describe('The card id from its frontmatter, e.g. RB-12.'),
+        resolveRefs: z
+          .boolean()
+          .optional()
+          .describe('Replace the refs: specs with their resolved lines. Default false.'),
+      },
+      annotations: { readOnlyHint: true },
+    },
+    async ({ id, resolveRefs }) => {
+      // RCB-153 W4: resolves `id` across the workspace by prefix (`ws: null` on a plain board —
+      // no `repos:` — returns `store`/`id` untouched, so this is byte-identical to before).
+      const ws = await openWorkspaceBoards(store.root, store, now);
+      const target = resolveWorkspaceCardRef(store, ws, id);
+      if (!target.ok) return fail(target.error);
+      const card = target.store.get(target.id);
+      if (!card) return fail(`id: unknown card "${target.id}" (list_cards shows the ids)`);
+      if (!resolveRefs) return ok(card);
+      return ok({ ...card, refs: await resolveCardRefs(target.store.root, card) });
+    },
+  );
+
+  const createCardFields = {
+    title: z.string().min(1).describe('One line. Required.'),
+    status: z
+      .string()
+      .optional()
+      .describe(`Column id (one of: ${columnIds()}). Default: first column.`),
+    assignee: z.string().optional().describe('Who owns it, e.g. claude/web-agent.'),
+    priority: PRIORITY.optional(),
+    size: SIZE.optional().describe(
+      'S ≤2h · M half a day · L days, investigate first · XL plan-sized',
+    ),
+    labels: z.array(z.string()).optional(),
+    files: z.array(z.string()).optional().describe('Repo-relative paths the task touches.'),
+    refs: z
+      .array(z.string())
+      .optional()
+      .describe(
+        'Pointers the board renders live: path#Heading, path@Token, path:L10-L20, or path. ' +
+          'Point at where a note lives instead of pasting it into the body.',
+      ),
+    body: z
+      .string()
+      .optional()
+      .describe('Markdown description. A `## Log` section is added on first log line.'),
+    parent: z.string().optional().describe('RCB-68: makes this card a STEP of that card.'),
+    phase: z.string().optional().describe('RCB-68: free short label, e.g. PH.3.'),
+    gate: z
+      .string()
+      .optional()
+      .describe('RCB-68: a card id or a sentence naming what blocks this card.'),
+    actor: z.string().optional().describe(ACTOR_DESC),
+  };
+  const createCardDescription =
+    'Creates a new card file with the next free id and returns it. ' +
+    `\`status\` must be a column id (this board: ${columnIds()}); it defaults to the first ` +
+    'column. Titles may contain anything; they are quoted on disk for you.' +
+    (isWorkspace
+      ? ' RCB-153: repo targets one workspace member (needs writes: cards); omitted, creates on ' +
+        'the board you opened.'
+      : '');
+  const createCardHandler = async ({
+    actor,
+    repo,
+    ...input
+  }: CreateCardInput & { actor?: string; repo?: string }): Promise<CallToolResult> => {
+    let target = store;
+    if (repo !== undefined) {
+      try {
+        target = await new Workspace(store.root, repos, now).storeForWrite(repo);
+      } catch (e) {
+        return fail((e as Error).message);
+      }
+    }
+    const res = await target.create(input, actor ?? defaultActor);
+    if (!res.ok) return fail(nameField(res.error));
+    return ok(res.card);
+  };
+  if (isWorkspace) {
+    server.registerTool(
+      'create_card',
+      {
+        title: 'Create a card',
+        description: createCardDescription,
+        inputSchema: { ...createCardFields, repo: z.string().optional().describe(REPO_DESC) },
+      },
+      createCardHandler,
+    );
+  } else {
+    server.registerTool(
+      'create_card',
+      { title: 'Create a card', description: createCardDescription, inputSchema: createCardFields },
+      createCardHandler,
+    );
+  }
+
+  server.registerTool(
+    'move_card',
+    {
+      title: 'Move a card to a column',
+      description:
+        '`status` is a column id from board.yml (see list_cards). ' +
+        `Sets the card's status to another column id (this board: ${columnIds()}), ` +
+        'bumps `updated`, appends a `## Log` line and records an event. Returns {card, warnings}. ' +
+        "Exceeding a column's WIP limit is reported as a warning in the result, never refused; " +
+        'moving to the column the card is already in is also just a warning.',
+      inputSchema: {
+        id: z.string().describe('Card id, e.g. RB-12.'),
+        status: z.string().describe(`Destination column id (one of: ${columnIds()}).`),
+        actor: z.string().optional().describe(ACTOR_DESC),
+      },
+    },
+    async ({ id, status, actor }) => {
+      // RCB-153 W4/W5: resolves `id` across the workspace, then a member target must clear
+      // `writes: cards` (`resolveWorkspaceWriteTarget` → `Workspace.storeForWrite`, the ONE place
+      // that checks it). `ws: null` on a plain board returns `store`/`id` untouched.
+      const ws = await openWorkspaceBoards(store.root, store, now);
+      const target = await resolveWorkspaceWriteTarget(store, ws, id);
+      if (!target.ok) return fail(target.error);
+      const res = await target.store.move(target.id, status, actor ?? defaultActor);
+      if (!res.ok) return fail(nameField(res.error));
+      return ok({ card: res.card, warnings: res.warnings });
+    },
+  );
+
+  server.registerTool(
+    'update_card',
+    {
+      title: 'Update card fields',
+      description:
+        'Changes title, assignee, priority, size, labels, files, refs, parent, phase ' +
+        'and/or gate, bumps `updated` and appends a `## Log` line naming the changed fields. ' +
+        'Pass null to clear an optional field. Not for status (use move_card) or the body (use ' +
+        'append_log).',
+      inputSchema: {
+        id: z.string().describe('Card id, e.g. RB-12.'),
+        title: z.string().min(1).optional(),
+        assignee: z.string().nullable().optional().describe('null clears it.'),
+        priority: PRIORITY.nullable().optional().describe('null clears it.'),
+        size: SIZE.nullable().optional().describe('null clears it.'),
+        labels: z
+          .array(z.string())
+          .nullable()
+          .optional()
+          .describe('Replaces the list; null clears it.'),
+        files: z
+          .array(z.string())
+          .nullable()
+          .optional()
+          .describe('Replaces the list; null clears it.'),
+        refs: z
+          .array(z.string())
+          .nullable()
+          .optional()
+          .describe(
+            'Replaces the refs: list (path#Heading, path@Token, path:L10-L20, path); null clears it.',
+          ),
+        parent: z
+          .string()
+          .nullable()
+          .optional()
+          .describe('RCB-68: makes this card a STEP of that card; null clears it.'),
+        phase: z
+          .string()
+          .nullable()
+          .optional()
+          .describe('RCB-68: free short label, e.g. PH.3; null clears it.'),
+        gate: z
+          .string()
+          .nullable()
+          .optional()
+          .describe(
+            'RCB-68: a card id or a sentence naming what blocks this card; null clears it.',
+          ),
+        actor: z.string().optional().describe(ACTOR_DESC),
+      },
+    },
+    async ({ id, actor, ...fields }) => {
+      const patch: CardPatch = {};
+      if (fields.title !== undefined) patch.title = fields.title;
+      if (fields.assignee !== undefined) patch.assignee = fields.assignee;
+      if (fields.priority !== undefined) patch.priority = fields.priority;
+      if (fields.size !== undefined) patch.size = fields.size;
+      if (fields.labels !== undefined) patch.labels = fields.labels;
+      if (fields.files !== undefined) patch.files = fields.files;
+      if (fields.refs !== undefined) patch.refs = fields.refs;
+      if (fields.parent !== undefined) patch.parent = fields.parent;
+      if (fields.phase !== undefined) patch.phase = fields.phase;
+      if (fields.gate !== undefined) patch.gate = fields.gate;
+      const ws = await openWorkspaceBoards(store.root, store, now);
+      const target = await resolveWorkspaceWriteTarget(store, ws, id);
+      if (!target.ok) return fail(target.error);
+      const res = await target.store.update(target.id, patch, actor ?? defaultActor);
+      if (!res.ok) return fail(nameField(res.error));
+      return ok(res.card);
+    },
+  );
+
+  server.registerTool(
+    'append_log',
+    {
+      title: 'Append a log line to a card',
+      description:
+        `Appends one bullet \`- <timestamp> <actor> — <text>\` under the card's ` +
+        '`## Log` heading (created if missing) and bumps `updated`. Use it to say what you did ' +
+        'or verified. Text is kept to one line.',
+      inputSchema: {
+        id: z.string().describe('Card id, e.g. RB-12.'),
+        text: z.string().min(1).describe('What happened, one line.'),
+        actor: z.string().optional().describe(ACTOR_DESC),
+      },
+    },
+    async ({ id, text, actor }) => {
+      const ws = await openWorkspaceBoards(store.root, store, now);
+      const target = await resolveWorkspaceWriteTarget(store, ws, id);
+      if (!target.ok) return fail(target.error);
+      const res = await target.store.appendLog(target.id, text, actor ?? defaultActor);
+      if (!res.ok) return fail(nameField(res.error));
+      return ok(res.card);
+    },
+  );
+
+  server.registerTool(
+    'add_note',
+    {
+      title: 'Add a durable note to a card',
+      description:
+        `Appends one bullet \`- <timestamp> <actor> — <text>\` under the card's ` +
+        '`## Notes` heading (created before `## Log` if missing) and bumps `updated`. Newlines ' +
+        'in `text` are kept, as continuation lines under the same bullet. Writes no `## Log` ' +
+        'line. Use it for a durable remark meant to stay on the card — a decision rationale, an ' +
+        "owner's instruction — where append_log is for what you DID.",
+      inputSchema: {
+        id: z.string().describe('Card id, e.g. RB-12.'),
+        text: z.string().min(1).describe('The remark, one or more lines.'),
+        actor: z.string().optional().describe(ACTOR_DESC),
+      },
+    },
+    async ({ id, text, actor }) => {
+      const ws = await openWorkspaceBoards(store.root, store, now);
+      const target = await resolveWorkspaceWriteTarget(store, ws, id);
+      if (!target.ok) return fail(target.error);
+      const res = await target.store.addNote(target.id, text, actor ?? defaultActor);
+      if (!res.ok) return fail(nameField(res.error));
+      return ok(res.card);
+    },
+  );
+
+  server.registerTool(
+    'ask_owner',
+    {
+      title: 'Ask the owner a decision, on the card',
+      description:
+        `Opens a \`decision\` block on a card: a question and optional lettered ` +
+        'options. The owner answers from the dashboard (or `record_decision`) — do not wait on a ' +
+        'chat relay; poll `get_card`/`list_cards` and read `decision.chosen`/`decision.words` when ' +
+        'it is DECIDED (`chosen !== null || decidedAt !== null`). If the board has a column with ' +
+        '`decision: true`, the card MOVES there (recording where it came from) and moves back ' +
+        'when `record_decision` answers it; a board with no such column just shows a badge. ' +
+        'Asking again on a card with an OPEN decision is refused — pass `replace: true` to ' +
+        'withdraw it and ask a new one; asking again on a DECIDED card simply replaces it.',
+      inputSchema: {
+        id: z.string().describe('Card id, e.g. RB-12.'),
+        question: z.string().min(1),
+        options: z
+          .array(z.object({ letter: z.string().min(1), text: z.string() }))
+          .optional()
+          .describe(
+            'Lettered choices, e.g. [{letter:"A",text:"ship now"}]. Omit for a yes/no or ' +
+              'free-text question — the owner then answers with words only.',
+          ),
+        replace: z.boolean().optional().describe('Withdraw an already-open decision and re-ask.'),
+        kind: z
+          .literal('task')
+          .optional()
+          .describe(
+            'An owner WORK item, same queue; no options; closed by record_decision with ' +
+              'neither letter nor words.',
+          ),
+        actor: z.string().optional().describe(ACTOR_DESC),
+      },
+    },
+    async ({ id, question, options, replace, kind, actor }) => {
+      const ws = await openWorkspaceBoards(store.root, store, now);
+      const target = await resolveWorkspaceWriteTarget(store, ws, id);
+      if (!target.ok) return fail(target.error);
+      const res = await target.store.ask(
+        target.id,
+        { question, options, replace, kind },
+        actor ?? defaultActor,
+      );
+      if (!res.ok) return fail(nameField(res.error));
+      return ok({ card: res.card, warnings: res.warnings });
+    },
+  );
+
+  server.registerTool(
+    'record_decision',
+    {
+      title: "Record the owner's answer to an open decision",
+      description:
+        `Answers the card's open \`decision\`: a \`letter\` naming one of its ` +
+        'options, `words` (verbatim), or both — at least one is required. Refuses an unknown ' +
+        'letter (names the valid ones) and refuses when nothing is open. Moves the card back to ' +
+        'where `ask_owner` moved it from, if anywhere. On an owner task (RCB-52), neither a ' +
+        'letter nor words is required — a bare call closes it.',
+      inputSchema: {
+        id: z.string().describe('Card id, e.g. RB-12.'),
+        letter: z.string().optional().describe('One of the decision’s option letters.'),
+        words: z.string().optional().describe('The verbatim answer, kept as written.'),
+        actor: z.string().optional().describe(ACTOR_DESC),
+      },
+    },
+    async ({ id, letter, words, actor }) => {
+      const ws = await openWorkspaceBoards(store.root, store, now);
+      const target = await resolveWorkspaceWriteTarget(store, ws, id);
+      if (!target.ok) return fail(target.error);
+      const res = await target.store.decide(target.id, { letter, words }, actor ?? defaultActor);
+      if (!res.ok) return fail(nameField(res.error));
+      return ok({ card: res.card, warnings: res.warnings });
+    },
+  );
+
+  server.registerTool(
+    'list_decisions',
+    {
+      title: 'Answered decisions, acknowledged or not',
+      description:
+        'RCB-129: catches the case where the owner answers a decision on another surface (the ' +
+        'web) and nothing here changes otherwise — the card just leaves the OWNER QUEUE. Every ' +
+        'card whose decision is answered (`chosen !== null || decidedAt !== null`), newest ' +
+        'decidedAt first: {id, title, assignee, question, chosen, chosenText, words, decidedAt, ' +
+        'decidedBy, acknowledged}. `acknowledged` is true once someone OTHER than decidedBy has ' +
+        'written a `## Log` or `## Notes` line on the card after decidedAt — append_log and ' +
+        'add_note both count. Default returns unacknowledged rows only.',
+      inputSchema: {
+        since: z
+          .string()
+          .optional()
+          .describe('ISO-8601, or HH:MMZ for that UTC time today. Filters on decidedAt.'),
+        all: z
+          .boolean()
+          .optional()
+          .describe('Also return already-acknowledged rows. Default false.'),
+      },
+      annotations: { readOnlyHint: true },
+    },
+    ({ since, all }) => {
+      let sinceIso: string | undefined;
+      if (since !== undefined) {
+        const r = resolveSince(since, now());
+        if (!r.ok) return fail(`since: ${r.error}`);
+        sinceIso = r.iso;
+      }
+      const rows = answeredDecisions(store.list(), { since: sinceIso });
+      return ok(all ? rows : rows.filter((r) => !r.acknowledged));
+    },
+  );
+
+  const boardSummaryDescription =
+    'Returns the columns (id, title, active, wip, done, count), the active ' +
+    'cards (in an `active` column and updated within activeWindowMinutes), WIP breaches, ' +
+    'and any card files that failed to parse.' +
+    (isWorkspace
+      ? ' RCB-153: repo (a workspace member key) reports that board instead; omitted, this is ' +
+        'the board you opened.'
+      : ' No arguments.');
+  const boardSummaryHandler = async ({ repo }: { repo?: string } = {}): Promise<CallToolResult> => {
+    let target = store;
+    if (repo !== undefined) {
+      const wsKey = workspaceKey();
+      if (repo !== wsKey) {
+        const opening = new Workspace(store.root, repos, now).open(repo);
+        if (!opening) return fail(`repo: unknown workspace member "${repo}"`);
+        target = await opening;
+      }
+    }
+    // RCB-154: only when `target` is still this store's OWN board — a member's own gate stays
+    // single-board, same rule `list_cards`'s per-target `members` above applies.
+    const targetMembers = target === store ? await workspaceGateMembers(store, now) : [];
+    const config = target.config;
+    const summary = computeBoardSummary(target.list(), config, now());
+    const columns = config.columns.map((c) => ({
+      id: c.id,
+      title: c.title ?? c.id,
+      active: c.active ?? false,
+      wip: c.wip ?? null,
+      done: c.done ?? false,
+      count: summary.perColumn[c.id] ?? 0,
+    }));
+    const configured = new Set(config.columns.map((c) => c.id));
+    const unknownStatuses = Object.entries(summary.perColumn)
+      .filter(([id]) => !configured.has(id))
+      .map(([status, count]) => ({ status, count }));
+    return ok({
+      prefix: config.prefix,
+      activeWindowMinutes: config.activeWindowMinutes,
+      columns,
+      unknownStatuses,
+      active: summary.active.map((c) => toRow(c, target.list(), config, targetMembers)),
+      wipBreaches: summary.wipBreaches,
+      invalid: target.invalid,
+    });
+  };
+  if (isWorkspace) {
+    server.registerTool(
+      'board_summary',
+      {
+        title: 'Board summary',
+        description: boardSummaryDescription,
+        inputSchema: { repo: z.string().optional().describe(REPO_DESC) },
+        annotations: { readOnlyHint: true },
+      },
+      boardSummaryHandler,
+    );
+  } else {
+    server.registerTool(
+      'board_summary',
+      {
+        title: 'Board summary',
+        description: boardSummaryDescription,
+        annotations: { readOnlyHint: true },
+      },
+      boardSummaryHandler,
+    );
+  }
+
+  server.registerTool(
+    'set_columns',
+    {
+      title: 'Replace the whole column list',
+      description:
+        `Replaces the board's ENTIRE column list in board.yml — a replace, not a merge, the ` +
+        'same contract as HTTP PATCH /api/board and the web ColumnEditor (RCB-34): every column ' +
+        'not included is dropped. Each column is {id, title?, active?, wip?, done?, decision?}; ' +
+        'this tool does NOT validate that shape itself — the store re-parses board.yml through ' +
+        'the same schema a hand edit would get, and refuses (naming the problem: empty list, ' +
+        'duplicate id, etc.) with nothing written. Cards already on disk are never touched; one ' +
+        'left in a column you removed still shows, marked "not in board.yml". Current columns: ' +
+        `${columnIds()}.`,
+      inputSchema: {
+        columns: z
+          .array(z.record(z.string(), z.unknown()))
+          .describe('The WHOLE new column list, in order.'),
+        actor: z.string().optional().describe(ACTOR_SHORT),
+      },
+    },
+    async ({ columns, actor }) => {
+      // The store's own `parseBoard` is the validator (see the tool description above) — this
+      // cast does not duplicate the column schema, it only satisfies `setColumns`'s TS signature.
+      const res = await store.setColumns(columns as Column[], actor ?? defaultActor);
+      if (!res.ok) return fail(res.error);
+      return ok({ config: res.config });
+    },
+  );
+
+  server.registerTool(
+    'take_lease',
+    {
+      title: 'Take a lease on a resource',
+      description:
+        'Take/renew a lease on `resource`. Refuses a live lease held by another (names holder, ' +
+        'until) unless force; same holder renews, replacing until/note (omit to clear).',
+      inputSchema: {
+        resource: z.string().min(1),
+        until: z.string().optional().describe('ISO-8601; omit for until-released.'),
+        note: z.string().optional(),
+        force: z.boolean().optional(),
+        actor: z.string().optional().describe(ACTOR_SHORT),
+      },
+    },
+    async ({ resource, until, note, force, actor }) => {
+      const res = await store.takeLease({ resource, until, note, force }, actor ?? defaultActor);
+      if (!res.ok) return fail(res.error);
+      return ok({ doc: res.doc, warnings: res.warnings });
+    },
+  );
+
+  server.registerTool(
+    'release_lease',
+    {
+      title: 'Release a lease',
+      description:
+        "Release a lease on a resource. Refuses on another holder's lease, naming them, unless force.",
+      inputSchema: {
+        resource: z.string().min(1),
+        force: z.boolean().optional(),
+        actor: z.string().optional().describe(ACTOR_SHORT),
+      },
+    },
+    async ({ resource, force, actor }) => {
+      const res = await store.releaseLease({ resource, force }, actor ?? defaultActor);
+      if (!res.ok) return fail(res.error);
+      return ok({ doc: res.doc, warnings: res.warnings });
+    },
+  );
+
+  const listLeasesDescription =
+    'Every held lease and time window in .repoboard/leases.yml: leases as ' +
+    '[{resource, holder, since, until, state: live|stale, note}], windows as ' +
+    '[{resource, start, end, name}]. Cheap; call before take_lease.' +
+    (isWorkspace
+      ? ' RCB-153: repo narrows to one workspace member (or "all" for every board, each row ' +
+        'gaining a repo field); omitted, this is the board you opened only.'
+      : '');
+  const listLeasesHandler = async ({ repo }: { repo?: string } = {}): Promise<CallToolResult> => {
+    if (repo !== undefined) {
+      const workspace = new Workspace(store.root, repos, now);
+      const wsKey = workspaceKey();
+      let targets: { key: string; store: CardStore }[];
+      if (repo === 'all') {
+        const opened = await workspace.openAll();
+        targets = [{ key: wsKey, store }, ...opened.map((m) => ({ key: m.key, store: m.store }))];
+      } else if (repo === wsKey) {
+        targets = [{ key: wsKey, store }];
+      } else {
+        const opening = workspace.open(repo);
+        if (!opening) return fail(`repo: unknown workspace member "${repo}"`);
+        targets = [{ key: repo, store: await opening }];
+      }
+      const nowDate = now();
+      const leases: unknown[] = [];
+      const windows: unknown[] = [];
+      for (const t of targets) {
+        const doc = t.store.leases();
+        for (const l of doc.leases) leases.push({ ...toLeaseRow(l, nowDate), repo: t.key });
+        for (const w of doc.windows) windows.push({ ...toWindowRow(w), repo: t.key });
+      }
+      return ok({ leases, windows });
+    }
+    const doc = store.leases();
+    return ok({
+      leases: doc.leases.map((l) => toLeaseRow(l, now())),
+      windows: doc.windows.map(toWindowRow),
+    });
+  };
+  if (isWorkspace) {
+    server.registerTool(
+      'list_leases',
+      {
+        title: 'List leases and windows',
+        description: listLeasesDescription,
+        inputSchema: { repo: z.string().optional().describe(REPO_DESC) },
+        annotations: { readOnlyHint: true },
+      },
+      listLeasesHandler,
+    );
+  } else {
+    server.registerTool(
+      'list_leases',
+      {
+        title: 'List leases and windows',
+        description: listLeasesDescription,
+        annotations: { readOnlyHint: true },
+      },
+      listLeasesHandler,
+    );
+  }
+
+  server.registerTool(
+    'add_window',
+    {
+      title: 'Add a time window on a resource',
+      description:
+        'Reserve `resource` for a named window (`end` after `start`, both ISO-8601), e.g. a ' +
+        'scheduled sweep. No overlap check.',
+      inputSchema: {
+        resource: z.string().min(1),
+        start: z.string(),
+        end: z.string(),
+        name: z.string().min(1),
+        actor: z.string().optional().describe(ACTOR_SHORT),
+      },
+    },
+    async ({ resource, start, end, name, actor }) => {
+      const res = await store.addWindow({ resource, start, end, name }, actor ?? defaultActor);
+      if (!res.ok) return fail(res.error);
+      return ok({ doc: res.doc, warnings: res.warnings });
+    },
+  );
+
+  server.registerTool(
+    'check_window',
+    {
+      title: 'Is a resource clear right now?',
+      description:
+        'Call check_window before starting any long-running shared-resource job such as a test ' +
+        'suite; exit/clear false means DO NOT start. Returns {clear:true} or {clear:false, ' +
+        'reasons} naming a window covering `at` (default now), a live lease on resource, or both.',
+      inputSchema: {
+        resource: z.string().min(1),
+        at: z.string().optional().describe('ISO-8601. Defaults to now.'),
+      },
+      annotations: { readOnlyHint: true },
+    },
+    ({ resource, at }) =>
+      ok(store.checkResource(resource, at !== undefined ? new Date(at) : undefined)),
+  );
+
+  /** The pre-RCB-153 `get_state` body, unchanged — `stateFor(store)` reproduces it exactly (the
+   * byte-identical path for a plain board, and for a workspace's `repo: <key>`/its own key). */
+  function stateFor(target: CardStore) {
+    const doc = target.state();
+    if (!doc) {
+      return { stamp: null, actor: null, sections: null, ownerQueue: [], leases: [], text: null };
+    }
+    const all = target.list();
+    const openCards = all.filter((c) => needsDecision(c));
+    const leasesDoc = target.leases();
+    const nowDate = now();
+    const text = renderState(
+      doc.sections,
+      openCards,
+      { now: new Date(Date.parse(doc.stamp)), actor: doc.actor },
+      leasesDoc,
+      nowDate,
+    );
+    return {
+      stamp: doc.stamp,
+      actor: doc.actor,
+      sections: doc.sections,
+      ownerQueue: ownerQueue(all),
+      leases: liveLeaseRows(leasesDoc, nowDate),
+      text,
+    };
+  }
+  const getStateDescription =
+    "The repo's one-page STATE.md: {stamp, actor, sections: {live, lastLandings, seats}, " +
+    'ownerQueue: [{id, question, options}], leases: [{resource, holder, since, until, state, ' +
+    'note}], text}. OWNER QUEUE and LEASES (RCB-131: live leases only, in `text` too, right ' +
+    'after OWNER QUEUE — never stored on disk) are both generated fresh from current data — ' +
+    'never trust stale text from a prior read.' +
+    (isWorkspace
+      ? ' RCB-153: with no repo, OWNER QUEUE/LEASES/SEATS (RCB-160) aggregate every configured ' +
+        'member ([<key>] lines) and repos: {<key>: {ownerQueue, leases, seats, missing?}} is ' +
+        "added; repo (a member key) reports that one board's own state instead, unaggregated."
+      : '');
+  const getStateHandler = async ({ repo }: { repo?: string } = {}): Promise<CallToolResult> => {
+    const wsKey = workspaceKey();
+    if (repo !== undefined) {
+      if (repo === wsKey) return ok(stateFor(store));
+      const opening = new Workspace(store.root, repos, now).open(repo);
+      if (!opening) return fail(`repo: unknown workspace member "${repo}"`);
+      return ok(stateFor(await opening));
+    }
+    if (repos.length === 0) return ok(stateFor(store));
+    const doc = store.state();
+    if (!doc) return ok(stateFor(store));
+    const ws = await openWorkspaceBoards(store.root, store, now);
+    if (!ws) return ok(stateFor(store)); // unreachable: repos.length > 0 above
+    const all = store.list();
+    const openCards = all.filter((c) => needsDecision(c));
+    const leasesDoc = store.leases();
+    const nowDate = now();
+    const text = renderState(
+      doc.sections,
+      openCards,
+      { now: new Date(Date.parse(doc.stamp)), actor: doc.actor },
+      leasesDoc,
+      nowDate,
+      {
+        ownerQueueLines: workspaceOwnerQueueLines(
+          ws.opened.map(({ key, store: m }) => ({ key, cards: m.hasBoard ? m.list() : null })),
+        ),
+        leaseLines: workspaceLeaseLines(
+          ws.opened
+            .filter(({ store: m }) => m.hasBoard)
+            .map(({ key, store: m }) => ({ key, leases: m.leases() })),
+          nowDate,
+        ),
+        seatLines: workspaceSeatLines(
+          ws.opened.map(({ key, store: m }) => ({
+            key,
+            seats: m.hasBoard ? (m.state()?.sections.seats ?? null) : null,
+          })),
+        ),
+      },
+    );
+    return ok({
+      stamp: doc.stamp,
+      actor: doc.actor,
+      sections: doc.sections,
+      ownerQueue: ownerQueue(all),
+      leases: liveLeaseRows(leasesDoc, nowDate),
+      text,
+      repos: memberStateRepos(ws.opened, ownerQueue, liveLeaseRows, nowDate),
+    });
+  };
+  if (isWorkspace) {
+    server.registerTool(
+      'get_state',
+      {
+        title: 'Get STATE.md, rendered',
+        description: getStateDescription,
+        inputSchema: { repo: z.string().optional().describe(REPO_DESC) },
+        annotations: { readOnlyHint: true },
+      },
+      getStateHandler,
+    );
+  } else {
+    server.registerTool(
+      'get_state',
+      {
+        title: 'Get STATE.md, rendered',
+        description: getStateDescription,
+        annotations: { readOnlyHint: true },
+      },
+      getStateHandler,
+    );
+  }
+
+  server.registerTool(
+    'set_state_section',
+    {
+      title: 'Replace one STATE.md section',
+      description:
+        'Replace LIVE, LAST-LANDINGS or SEATS and restamp; nothing else changes. SEATS is ' +
+        'written by seat verbs: refused without force. Scaffolds STATE.md if none exists.',
+      inputSchema: {
+        section: z.enum(['LIVE', 'LAST-LANDINGS', 'SEATS']),
+        body: z.string().min(1),
+        actor: z.string().optional().describe(ACTOR_SHORT),
+        force: z.boolean().optional().describe('SEATS only.'),
+      },
+    },
+    async ({ section, body, actor, force }) => {
+      const key: StateSectionName =
+        section === 'LIVE' ? 'live' : section === 'LAST-LANDINGS' ? 'lastLandings' : 'seats';
+      // RCB-196: `force` is the request's own word, passed on only as given — the store refuses
+      // SEATS without it.
+      const res = await store.setStateSection(key, body, actor ?? defaultActor, { force });
+      if (!res.ok) return fail(res.error);
+      return ok(res.doc);
+    },
+  );
+
+  server.registerTool(
+    'append_repo_log',
+    {
+      title: "Append one block to today's log",
+      description:
+        "Append `text` under a `##### <SEAT> <ts>: <title>` heading to today's log " +
+        '(logDir, else .repoboard/local/log/, else .repoboard/log/). Append-only. ' +
+        'A seat another pane holds is refused unless force (audited).',
+      inputSchema: {
+        seat: z.string().min(1).describe('Who is writing, e.g. claude/p8-3.'),
+        text: z.string().min(1),
+        title: z.string().optional().describe('Defaults to the first line of text.'),
+        force: z.boolean().optional(),
+      },
+    },
+    async ({ seat, text, title, force }) => {
+      // RCB-172: `[repoboard] builder` / `repoboard builder` are the seat `builder`; another
+      // board's prefix is refused — the same `seatName` door the CLI's `log --as` goes through.
+      const named = store.seatName(seat);
+      if (!named.ok) return fail(named.error);
+      // RCB-198: this server's own holder, and `force` only as the request gave it — the store
+      // refuses a seat another pane holds without it, naming both labels.
+      const res = await store.appendSeatLog(named.name, text, title, holder, { force });
+      if (!res.ok) return fail(res.error);
+      return ok({ date: res.date, block: res.block, restamped: res.restamped });
+    },
+  );
+
+  const getLogFields = {
+    date: z.string().optional().describe('YYYY-MM-DD. Default: today.'),
+    seat: z.string().optional().describe("Only this seat's blocks."),
+    since: z.string().optional().describe('Full ISO-8601 datetime, or HH:MMZ for `date`.'),
+    tail: z.number().int().min(0).optional().describe('Only the last N blocks.'),
+    last: z.string().optional().describe('A seat name; exclusive with date/seat/since/tail.'),
+  };
+  const getLogDescription =
+    "Reads a day's log (default today): {date, blocks: [{seat, ts, title, text}]} — same " +
+    'object `log show --json` prints. `seat` narrows to one seat; `since` (full ISO-8601, ' +
+    'or HH:MMZ for that UTC time on `date`) and `tail` (last N) narrow further, applied in ' +
+    'that order. `last` (a seat name, exclusive with date/seat/since/tail) instead returns ' +
+    "that seat's NEWEST block anywhere in the log: {date, block}, or nulls when it has none." +
+    (isWorkspace ? ` RCB-153: ${REPO_DESC}` : '');
+  const getLogHandler = async ({
+    date,
+    seat,
+    last,
+    since,
+    tail,
+    repo,
+  }: {
+    date?: string;
+    seat?: string;
+    since?: string;
+    tail?: number;
+    last?: string;
+    repo?: string;
+  }): Promise<CallToolResult> => {
+    let target = store;
+    if (repo !== undefined) {
+      const wsKey = workspaceKey();
+      if (repo !== wsKey) {
+        const opening = new Workspace(store.root, repos, now).open(repo);
+        if (!opening) return fail(`repo: unknown workspace member "${repo}"`);
+        target = await opening;
+      }
+    }
+    if (last !== undefined) {
+      if (date !== undefined || seat !== undefined) {
+        return fail('last is exclusive with date/seat');
+      }
+      if (since !== undefined || tail !== undefined) {
+        return fail('last is exclusive with since/tail');
+      }
+      const named = target.seatName(last);
+      if (!named.ok) return fail(named.error);
+      const res = await target.lastRepoLogBlock(named.name);
+      return ok(res ? { date: res.date, block: res.block } : { date: null, block: null });
+    }
+    // RCB-172: `seat` names a seat too — the same normalization `last` and `append_repo_log` use.
+    let wantedSeat = seat;
+    if (seat !== undefined) {
+      const named = target.seatName(seat);
+      if (!named.ok) return fail(named.error);
+      wantedSeat = named.name;
+    }
+    const log = await target.log(date);
+    if (!log) return ok({ date: date ?? toIso(now()).slice(0, 10), blocks: [] });
+    if (wantedSeat === undefined && since === undefined && tail === undefined) {
+      return ok({ date: log.date, blocks: log.blocks });
+    }
+    const filtered = filterLogBlocks(log.blocks, log.date, { seat: wantedSeat, since, tail });
+    if (!filtered.ok) return fail(`since: ${filtered.error}`);
+    return ok({ date: log.date, blocks: filtered.blocks });
+  };
+  if (isWorkspace) {
+    server.registerTool(
+      'get_log',
+      {
+        title: "Read a day's log, or one seat's newest block",
+        description: getLogDescription,
+        inputSchema: { ...getLogFields, repo: z.string().optional().describe(REPO_DESC) },
+        annotations: { readOnlyHint: true },
+      },
+      getLogHandler,
+    );
+  } else {
+    server.registerTool(
+      'get_log',
+      {
+        title: "Read a day's log, or one seat's newest block",
+        description: getLogDescription,
+        inputSchema: getLogFields,
+        annotations: { readOnlyHint: true },
+      },
+      getLogHandler,
+    );
+  }
+
+  server.registerTool(
+    'get_seat',
+    {
+      title: "Get one seat's cold-start bundle",
+      description:
+        'The cold-start bundle `seat <name> --json` prints: its SEATS line, its live leases ' +
+        '(RCB-131: `isStale` false, `(yours)` marks its own), its last log block, the ' +
+        "coordinator's, its next todo card, the open decisions and `holder` (RCB-199: pane tag, " +
+        'label, liveness; null when none). Read only — --up/--down/--update stay CLI-only.',
+      inputSchema: {
+        name: z.string().min(1).describe('Seat name, e.g. claude/web-agent.'),
+      },
+      annotations: { readOnlyHint: true },
+    },
+    // RCB-154: the workspace's own gate-member facts — `[]` on a plain board — reaching the seat
+    // bundle the same way `card list`/`show`/`move` already resolve a `gate:` against them.
+    // RCB-172: `name` goes through `seatName` first (see `append_repo_log`).
+    async ({ name }) => {
+      const named = store.seatName(name);
+      if (!named.ok) return fail(named.error);
+      return ok(await store.seatBundle(named.name, await workspaceGateMembers(store, now)));
+    },
+  );
+
+  server.registerTool(
+    'record_gate',
+    {
+      title: 'Record a gate check result',
+      description:
+        "Appends one line to the gate ledger — the SEAT'S OWN RECORD of a check it already " +
+        'ran, never a re-run. Needs at least one of tests (passed/skipped/failed/files), ' +
+        'typecheck, lint, build; passed/skipped needs failed too (0 means a clean run). sha ' +
+        'defaults to `git rev-parse --short HEAD` (null outside a git repo).',
+      inputSchema: {
+        as: z.string().min(1).describe('Who ran it, e.g. claude/web-agent.'),
+        passed: z.number().int().optional(),
+        skipped: z.number().int().optional(),
+        failed: z.number().int().optional().describe('Required with passed/skipped; 0 = clean.'),
+        files: z.number().int().optional(),
+        typecheck: z.number().int().optional(),
+        lint: z.number().int().optional(),
+        build: z.number().int().optional(),
+        sha: z.string().optional().describe('Default: git rev-parse --short HEAD.'),
+        note: z.string().optional(),
+      },
+    },
+    async ({ as, passed, skipped, failed, files, typecheck, lint, build, sha, note }) => {
+      try {
+        const record = await recordGate(
+          store.root,
+          { as, passed, skipped, failed, files, typecheck, lint, build, sha, note },
+          now(),
+        );
+        return ok(record);
+      } catch (e) {
+        return fail((e as Error).message);
+      }
+    },
+  );
+
+  server.registerTool(
+    'get_gate',
+    {
+      title: 'Get the gate ledger',
+      description:
+        'The newest recorded result per check (tests, typecheck, lint, build) — the same ' +
+        'object `gate show --json` prints. A check with nothing recorded yet is null.',
+      inputSchema: {},
+      annotations: { readOnlyHint: true },
+    },
+    async () => ok(await loadGateHealth(store.root)),
+  );
+
+  const checkFields = {
+    strict: z.boolean().optional().describe('Also block on warning-grade findings.'),
+  };
+  const checkDescription =
+    'Call before starting and before stopping (locked practice). Returns {findings, ' +
+    'exitCode}: stale-state, active-without-lease (warning, strict-only), stale-lease, ' +
+    'live-lease (info), needs-ask (warning, ' +
+    'strict-only — no open ask), cost-over-budget, systems-invalid (error), systems-stale ' +
+    '(warning), needs-decision (info). Empty findings means ok.' +
+    (isWorkspace
+      ? ' RCB-153: with no repo, aggregates every configured member too (findings prefixed ' +
+        '[<key>], exitCode the worst of all of them); repo (a member key) checks that one board ' +
+        'alone.'
+      : '');
+  const checkHandler = async ({
+    strict,
+    repo,
+  }: {
+    strict?: boolean;
+    repo?: string;
+  }): Promise<CallToolResult> => {
+    const s = strict ?? false;
+    if (repo !== undefined) {
+      const wsKey = workspaceKey();
+      if (repo === wsKey) {
+        return ok(await store.check(s, await workspaceGateMembers(store, now)));
+      }
+      const opening = new Workspace(store.root, repos, now).open(repo);
+      if (!opening) return fail(`repo: unknown workspace member "${repo}"`);
+      const memberStore = await opening;
+      const findings = await checkMembers(
+        [{ key: repo, root: memberStore.root, store: memberStore }],
+        s,
+        now,
+      );
+      return ok({ findings, exitCode: exitCodeForFindings(findings, s) });
+    }
+    const ws = await openWorkspaceBoards(store.root, store, now);
+    // RCB-154: `gateMemberFacts(ws.opened)` — `opened` already exists once the workspace is open —
+    // else `[]`, same as a plain board.
+    const own = await store.check(s, ws ? gateMemberFacts(ws.opened) : []);
+    if (!ws) return ok(own);
+    const memberFindings = await checkMembers(ws.opened, s, now);
+    const findings: Finding[] = [...own.findings, ...memberFindings];
+    return ok({ findings, exitCode: exitCodeForFindings(findings, s) });
+  };
+  if (isWorkspace) {
+    server.registerTool(
+      'check',
+      {
+        title: 'Health check: STATE, leases, decisions',
+        description: checkDescription,
+        inputSchema: { ...checkFields, repo: z.string().optional().describe(REPO_DESC) },
+        annotations: { readOnlyHint: true },
+      },
+      checkHandler,
+    );
+  } else {
+    server.registerTool(
+      'check',
+      {
+        title: 'Health check: STATE, leases, decisions',
+        description: checkDescription,
+        inputSchema: checkFields,
+        annotations: { readOnlyHint: true },
+      },
+      checkHandler,
+    );
+  }
+
+  server.registerTool(
+    'cost',
+    {
+      title: 'Cold-context cost',
+      description:
+        'Bytes/≈tokens of what a cold agent loads: CLAUDE.md + variants, AGENTS.md + variants, ' +
+        'backticked paths CLAUDE.md names that exist, and MCP server names (not schema bytes). ' +
+        'over:true when CLAUDE.md exceeds budget (default 8192, or board.yml claudeMdBudgetBytes).',
+      inputSchema: {
+        budget: z.number().int().positive().optional().describe('Override the budget, in bytes.'),
+      },
+      annotations: { readOnlyHint: true },
+    },
+    async ({ budget }) => ok(await store.cost(budget)),
+  );
+
+  server.registerTool(
+    'list_systems',
+    {
+      title: 'List systems',
+      description:
+        "RCB-97 (plan §3.3): `.repoboard/systems.yml`'s inventory. Returns {exists, errors, " +
+        'environments, systems: [{id, kind, layer, env, runtime}], connections}. exists:false ' +
+        'means no systems.yml yet (repoboard systems detect proposes one); errors non-empty ' +
+        'means the file failed to parse (systems/connections empty then). Use get_system for ' +
+        "one system's full row plus resolved pointers.",
+      inputSchema: {},
+      annotations: { readOnlyHint: true },
+    },
+    () => {
+      const { doc, errors, exists } = store.systems();
+      return ok({
+        exists,
+        errors,
+        environments: doc?.environments ?? null,
+        systems: (doc?.systems ?? []).map((s) => ({
+          id: s.id,
+          kind: s.kind,
+          layer: s.layer,
+          env: s.env,
+          runtime: s.runtime,
+        })),
+        connections: doc?.connections ?? [],
+      });
+    },
+  );
+
+  server.registerTool(
+    'get_system',
+    {
+      title: 'Get one system',
+      description:
+        "RCB-97 (plan §3.3): one system's full row from .repoboard/systems.yml, every " +
+        'connection touching it, and its pointers resolved live (same engine as get_card ' +
+        'resolveRefs: [{spec, path, start, end, text, truncated, error}]). Use list_systems to ' +
+        'find ids. tests: the test files that import or name each pointer (static, live; null ' +
+        'when a pointer is not a source file).',
+      inputSchema: {
+        id: z.string().describe('The system id, e.g. gateway (list_systems shows the ids).'),
+      },
+      annotations: { readOnlyHint: true },
+    },
+    async ({ id }) => {
+      const { doc } = store.systems();
+      const system = doc?.systems.find((s) => s.id === id);
+      if (!doc || !system) return fail(`id: unknown system "${id}" (list_systems shows the ids)`);
+      const connections = doc.connections.filter((c) => c.from === id || c.to === id);
+      const pointers = await Promise.all(system.pointers.map((p) => resolveRefSpec(store.root, p)));
+      const tests = await systemTests(store.root, system.pointers);
+      return ok({ system, connections, pointers, tests });
+    },
+  );
+
+  server.registerTool(
+    'archive_cards',
+    {
+      title: 'Archive old done cards',
+      description:
+        'Move every card in a done column whose `updated` is older than olderThan (default ' +
+        '14d; also accepts 2h/90m or an ISO-8601 datetime) to .repoboard/archive/ — git mv when ' +
+        'tracked, else a rename; the file is never rewritten. dryRun:true (default false) lists ' +
+        'the ids and writes nothing. Archived cards no longer appear in list_cards; get_card on ' +
+        'an archived id fails, naming the archive path.',
+      inputSchema: {
+        olderThan: z
+          .string()
+          .optional()
+          .describe('Duration (14d, 2h, 90m) or ISO-8601 cutoff. Default 14d.'),
+        dryRun: z.boolean().optional().describe('List ids only; write nothing. Default false.'),
+        actor: z.string().optional().describe(ACTOR_SHORT),
+      },
+    },
+    async ({ olderThan, dryRun, actor }) => {
+      const older = resolveOlderThan(olderThan ?? '14d', now());
+      if (!older.ok) return fail(older.error);
+      const ids = store.selectArchivable(older.cutoff);
+      if (dryRun) return ok({ dryRun: true, ids });
+      if (ids.length === 0) return ok({ dryRun: false, archived: [] });
+      const res = await store.archiveCards(ids, actor ?? defaultActor);
+      if (!res.ok) return fail(res.error);
+      return ok({ dryRun: false, archived: res.archived });
+    },
+  );
+
+  server.registerTool(
+    'sync_issues',
+    {
+      title: 'Sync cards from a README-style K-list',
+      description:
+        `Reads \`path\` (repo-relative; ".." and absolute paths refused) and the ` +
+        'section under the first heading whose text starts with `heading` — the same heading ' +
+        'rule the board uses for `refs:`. An item is a list item whose FIRST LINE begins at ' +
+        'column 0 with `- **K<n>` (open) or `- ~~**K<n>` (struck = closed); nothing else is an ' +
+        'item. Creates a card (labels: [label], refs: [`path@K<n>`]) for every open item with no ' +
+        'card yet; moves a struck or vanished item’s card to the done column. Idempotent by ref ' +
+        '— a second call creates and moves nothing. NEVER writes `path`. dryRun:true (default ' +
+        'false) reports the plan and writes nothing — the only mode to call against a repo you ' +
+        'do not own.',
+      inputSchema: {
+        path: z.string().min(1).describe('Repo-relative markdown file, e.g. README.md.'),
+        heading: z.string().min(1).describe('Heading text, e.g. "Known issues".'),
+        status: z.string().optional().describe('Column new cards are created in. Default todo.'),
+        label: z.string().optional().describe('Label on created cards. Default issue.'),
+        dryRun: z.boolean().optional().describe('Report the plan only; write nothing.'),
+        actor: z.string().optional().describe(ACTOR_DESC),
+      },
+    },
+    async ({ path, heading, status, label, dryRun, actor }) => {
+      const input = { path, heading, status: status ?? 'todo', label: label ?? 'issue' };
+      const outcome = await computeSyncPlan(store, input);
+      if (!outcome.ok) return fail(outcome.error);
+      const { plan, malformed } = outcome;
+      if (dryRun) {
+        return ok({
+          dryRun: true,
+          create: plan.create,
+          close: plan.close,
+          malformed,
+          unchanged: plan.unchanged,
+        });
+      }
+      const applied = await applySyncPlan(store, input, plan, actor ?? defaultActor);
+      return ok({
+        dryRun: false,
+        created: applied.created,
+        closed: applied.closed,
+        malformed,
+        errors: applied.errors,
+      });
+    },
+  );
+
+  return server;
+}
+
+export interface ServeMcpOptions {
+  /** Directory containing `.repoboard/`. */
+  root: string;
+  defaultActor: string;
+  now?: () => Date;
+  /** Stops the server (tests); otherwise it runs until stdin closes. */
+  signal?: AbortSignal;
+  /** Store warnings (a bad board.yml, watcher errors). Never stdout. */
+  warn?: (message: string) => void;
+}
+
+/**
+ * `repoboard mcp`: serve over stdio until stdin closes. Watches `.repoboard/` so direct edits are
+ * seen — for the TOP-LEVEL board only. RCB-153 W7: at a workspace root, every tool that touches a
+ * member opens it FRESH per call (`openWorkspaceBoards`/`Workspace`, never held across calls), so a
+ * member card edited on disk after this process started is seen on the very next tool call without
+ * this server watching the member trees itself (see `openWorkspaceBoards`'s own doc comment).
+ */
+export async function serveMcp(opts: ServeMcpOptions): Promise<void> {
+  const store = await openStore(opts.root, { watch: true, now: opts.now });
+  if (opts.warn) store.on('warning', opts.warn);
+  // RCB-198: who runs this server — measured ONCE here (RCB-194 P3: identity is computed at the
+  // entry and passed down), from the environment the client launched it in.
+  const holder = await holderFromEnv(process.env, store.config);
+  const server = createMcpServer({
+    store,
+    defaultActor: opts.defaultActor,
+    now: opts.now,
+    holder,
+  });
+  const transport = new StdioServerTransport();
+  const closed = new Promise<void>((done) => {
+    server.server.onclose = () => done();
+  });
+  // The SDK transport does not close itself when stdin ends, and the watcher would keep the
+  // process alive; a client that closes our stdin is done with us.
+  const onStdinEnd = () => void server.close();
+  process.stdin.once('end', onStdinEnd);
+  try {
+    await server.connect(transport);
+    if (opts.signal) {
+      const stop = () => void server.close();
+      if (opts.signal.aborted) stop();
+      else opts.signal.addEventListener('abort', stop, { once: true });
+    }
+    await closed;
+  } finally {
+    process.stdin.off('end', onStdinEnd);
+    await store.close();
+  }
+}

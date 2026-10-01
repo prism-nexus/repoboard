@@ -1,0 +1,92 @@
+environments:
+  dev:
+    note: pnpm build, then node packages/server/dist/cli.js serve --root . --port 4242 — one board
+  prod:
+    none: local-only by design — speed and tokens
+systems:
+  - id: repoboard
+    name: repoboard
+    kind: tool
+    layer: ops
+    env:
+      - dev
+    runtime:
+      dev: node packages/server/dist/cli.js — CLI, MCP (stdio), HTTP+WS :4242, one process
+    pointers:
+      - packages/server/src/cli.ts:L3101-L3200
+      - packages/server/src/mcp.ts:L58-L97
+      - packages/server/src/http.ts:L373-L398
+      - packages/server/src/repo-context.ts:L612-L641
+    docs:
+      - docs/BUILD-PLAN.md#§2
+    why: the CLI, the MCP server and the :4242 server are one package, so one row
+    source:
+      hand: repoboard builder
+      at: 2026-09-29T19:38:13Z
+  - id: web
+    name: web
+    kind: client
+    layer: client
+    env:
+      - dev
+    runtime:
+      dev: vite build → packages/server/dist/web, served by repoboard on :4242
+    pointers:
+      - packages/web/src/main.tsx:L11-L31
+      - packages/web/src/App.tsx:L15-L106
+    source:
+      hand: repoboard builder
+      at: 2026-09-29T19:38:13Z
+  - id: board-files
+    name: board files
+    kind: storage
+    layer: data
+    env:
+      - dev
+    runtime:
+      dev: "the git tree: .repoboard/ cards, STATE.md, leases.yml; local/ is a gitignored sibling repo (RCB-83)"
+    pointers:
+      - packages/server/src/store.ts:L539-L588
+      - packages/server/src/local.ts:L1-L61
+    source:
+      hand: repoboard builder
+      at: 2026-09-29T19:38:13Z
+  - id: ci
+    name: CI
+    kind: ci
+    layer: ops
+    env:
+      - dev
+    runtime:
+      dev: "GitHub Actions: the gate (test, typecheck, lint, build) from an empty migration"
+    pointers:
+      - .github/workflows/ci.yml:L8-L50
+    source:
+      hand: repoboard builder
+      at: 2026-09-29T19:38:13Z
+connections:
+  - from: web
+    to: repoboard
+    label: "HTTP + WS :4242"
+    via: HTTP + WS on :4242 (snapshot, systems, moves)
+    env:
+      - dev
+    pointers:
+      - packages/server/src/http.ts:L438-L494
+      - packages/server/src/repo-context.ts:L886-L941
+      - packages/server/src/repo-context.ts:L944-L1062
+    source:
+      hand: repoboard builder
+      at: 2026-09-29T19:38:13Z
+  - from: repoboard
+    to: board-files
+    label: "fs read/write + chokidar"
+    via: fs read/write + chokidar watcher
+    env:
+      - dev
+    pointers:
+      - packages/server/src/store.ts:L2474-L2527
+      - packages/server/src/store.ts:L2114-L2226
+    source:
+      hand: repoboard builder
+      at: 2026-09-29T19:38:13Z

@@ -15,6 +15,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { describe, expect, it } from 'vitest';
+import { parse as parseYaml } from 'yaml';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const CORE_ROOT = resolve(HERE, '..', '..', 'core');
@@ -22,6 +23,7 @@ const CORE_DIST = join(CORE_ROOT, 'dist');
 const REPO_ROOT = resolve(HERE, '..', '..', '..');
 const PREPACK_SCRIPT = join(REPO_ROOT, 'scripts', 'prepack-server.mjs');
 const SERVER_README = join(REPO_ROOT, 'packages', 'server', 'README.md');
+const RELEASE_WORKFLOW = join(REPO_ROOT, '.github', 'workflows', 'release.yml');
 
 interface CoreManifest {
   private?: boolean;
@@ -200,6 +202,69 @@ describe('server bin survives npm publish (RCB-51)', () => {
     expect(bins).toEqual([['repoboard', 'dist/cli.js']]);
     for (const [, path] of bins) {
       expect(path).not.toMatch(/^(\.\/|\/|\.\.)/);
+    }
+  });
+});
+
+describe('release workflow (RCB-214)', () => {
+  // The release route publishes through npm Trusted Publishing: an OIDC identity, no stored token.
+  // Each assertion here guards one way that route could quietly become something else — a token
+  // path, a wider trigger, a publish that fires without a version tag, a runner that cannot do OIDC.
+  interface WorkflowStep {
+    name?: string;
+    if?: unknown;
+    run?: string;
+  }
+  interface Workflow {
+    on?: { push?: unknown; workflow_dispatch?: unknown; [event: string]: unknown };
+    permissions?: Record<string, string>;
+    jobs?: Record<
+      string,
+      { 'runs-on'?: unknown; permissions?: Record<string, string>; steps?: WorkflowStep[] }
+    >;
+  }
+
+  const text = readFileSync(RELEASE_WORKFLOW, 'utf8');
+  const workflow = parseYaml(text) as Workflow;
+  const jobs = Object.values(workflow.jobs ?? {});
+  const steps = jobs.flatMap((j) => j.steps ?? []);
+
+  it('runs on a v* tag push and on manual dispatch, and on nothing else', () => {
+    expect(workflow.on?.push).toEqual({ tags: ['v*'] });
+    expect(workflow.on && 'workflow_dispatch' in workflow.on).toBe(true);
+    expect(Object.keys(workflow.on ?? {}).sort()).toEqual(['push', 'workflow_dispatch']);
+  });
+
+  it('grants exactly contents: read and id-token: write, and no job widens that', () => {
+    expect(workflow.permissions).toEqual({ contents: 'read', 'id-token': 'write' });
+    for (const job of jobs) {
+      expect(job.permissions ?? workflow.permissions).toEqual(workflow.permissions);
+    }
+  });
+
+  it('runs every job on a GitHub-hosted ubuntu-latest runner', () => {
+    expect(jobs.length).toBeGreaterThan(0);
+    expect(jobs.map((j) => j['runs-on'])).toEqual(jobs.map(() => 'ubuntu-latest'));
+  });
+
+  it('carries no token: no secrets context and no auth-token variable anywhere in the file', () => {
+    expect(text).not.toContain('secrets.');
+    expect(text).not.toContain('NODE_AUTH_TOKEN');
+  });
+
+  it('gates every real `npm publish` on a push of a v* tag', () => {
+    const publishes = steps.filter(
+      (s) => /\bnpm\s+publish\b/.test(s.run ?? '') && !(s.run ?? '').includes('--dry-run'),
+    );
+    expect(publishes.length, 'no non-dry-run `npm publish` step found').toBeGreaterThan(0);
+    for (const step of publishes) {
+      const gate = String(step.if ?? '');
+      expect(gate, `step "${step.name}" publishes with no if:`).toContain(
+        "github.event_name == 'push'",
+      );
+      expect(gate, `step "${step.name}" publishes without requiring a tag ref`).toContain(
+        'refs/tags/',
+      );
     }
   });
 });

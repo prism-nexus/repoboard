@@ -64,6 +64,19 @@ systems:
     source:
       hand: repoboard builder
       at: 2026-09-29T19:38:13Z
+  - id: release
+    name: Release
+    kind: ci
+    layer: ops
+    env:
+      - dev
+    runtime:
+      dev: "GitHub Actions on a v* tag: the gate, pack-smoke, then npm publish over OIDC (trusted publishing); a manual run ends in --dry-run"
+    pointers:
+      - .github/workflows/release.yml:L33-L123
+    source:
+      hand: repoboard builder
+      at: 2026-10-03T22:31:08Z
 connections:
   - from: web
     to: repoboard

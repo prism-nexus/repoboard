@@ -1,0 +1,123 @@
+# RCB-214: publish the `repoboard` npm package from CI with npm Trusted Publishing (OIDC).
+#
+# A push of a `v*` tag runs the gates (test, typecheck, lint, build), packs packages/server once,
+# smoke-tests that tarball, and publishes THAT tarball with `npm publish`. No npm token is used or
+# stored anywhere: npm exchanges this run's OIDC identity for a short-lived publish credential, and
+# attaches provenance to the release on its own. A manual run (workflow_dispatch) does everything
+# except the publish: it ends in `npm publish --dry-run`, so the whole route can be rehearsed.
+#
+# Owner-only steps, outside this repo (nothing here can do them):
+#   1. npmjs.com > the `repoboard` package > Settings > Trusted Publisher: GitHub Actions, this
+#      repository, workflow file `release.yml`. The names must match exactly, case included.
+#   2. After the first publish from this workflow works, set the package's publishing access to
+#      "Require two-factor authentication and disallow tokens", so a token can no longer publish.
+#
+# Trusted publishing needs npm >= 11.5.1, Node >= 22.14.0, `id-token: write` and a GitHub-hosted
+# runner. The npm floor is enforced below; the Node floor is met by `node-version: 24`.
+
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: test · build · pack-smoke · publish
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        # pnpm version comes from the "packageManager" field in package.json
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+          registry-url: https://registry.npmjs.org
+      - name: Install npm >= 11.5.1 (trusted publishing)
+        run: |
+          npm install -g 'npm@^11.5.1'
+          have="$(npm --version)"
+          echo "npm $have"
+          if [ "$(printf '%s\n' 11.5.1 "$have" | sort -V | head -n 1)" != 11.5.1 ]; then
+            echo "::error::npm $have is older than 11.5.1; trusted publishing needs 11.5.1 or newer"
+            exit 1
+          fi
+      - run: pnpm install --frozen-lockfile
+      - name: Version guard
+        # On a tag push: the tag must be v<version> and the version must not be on npm yet. On a
+        # manual run both facts are printed and neither fails the run.
+        run: |
+          set -u
+          v="$(node -p "require('./packages/server/package.json').version")"
+          err="$(mktemp)"
+          rc=0
+          on_npm="$(npm view "repoboard@$v" version 2>"$err")" || rc=$?
+          if [ "$rc" -ne 0 ] && ! grep -q E404 "$err"; then
+            cat "$err"
+            on_npm="unknown (npm view exited $rc)"
+            unknown=1
+          else
+            unknown=0
+          fi
+          echo "package.json version: $v"
+          echo "ref name:             $GITHUB_REF_NAME (expected v$v)"
+          echo "already on npm:       ${on_npm:-no}"
+          if [ "$GITHUB_EVENT_NAME" = push ]; then
+            if [ "$GITHUB_REF_NAME" != "v$v" ]; then
+              echo "::error::tag $GITHUB_REF_NAME does not match packages/server version v$v"
+              exit 1
+            fi
+            if [ "$unknown" -ne 0 ]; then
+              echo "::error::could not tell whether repoboard@$v is already on npm"
+              exit 1
+            fi
+            if [ -n "$on_npm" ]; then
+              echo "::error::repoboard@$v is already on npm"
+              exit 1
+            fi
+          fi
+      - run: pnpm test
+        env:
+          REPOBOARD_WATCH_DIAG: '1'
+      - run: pnpm typecheck
+      - run: pnpm lint
+      - run: pnpm build
+      - name: Pack
+        id: pack
+        run: |
+          set -eu
+          out="$(mktemp -d)"
+          (cd packages/server && npm pack --pack-destination "$out")
+          set -- "$out"/*.tgz
+          if [ "$#" -ne 1 ] || [ ! -f "$1" ]; then
+            echo "::error::expected exactly one .tgz in $out, found $#: $*"
+            exit 1
+          fi
+          echo "tarball=$1" >> "$GITHUB_OUTPUT"
+          echo "tarball: $1"
+      - name: Pack smoke
+        run: |
+          scripts/pack-smoke.sh "$TARBALL"
+          sha1sum "$TARBALL"
+        env:
+          TARBALL: ${{ steps.pack.outputs.tarball }}
+      - name: Publish (tag push)
+        if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+        run: npm publish "$TARBALL" --access public
+        env:
+          TARBALL: ${{ steps.pack.outputs.tarball }}
+      - name: Publish dry run (manual run)
+        if: github.event_name != 'push' || !startsWith(github.ref, 'refs/tags/v')
+        run: npm publish "$TARBALL" --dry-run
+        env:
+          TARBALL: ${{ steps.pack.outputs.tarball }}

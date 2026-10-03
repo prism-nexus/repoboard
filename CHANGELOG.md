@@ -5,6 +5,16 @@ All notable changes to this project are documented in this file. The format is b
 
 ## [Unreleased]
 
+### Changed
+
+- **Releases publish from CI with npm trusted publishing and provenance (RCB-214).** Pushing a
+  `v*` tag runs `.github/workflows/release.yml`: it fails unless the tag is `v` plus the
+  `packages/server` version and that version is not on npm, runs test, typecheck, lint and build,
+  packs once, smoke-tests that tarball, and publishes that same tarball over OIDC — no npm token
+  is stored anywhere. A manual run does all of it except the publish and ends in
+  `npm publish --dry-run`. The route needs the owner to register the workflow as the package's
+  trusted publisher on npmjs.com first; the workflow's header comment lists the steps.
+
 ## [0.3.1] — 2026-10-01
 
 ### Added

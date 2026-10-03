@@ -27,12 +27,12 @@ async function readSystemsText(): Promise<string> {
 }
 
 describe("systems dogfood (RCB-99): this repo's own .repoboard/systems.yml", () => {
-  it('parses: ok, 4 systems, 2 connections, prod is none', async () => {
+  it('parses: ok, 5 systems, 2 connections, prod is none', async () => {
     const text = await readSystemsText();
     const parsed = parseSystems(text);
     expect(parsed.ok).toBe(true);
     if (!parsed.ok) return;
-    expect(parsed.doc.systems).toHaveLength(4);
+    expect(parsed.doc.systems).toHaveLength(5);
     expect(parsed.doc.connections).toHaveLength(2);
     expect('none' in parsed.doc.environments.prod).toBe(true);
   });
@@ -103,11 +103,11 @@ describe("systems dogfood (RCB-99): this repo's own .repoboard/systems.yml", () 
 
     const both = layoutSystems(doc, 'both');
     const bothBoxCount = both.rows.reduce((n, r) => n + r.boxes.length, 0);
-    expect(bothBoxCount).toBe(4);
+    expect(bothBoxCount).toBe(5);
 
     const dev = layoutSystems(doc, 'dev');
     const devBoxCount = dev.rows.reduce((n, r) => n + r.boxes.length, 0);
-    expect(devBoxCount).toBe(4);
+    expect(devBoxCount).toBe(5);
 
     const prod = layoutSystems(doc, 'prod');
     expect(prod.rows).toEqual([]);
@@ -115,14 +115,14 @@ describe("systems dogfood (RCB-99): this repo's own .repoboard/systems.yml", () 
     expect(prod.none.prod).toBe('local-only by design — speed and tokens');
   });
 
-  it('runDetect dry-run on this repo: 0 added, 0 updated, 3 hand rows kept, applied false', async () => {
+  it('runDetect dry-run on this repo: 0 added, 0 updated, 4 hand rows kept, applied false', async () => {
     const now = new Date('2026-09-22T00:00:00Z');
     const run = await runDetect(REPO_ROOT, { apply: false, now });
     expect(run.errors).toEqual([]);
     expect(run.applied).toBe(false);
     expect(run.plan.added).toEqual([]);
     expect(run.plan.updated).toEqual([]);
-    expect(run.plan.skipped).toHaveLength(3);
-    expect(new Set(run.plan.skipped)).toEqual(new Set(['repoboard', 'web', 'ci']));
+    expect(run.plan.skipped).toHaveLength(4);
+    expect(new Set(run.plan.skipped)).toEqual(new Set(['repoboard', 'web', 'ci', 'release']));
   });
 });

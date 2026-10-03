@@ -12,8 +12,9 @@ All notable changes to this project are documented in this file. The format is b
   `packages/server` version and that version is not on npm, runs test, typecheck, lint and build,
   packs once, smoke-tests that tarball, and publishes that same tarball over OIDC — no npm token
   is stored anywhere. A manual run does all of it except the publish and ends in
-  `npm publish --dry-run`. The route needs the owner to register the workflow as the package's
-  trusted publisher on npmjs.com first; the workflow's header comment lists the steps.
+  `npm publish --dry-run`, which it skips, with a notice, when the version is already on npm (npm
+  refuses a dry run of a published version). The route needs the owner to register the workflow as
+  the package's trusted publisher on npmjs.com first; the workflow's header comment lists the steps.
 
 ## [0.3.1] — 2026-10-01
 

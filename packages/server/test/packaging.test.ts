@@ -9,10 +9,19 @@
  * when `packages/core/dist` is absent — but see the `publishConfig` path test: once `dist` exists,
  * a `publishConfig` path the build does not emit is a failure, not a skip. That is the control.
  */
-import { execFileSync } from 'node:child_process';
-import { existsSync, mkdtempSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import { execFileSync, spawnSync } from 'node:child_process';
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
-import { dirname, join, resolve } from 'node:path';
+import { delimiter, dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { parse as parseYaml } from 'yaml';
@@ -211,9 +220,11 @@ describe('release workflow (RCB-214)', () => {
   // Each assertion here guards one way that route could quietly become something else — a token
   // path, a wider trigger, a publish that fires without a version tag, a runner that cannot do OIDC.
   interface WorkflowStep {
+    id?: string;
     name?: string;
     if?: unknown;
     run?: string;
+    env?: Record<string, string>;
   }
   interface Workflow {
     on?: { push?: unknown; workflow_dispatch?: unknown; [event: string]: unknown };
@@ -266,5 +277,133 @@ describe('release workflow (RCB-214)', () => {
         'refs/tags/',
       );
     }
+  });
+
+  // A manual run on a version that is already on npm must not end red: npm 11.21 refuses
+  // `npm publish --dry-run` for a published version, after every gate has passed. These tests run
+  // the steps' own `run:` text under bash with a fake `npm` first on PATH (it logs its argv and
+  // answers `view` from an env var), so they check what the steps DO, not what they say.
+  describe('version already on npm', () => {
+    const guardStep = steps.find((s) => s.name === 'Version guard');
+    const dryRunStep = steps.find((s) => s.name === 'Publish dry run (manual run)');
+    const TARBALL = '/acme/demo/repoboard-9.9.9.tgz';
+
+    function sandbox() {
+      const dir = mkdtempSync(join(tmpdir(), 'rcb214-'));
+      const bin = join(dir, 'bin');
+      mkdirSync(bin);
+      const log = join(dir, 'npm.log');
+      const output = join(dir, 'github-output');
+      writeFileSync(output, '');
+      writeFileSync(
+        join(bin, 'npm'),
+        [
+          '#!/bin/sh',
+          'echo "$*" >> "$FAKE_NPM_LOG"',
+          'if [ "$1" = view ]; then',
+          '  if [ -n "$FAKE_NPM_VIEW_VERSION" ]; then echo "$FAKE_NPM_VIEW_VERSION"; exit 0; fi',
+          '  echo "npm error code E404" >&2',
+          '  exit 1',
+          'fi',
+          'exit 0',
+          '',
+        ].join('\n'),
+      );
+      chmodSync(join(bin, 'npm'), 0o755);
+      return { dir, bin, log, output };
+    }
+
+    function runStep(
+      step: WorkflowStep | undefined,
+      cwd: string,
+      box: ReturnType<typeof sandbox>,
+      env: Record<string, string>,
+    ) {
+      expect(step?.run, 'step not found in release.yml').toBeTruthy();
+      // `bash -e`: the shell GitHub runs a `run:` step with when the workflow names none.
+      const r = spawnSync('bash', ['-e', '-c', step?.run ?? ''], {
+        cwd,
+        encoding: 'utf8',
+        env: {
+          ...process.env,
+          PATH: `${box.bin}${delimiter}${process.env.PATH ?? ''}`,
+          GITHUB_EVENT_NAME: 'workflow_dispatch',
+          GITHUB_REF_NAME: 'main',
+          GITHUB_OUTPUT: box.output,
+          FAKE_NPM_LOG: box.log,
+          FAKE_NPM_VIEW_VERSION: '',
+          ...env,
+        },
+      });
+      const npmCalls = existsSync(box.log)
+        ? readFileSync(box.log, 'utf8').split('\n').filter(Boolean)
+        : [];
+      return { status: r.status, stdout: r.stdout, stderr: r.stderr, npmCalls };
+    }
+
+    function guardOutputs(env: Record<string, string>) {
+      const box = sandbox();
+      try {
+        const r = runStep(guardStep, REPO_ROOT, box, env);
+        return { ...r, outputs: readFileSync(box.output, 'utf8').split('\n').filter(Boolean) };
+      } finally {
+        rmSync(box.dir, { recursive: true, force: true });
+      }
+    }
+
+    function dryRun(env: Record<string, string>) {
+      const box = sandbox();
+      try {
+        return runStep(dryRunStep, box.dir, box, { TARBALL, VERSION: '9.9.9', ...env });
+      } finally {
+        rmSync(box.dir, { recursive: true, force: true });
+      }
+    }
+
+    // Breaks if: the `already=` line is deleted from the guard, or the `elif [ -n "$on_npm" ]`
+    // branch assigns `already=no`.
+    it('guard: reports already=yes when npm view prints the version', () => {
+      const r = guardOutputs({ FAKE_NPM_VIEW_VERSION: '9.9.9' });
+      expect(r.status, r.stderr).toBe(0);
+      expect(r.npmCalls).toHaveLength(1);
+      expect(r.npmCalls[0]).toMatch(/^view repoboard@\S+ version$/);
+      expect(r.outputs).toContain('already=yes');
+    });
+
+    // Breaks if: `grep -q E404 "$err"` in the guard becomes `grep -q E405 "$err"` (an E404 is then
+    // read as a failed lookup, `already=unknown`), or the `else` branch assigns `already=yes`.
+    it('guard: reports already=no when npm view fails with E404', () => {
+      const r = guardOutputs({ FAKE_NPM_VIEW_VERSION: '' });
+      expect(r.status, r.stderr).toBe(0);
+      expect(r.npmCalls).toHaveLength(1);
+      expect(r.outputs).toContain('already=no');
+      expect(r.outputs).not.toContain('already=yes');
+    });
+
+    // Breaks if: the `if [ "$ALREADY" = yes ]` block is deleted from the dry-run step, its `exit 0`
+    // is removed, or the test becomes `[ "$ALREADY" = no ]`.
+    it('dry run: skips with a notice, exit 0 and no npm call, when ALREADY=yes', () => {
+      const r = dryRun({ ALREADY: 'yes' });
+      expect(r.status, r.stderr).toBe(0);
+      expect(r.npmCalls).toEqual([]);
+      expect(r.stdout).toContain('::notice::repoboard@9.9.9 is already on npm');
+    });
+
+    // Breaks if: `--dry-run` is dropped or changed on the `npm publish` line, or the skip test
+    // becomes `[ "$ALREADY" != yes ]`, or an `exit 0` is added before the `npm publish` line.
+    it('dry run: still runs `npm publish <tarball> --dry-run` when ALREADY=no', () => {
+      const r = dryRun({ ALREADY: 'no' });
+      expect(r.status, r.stderr).toBe(0);
+      expect(r.npmCalls).toEqual([`publish ${TARBALL} --dry-run`]);
+      expect(r.stdout).not.toContain('::notice::');
+    });
+
+    // Breaks if: `id: guard` is removed from the guard step, or the dry-run step's `ALREADY:` env
+    // line is removed or points at another output. Without the wire the two behaviours above hold
+    // in isolation while a real run never skips.
+    it('wires the guard output into the dry-run step', () => {
+      expect(guardStep?.id).toBe('guard');
+      expect(dryRunStep?.env?.ALREADY).toMatch(/^\$\{\{\s*steps\.guard\.outputs\.already\s*\}\}$/);
+    });
   });
 });

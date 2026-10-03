@@ -4,7 +4,9 @@
 # smoke-tests that tarball, and publishes THAT tarball with `npm publish`. No npm token is used or
 # stored anywhere: npm exchanges this run's OIDC identity for a short-lived publish credential, and
 # attaches provenance to the release on its own. A manual run (workflow_dispatch) does everything
-# except the publish: it ends in `npm publish --dry-run`, so the whole route can be rehearsed.
+# except the publish: it ends in `npm publish --dry-run`, so the whole route can be rehearsed. When
+# the version is already on npm it skips that last step with a notice: npm refuses to dry-run a
+# version it has already published.
 #
 # Owner-only steps, outside this repo (nothing here can do them):
 #   1. npmjs.com > the `repoboard` package > Settings > Trusted Publisher: GitHub Actions, this
@@ -54,8 +56,10 @@ jobs:
           fi
       - run: pnpm install --frozen-lockfile
       - name: Version guard
+        id: guard
         # On a tag push: the tag must be v<version> and the version must not be on npm yet. On a
-        # manual run both facts are printed and neither fails the run.
+        # manual run both facts are printed and neither fails the run. Either way the step output
+        # `already` says yes, no or unknown (npm view failed for a reason other than E404).
         run: |
           set -u
           v="$(node -p "require('./packages/server/package.json').version")"
@@ -72,6 +76,17 @@ jobs:
           echo "package.json version: $v"
           echo "ref name:             $GITHUB_REF_NAME (expected v$v)"
           echo "already on npm:       ${on_npm:-no}"
+          if [ "$unknown" -ne 0 ]; then
+            already=unknown
+          elif [ -n "$on_npm" ]; then
+            already=yes
+          else
+            already=no
+          fi
+          {
+            echo "already=$already"
+            echo "version=$v"
+          } >> "$GITHUB_OUTPUT"
           if [ "$GITHUB_EVENT_NAME" = push ]; then
             if [ "$GITHUB_REF_NAME" != "v$v" ]; then
               echo "::error::tag $GITHUB_REF_NAME does not match packages/server version v$v"
@@ -118,6 +133,15 @@ jobs:
           TARBALL: ${{ steps.pack.outputs.tarball }}
       - name: Publish dry run (manual run)
         if: github.event_name != 'push' || !startsWith(github.ref, 'refs/tags/v')
-        run: npm publish "$TARBALL" --dry-run
+        # npm 11 refuses `publish --dry-run` for a version that is already published, so when the
+        # guard saw this version on npm the dry run is skipped (every step above still ran).
+        run: |
+          if [ "$ALREADY" = yes ]; then
+            echo "::notice::repoboard@$VERSION is already on npm; npm's dry run refuses an existing version, so the dry-run publish is skipped. Every step above ran on this tarball."
+            exit 0
+          fi
+          npm publish "$TARBALL" --dry-run
         env:
           TARBALL: ${{ steps.pack.outputs.tarball }}
+          ALREADY: ${{ steps.guard.outputs.already }}
+          VERSION: ${{ steps.guard.outputs.version }}

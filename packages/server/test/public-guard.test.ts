@@ -279,6 +279,72 @@ describe('public-guard.sh push', () => {
     expect(r.stderr).toBe('');
   });
 
+  it("a new branch's outgoing commits are those no tracking ref of THIS remote has, not of any remote (RCB-213)", async () => {
+    const root = await makeRepo(DENY);
+    await stage(root, { 'notes.txt': 'innocent\n' });
+    await git(root, 'commit', '-q', '-m', 'Acme-Secret launch notes');
+    const sha = await git(root, 'rev-parse', 'HEAD');
+    const short = await git(root, 'rev-parse', '--short', 'HEAD');
+    // Another remote already has the commit; that says nothing about what `origin` holds.
+    await git(root, 'update-ref', 'refs/remotes/mirror/main', sha);
+    const other = await guard(root, ['push', 'origin', 'url'], refLine(sha));
+    expect(other.code).toBe(1);
+    expect(other.stderr).toContain(`commit ${short} message`);
+    expect(other.stderr.toLowerCase()).not.toContain('acme-secret');
+    // No remote name to scope by: every commit is outgoing, never fewer.
+    expect((await guard(root, ['push'], refLine(sha))).code).toBe(1);
+    // The same commit under THIS remote's tracking refs is not outgoing.
+    await git(root, 'update-ref', 'refs/remotes/origin/main', sha);
+    const same = await guard(root, ['push', 'origin', 'url'], refLine(sha));
+    expect(same.code).toBe(0);
+    expect(same.stderr).toBe('');
+  });
+
+  it('a match one outgoing commit adds and the next removes is still caught: commit, file:line, no text', async () => {
+    const root = await makeRepo(DENY);
+    const base = await git(root, 'rev-parse', 'HEAD');
+    await stage(root, { 'leak.txt': 'one\nthe Acme-Secret plan\nthree\n' });
+    await git(root, 'commit', '-q', '-m', 'add notes');
+    const shortA = await git(root, 'rev-parse', '--short', 'HEAD');
+    await git(root, 'rm', '-q', 'leak.txt');
+    await git(root, 'commit', '-q', '-m', 'drop notes');
+    const shortB = await git(root, 'rev-parse', '--short', 'HEAD');
+    const tip = await git(root, 'rev-parse', 'HEAD');
+    // New branch (everything outgoing) and an existing branch (base..tip): the tip tree is clean in
+    // both, so only the history scan can see line 2 of the file that was added and removed.
+    for (const remote of [ZEROS, base]) {
+      const r = await guard(root, ['push', 'origin', 'url'], refLine(tip, remote));
+      expect(r.code).toBe(1);
+      expect(r.stderr).toContain(`commit ${shortA} leak.txt:2`);
+      expect(r.stderr).not.toContain('refs/heads/main: leak.txt');
+      expect(r.stderr).not.toContain(shortB);
+      expect(r.stderr.toLowerCase()).not.toContain('acme-secret');
+    }
+  });
+
+  it('a merge TREESAME to its parent does not hide the side commits that added a match', async () => {
+    const root = await makeRepo(DENY);
+    const base = await git(root, 'rev-parse', 'HEAD');
+    await git(root, 'switch', '-q', '-c', 'side');
+    await stage(root, { 'side.txt': 'x\nAcme-Secret\n' });
+    await git(root, 'commit', '-q', '-m', 'side add');
+    const shortSide = await git(root, 'rev-parse', '--short', 'HEAD');
+    await git(root, 'rm', '-q', 'side.txt');
+    await git(root, 'commit', '-q', '-m', 'side drop');
+    await git(root, 'switch', '-q', 'main');
+    await git(root, 'merge', '-q', '--no-ff', '-m', 'merge side', 'side');
+    const merge = await git(root, 'rev-parse', 'HEAD');
+    // The precondition: the merge changes nothing, so default history simplification drops the side.
+    expect(await git(root, 'rev-parse', 'HEAD^{tree}')).toBe(
+      await git(root, 'rev-parse', `${base}^{tree}`),
+    );
+    const r = await guard(root, ['push', 'origin', 'url'], refLine(merge, base));
+    expect(r.code).toBe(1);
+    expect(r.stderr).toContain(`commit ${shortSide} side.txt:2`);
+    expect(r.stderr).not.toContain('refs/heads/main: side.txt');
+    expect(r.stderr.toLowerCase()).not.toContain('acme-secret');
+  });
+
   it('a lockfile hit in the pushed tree is ignored; the same text in a notes file is not', async () => {
     const root = await makeRepo(DENY);
     await stage(root, {

@@ -430,3 +430,27 @@ describe('README.md §Config example', () => {
     expect(result.config.columns).toEqual(defaultBoardConfig().columns);
   });
 });
+
+describe('workspace: key (RCB-184)', () => {
+  it("absent: no key in the config, none written back — today's board byte for byte", () => {
+    const parsed = parseBoard('prefix: RB\n');
+    expect(parsed.ok && parsed.config.workspace).toBeFalsy();
+    expect(serializeBoard(defaultBoardConfig())).not.toContain('workspace');
+  });
+
+  it('parses, trims, and round-trips with the key kept', () => {
+    const parsed = parseBoard('prefix: RB\nworkspace: " ../acme "\n');
+    if (!parsed.ok) throw new Error(parsed.error);
+    expect(parsed.config.workspace).toBe('../acme');
+    const text = serializeBoard(parsed.config);
+    expect(text).toContain('workspace: ../acme\n');
+    const again = parseBoard(text);
+    expect(again.ok && again.config.workspace).toBe('../acme');
+  });
+
+  it('an empty value is an error naming the key', () => {
+    const parsed = parseBoard('prefix: RB\nworkspace: ""\n');
+    expect(parsed.ok).toBe(false);
+    if (!parsed.ok) expect(parsed.error).toMatch(/^workspace: /);
+  });
+});

@@ -62,6 +62,7 @@ import {
   type StateSectionName,
   type SystemsDoc,
   seatListRows,
+  seatListRowsWithoutHomeCopies,
   seatWhoami,
   serializeBoard,
   serializeCard,
@@ -305,7 +306,14 @@ Usage:
                                         <tag> is dead: …" line follows for a bullet that still
                                         says UP for a holder that is gone. --json prints
                                         SeatListRow[]; an unreadable seats.yml is a stderr
-                                        warning, the rows still print
+                                        warning, the rows still print. RCB-184: with board.yml's
+                                        workspace: <home root> (a seat whose home is another
+                                        board), the home board's OWN seats follow this board's,
+                                        named "[<home>] <seat>" and read live from the home's
+                                        STATE.md and seats.yml — never written; this board's own
+                                        bullets prefixed with the home's name are copies and are
+                                        left out; a home that cannot be read is a stderr warning
+                                        and this board's rows still print
   repoboard seat whoami [--json]       RCB-199: which seat does THIS pane hold — "A7B2 · acme
                                         builder", or "A7B2 · no seat" when it holds none (exit 0
                                         either way), " (also holds a, b)" appended when it holds
@@ -432,7 +440,15 @@ Usage:
                                         disagree about who holds a seat, or a lease has no bullet);
                                         each is one line per seat or group of bullets, and the last
                                         three say nothing without .repoboard/local/ or when its
-                                        seats.yml does not parse (RCB-200)
+                                        seats.yml does not parse (RCB-200). RCB-184, only with
+                                        board.yml's workspace: <home root> (all warnings; block
+                                        only with --strict): seat-copy (a SEATS bullet prefixed
+                                        with the home board's name — delete it, the home's bullet
+                                        is read live), seat-home-unreadable (the home's
+                                        .repoboard/, STATE.md or board.yml cannot be read),
+                                        seat-home-not-member (the home's repos: lists no root that
+                                        resolves to this repo); while the home is readable,
+                                        stale-state ignores log blocks written under its name
   repoboard gate record --as <seat> [--tests <passed>|<skipped> --failed n] [--files n]
                         [--typecheck n] [--lint n] [--build n] [--sha s] [--note t]
                                         append one line to the gate ledger — a
@@ -2338,8 +2354,25 @@ async function cmdSeat(args: string[], io: CliIO): Promise<number> {
     // the bullet says, LIVE = whether that process is still running). `seats.yml` unreadable is a
     // warning, not a failure: the rows are still printed, their holder columns `-` / `null`.
     const held = await store.seatHolders();
-    const rows = seatListRows(seats, held.holders);
-    if (held.error !== null) (io.stderr ?? io.stdout).write(`warning: ${held.error}\n`);
+    // RCB-184: `workspace:` — after this board's own rows, the HOME board's own seats, read live
+    // and read-only (`[acme] coordinator`); an own bullet prefixed with the home's name is a stale
+    // copy and is left out (`check` says `seat-copy`). A home that cannot be read is a stderr
+    // warning, never an empty list: this board's own rows still print. No key: `readHome()` is
+    // `null` and this is exactly `seatListRows`.
+    const home = await store.readHome();
+    const rows =
+      home?.ok === true
+        ? [...seatListRowsWithoutHomeCopies(seats, held.holders, home.name), ...home.rows]
+        : seatListRows(seats, held.holders);
+    const err = io.stderr ?? io.stdout;
+    if (held.error !== null) err.write(`warning: ${held.error}\n`);
+    if (home?.ok === false) {
+      err.write(
+        `warning: workspace: ${home.configured}: ${home.error} — its seats are not listed\n`,
+      );
+    } else if (home?.holderError) {
+      err.write(`warning: workspace: ${home.configured}: ${home.holderError}\n`);
+    }
     if (values.json) {
       io.stdout.write(`${JSON.stringify(rows, null, 2)}\n`);
     } else {

@@ -10,6 +10,7 @@ import type { StateDoc } from '../src/state.js';
 import {
   checkFindings,
   exitCodeForFindings,
+  FINDING_KINDS,
   initialStateText,
   OWNER_QUEUE_FILE_PLACEHOLDER,
   OWNER_QUEUE_PLACEHOLDER,
@@ -1726,5 +1727,82 @@ describe('splitLandings / trimLandings (RCB-92)', () => {
 
   it('keep < 0 throws a plain Error', () => {
     expect(() => trimLandings(body, -1)).toThrow(Error);
+  });
+});
+
+describe('checkFindings: stale-state and the home board (RCB-184)', () => {
+  const config = defaultBoardConfig();
+  const base = {
+    state: stateAt('2026-09-17T18:00:00Z'),
+    cards: [],
+    config,
+    leases: emptyLeases(),
+    now: NOW,
+  };
+  const homeBlock: LogBlock = {
+    seat: 'coordinator',
+    ts: '2026-09-17T19:30:00Z',
+    title: 'x',
+    text: 'y',
+    repo: 'acme',
+  };
+  const ownBlock: LogBlock = { ...homeBlock, seat: 'builder', repo: 'demo' };
+  // mtime OLDER than the stamp: only a header can make the state stale.
+  const logOf = (...blocks: LogBlock[]) => [
+    { date: '2026-09-17', mtimeMs: Date.parse('2026-09-17T17:00:00Z'), blocks },
+  ];
+  const stale = (f: readonly { kind: string }[]) => f.some((x) => x.kind === 'stale-state');
+
+  it("a block under the home's name does not make STATE stale — and the same block without homeBoard does", () => {
+    expect(stale(checkFindings({ ...base, logs: logOf(homeBlock), homeBoard: 'acme' }))).toBe(
+      false,
+    );
+    // the control, in the direction we fear: the key absent, the same block, the same stamp
+    expect(stale(checkFindings({ ...base, logs: logOf(homeBlock) }))).toBe(true);
+    expect(stale(checkFindings({ ...base, logs: logOf(homeBlock), homeBoard: null }))).toBe(true);
+  });
+
+  it('the home name matches case-insensitively and trimmed, like every board-name compare', () => {
+    expect(stale(checkFindings({ ...base, logs: logOf(homeBlock), homeBoard: ' ACME ' }))).toBe(
+      false,
+    );
+  });
+
+  it("this board's own block, and a third board's, still make it stale with homeBoard set", () => {
+    expect(stale(checkFindings({ ...base, logs: logOf(ownBlock), homeBoard: 'acme' }))).toBe(true);
+    const third: LogBlock = { ...homeBlock, repo: 'other' };
+    expect(stale(checkFindings({ ...base, logs: logOf(third), homeBoard: 'acme' }))).toBe(true);
+    const unprefixed: LogBlock = { ...homeBlock, repo: null };
+    expect(stale(checkFindings({ ...base, logs: logOf(unprefixed), homeBoard: 'acme' }))).toBe(
+      true,
+    );
+  });
+
+  it("an own block beside the home's decides: the newest OWN block is the one compared", () => {
+    const older: LogBlock = { ...ownBlock, ts: '2026-09-17T17:30:00Z' };
+    expect(
+      stale(checkFindings({ ...base, logs: logOf(older, homeBlock), homeBoard: 'acme' })),
+    ).toBe(false);
+    expect(
+      stale(checkFindings({ ...base, logs: logOf(ownBlock, homeBlock), homeBoard: 'acme' })),
+    ).toBe(true);
+  });
+
+  it("a file whose only blocks are the home's is still 'headed': its newer mtime is not a fallback", () => {
+    const logs = [
+      { date: '2026-09-17', mtimeMs: Date.parse('2026-09-17T20:00:00Z'), blocks: [homeBlock] },
+    ];
+    expect(stale(checkFindings({ ...base, logs, homeBoard: 'acme' }))).toBe(false);
+    // a headerless file still falls back to its mtime, home or not
+    const headerless = [
+      { date: '2026-09-17', mtimeMs: Date.parse('2026-09-17T20:00:00Z'), blocks: [] },
+    ];
+    expect(stale(checkFindings({ ...base, logs: headerless, homeBoard: 'acme' }))).toBe(true);
+  });
+
+  it('FINDING_KINDS lists the three new kinds', () => {
+    expect(FINDING_KINDS).toEqual(
+      expect.arrayContaining(['seat-copy', 'seat-home-unreadable', 'seat-home-not-member']),
+    );
   });
 });

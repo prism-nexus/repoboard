@@ -863,10 +863,12 @@ export function listSeats(seatsSection: string): SeatRow[] {
  * `seatListRows` reads a row's label off THAT bullet, never off a second walk that has to skip the
  * same bullets in the same order to line up.
  */
-function seatRowBullets(seatsSection: string): { row: SeatRow; bullet: string }[] {
+function seatRowBullets(
+  seatsSection: string,
+): { row: SeatRow; bullet: string; board: string | null }[] {
   const lines = seatsSection.split('\n');
   const spans = bulletSpans(lines);
-  const entries: { row: SeatRow; bullet: string }[] = [];
+  const entries: { row: SeatRow; bullet: string; board: string | null }[] = [];
   for (const span of spans) {
     const bulletLines = lines.slice(span.start, span.end);
     const bulletText = bulletLines.join('\n');
@@ -879,6 +881,8 @@ function seatRowBullets(seatsSection: string): { row: SeatRow; bullet: string }[
     entries.push({
       row: { name: bulletName(firstLine), status: parsed.status, stamp, inFlight },
       bullet: bulletText,
+      // RCB-184: the bullet's own `[repo] ` prefix, verbatim — `bulletName` strips it from `name`.
+      board: m?.[1] ?? null,
     });
   }
   return entries;
@@ -919,8 +923,8 @@ export function seatListRows(
 function seatListEntries(
   seatsSection: string,
   holders: readonly SeatHolderInfo[],
-): { row: SeatListRow; bullet: string }[] {
-  return seatRowBullets(seatsSection).map(({ row, bullet }) => {
+): { row: SeatListRow; bullet: string; board: string | null }[] {
+  return seatRowBullets(seatsSection).map(({ row, bullet, board }) => {
     const holder = holders.find((h) => h.seat.toLowerCase() === row.name.toLowerCase());
     return {
       row: {
@@ -930,8 +934,47 @@ function seatListEntries(
         live: holder?.liveness ?? null,
       },
       bullet,
+      board,
     };
   });
+}
+
+/** A bullet's `[repo]` prefix names `board` (`seatNameKey`'s fold: trimmed, case-insensitive). */
+function prefixedWith(bulletBoard: string | null, board: string): boolean {
+  return bulletBoard !== null && seatNameKey(bulletBoard) === seatNameKey(board);
+}
+
+/**
+ * RCB-184: `seatListRows` for a board whose HOME is `homeName` (`workspace:` in `board.yml`) — the
+ * rows of this board's OWN seats. A bullet prefixed with the home's name (`[acme] coordinator`) is
+ * a stale COPY of a seat the home's own STATE.md speaks for (`homeSeatRows`), so it is left out;
+ * every other row — unprefixed, or prefixed with some third board — is exactly `seatListRows`'.
+ * `holders` as in `seatListRows`.
+ */
+export function seatListRowsWithoutHomeCopies(
+  seatsSection: string,
+  holders: readonly SeatHolderInfo[],
+  homeName: string,
+): SeatListRow[] {
+  return seatListEntries(seatsSection, holders)
+    .filter((entry) => !prefixedWith(entry.board, homeName))
+    .map((entry) => entry.row);
+}
+
+/**
+ * RCB-184: the HOME board's rows, read from the HOME's own SEATS section and holders — only the
+ * home's OWN bullets (unprefixed, or prefixed with `homeName`; a bullet it carries for a third
+ * board is that board's seat, not the home's). Each row's `name` is `[<homeName>] <seat>`
+ * (`seatLabel`), the shape the bullet is written in, so a member's list says whose seat it is.
+ */
+export function homeSeatRows(
+  homeSeatsSection: string,
+  homeHolders: readonly SeatHolderInfo[],
+  homeName: string,
+): SeatListRow[] {
+  return seatListEntries(homeSeatsSection, homeHolders)
+    .filter((entry) => entry.board === null || prefixedWith(entry.board, homeName))
+    .map((entry) => ({ ...entry.row, name: seatLabel(entry.row.name, homeName) }));
 }
 
 /**

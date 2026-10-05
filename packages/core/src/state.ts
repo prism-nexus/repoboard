@@ -314,6 +314,9 @@ export const FINDING_KINDS = [
   'seat-up-dead-holder',
   'pane-holds-two-seats',
   'seat-lease-bullet-drift',
+  'seat-copy',
+  'seat-home-unreadable',
+  'seat-home-not-member',
   'workspace-member-missing',
   'workspace-key-name-mismatch',
   'public-denylist-missing',
@@ -408,6 +411,12 @@ export interface CheckInput {
    *  Absent/`[]` (a plain board, or a caller that gathered none) is inert: `blockedReason`
    *  defaults to `[]` on its own, so this is a no-op for every existing caller. */
   members?: readonly GateMemberFacts[];
+  /** RCB-184: the display name of this board's HOME (`board.yml`'s `workspace:`), gathered (with
+   *  I/O) by the caller. A log block whose `repo` is this name is the home's seat speaking in this
+   *  member's log (`[acme] coordinator`) — it says nothing about this board's STATE.md, so
+   *  `stale-state` ignores it. `null`/absent (no key, or a home that could not be read — its name
+   *  is then unknown) ignores nothing: today's rule, unchanged. */
+  homeBoard?: string | null;
 }
 
 /**
@@ -523,6 +532,15 @@ export function systemsUnblockerFindings(
  * real newer moment (RCB-90) — see `newestLogMoment`. */
 export const FUTURE_STAMP_TOLERANCE_MS = 60_000;
 
+/** RCB-184: a block written under the home's `[repo]` prefix — trimmed, case-insensitive. */
+function isHomeBlock(b: LogBlock, homeBoard: string): boolean {
+  return (
+    b.repo !== undefined &&
+    b.repo !== null &&
+    b.repo.trim().toLowerCase() === homeBoard.trim().toLowerCase()
+  );
+}
+
 /**
  * The newest moment a log file speaks for, or `null` when it speaks for none. A file with at
  * least one parseable `#####` header is judged by its headers ALONE (RCB-170): a git
@@ -539,23 +557,30 @@ export const FUTURE_STAMP_TOLERANCE_MS = 60_000;
  * "headed" — its mtime is not a fallback for it — so the file then contributes `null` if every
  * one of its headers was ignored.
  */
-function newestMomentOf(log: LogFileInfo, nowMs: number): number | null {
+function newestMomentOf(log: LogFileInfo, nowMs: number, homeBoard: string | null): number | null {
   let headed = false;
   let m: number | null = null;
   for (const b of log.blocks) {
     const t = Date.parse(b.ts);
     if (Number.isNaN(t)) continue;
+    // A parseable header makes the file "headed" even when its block is the home's (RCB-184):
+    // its mtime is no fallback for a file whose only blocks belong to another board.
     headed = true;
+    if (homeBoard !== null && isHomeBlock(b, homeBoard)) continue;
     if (t - nowMs > FUTURE_STAMP_TOLERANCE_MS) continue;
     if (m === null || t > m) m = t;
   }
   return headed ? m : log.mtimeMs;
 }
 
-function newestLogMoment(logs: readonly LogFileInfo[], nowMs: number): number | null {
+function newestLogMoment(
+  logs: readonly LogFileInfo[],
+  nowMs: number,
+  homeBoard: string | null,
+): number | null {
   let max: number | null = null;
   for (const log of logs) {
-    const m = newestMomentOf(log, nowMs);
+    const m = newestMomentOf(log, nowMs, homeBoard);
     if (m === null) continue;
     if (max === null || m > max) max = m;
   }
@@ -621,7 +646,7 @@ export function checkFindings(input: CheckInput): Finding[] {
   const findings: Finding[] = [];
 
   const nowMs = input.now.getTime();
-  const newest = newestLogMoment(input.logs, nowMs);
+  const newest = newestLogMoment(input.logs, nowMs, input.homeBoard ?? null);
   if (newest !== null) {
     const stampMs = input.state ? Date.parse(input.state.stamp) : Number.NaN;
     // The stamp is written at SECOND resolution (`toIso`), a file's mtime carries milliseconds:

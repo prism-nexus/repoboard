@@ -5,6 +5,18 @@ All notable changes to this project are documented in this file. The format is b
 
 ## [Unreleased]
 
+### Added
+
+- **A member board reads its home board's seats, read-only (RCB-184, slice 1).** A new optional
+  `board.yml` key, `workspace: <home root>`, names the board a shared seat lives on (a workspace's
+  coordinator). `seat list` then shows the home's own seats after this board's, named
+  `[<home>] <seat>` and read live from the home's STATE.md and `seats.yml`; nothing is written there.
+  A bullet in this board's own SEATS prefixed with the home's name is a stale copy: `seat list`
+  leaves it out and `check` warns `seat-copy`. `check` also warns `seat-home-unreadable` and
+  `seat-home-not-member` (the home's `repos:` does not list this repo), and `stale-state` no longer
+  goes red over a block the home's seat wrote in this board's log. Without the key nothing changes.
+  The Board's Seats panel does not show home seats yet (slice 2).
+
 ### Changed
 
 - **Releases publish from CI with npm trusted publishing and provenance (RCB-214).** Pushing a

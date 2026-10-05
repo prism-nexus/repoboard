@@ -110,6 +110,8 @@ export const BoardConfigSchema = z
     logDir: z.string().trim().min(1, 'must not be empty').optional(),
     /** RCB-153 W1: member boards this one coordinates. Absent = not a workspace. */
     repos: z.array(WorkspaceRepoSchema).optional(),
+    /** RCB-184: this member's home board — its root relative to this repo's root. Absent = none. */
+    workspace: z.string().trim().min(1, 'must not be empty').optional(),
     // An absent `columns` key means "the defaults"; an explicit empty list is an error.
     columns: z
       .array(ColumnSchema)
@@ -175,6 +177,7 @@ const CONFIG_ORDER = [
   'prefix',
   'shortName',
   'repos',
+  'workspace',
   'activeWindowMinutes',
   'claudeMdBudgetBytes',
   'logDir',

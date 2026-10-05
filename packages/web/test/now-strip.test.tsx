@@ -269,3 +269,74 @@ describe('the Board: the status line replaces the Now strip and the Ticker (RCB-
     expect(last.textContent).toBe('last: builder moved RB-9 → doing · 12m ago');
   });
 });
+
+describe('the status line lease pill and window (RCB-223)', () => {
+  const lease = {
+    resource: 'vitest-lock',
+    holder: 'claude/ops',
+    since: NOW_ISO,
+    until: '2026-09-02T23:30:00Z',
+  };
+  const win = (name: string, start: string, end: string) => ({
+    resource: 'vitest-lock',
+    name,
+    start,
+    end,
+  });
+
+  // CONTROL: in StatusLine.tsx change `until {…}` to `since {…}` (or drop the `until` word) — the
+  // exact-text assertion fails; swap `shortTime(l.until)` for `shortTime(l.since)` — 22:41Z appears
+  // where the lease's own end 23:30Z is wanted and it fails the other way.
+  it('the pill reads "<resource> · <holder> · until <HH:MMZ>" — the lease\'s own end', () => {
+    const store = testStore();
+    sendSnapshot(store, {
+      cards: [card('RB-1', 'todo')],
+      leases: { leases: [lease], windows: [], stale: [], now: NOW_ISO },
+    });
+    renderApp(store);
+    expect(screen.getByTestId('lease-pill-vitest-lock').textContent).toBe(
+      'vitest-lock · ops · until 23:30Z',
+    );
+  });
+
+  // CONTROL: in StatusLine.tsx replace `nextWindow(leases.windows, now)` with `leases.windows[0]` —
+  // the window that already ended (listed first) shows and this fails; replace it with
+  // `[...leases.windows].sort(…)[0]` that ignores `end > now` — same failure. The text is checked
+  // against the Map's Now strip, which calls the same exported `nextWindow`.
+  it('a current-or-upcoming window shows its name and times, the soonest one, as the Now strip words it', () => {
+    const leases: LeasesPayload = {
+      leases: [lease],
+      windows: [
+        win('already over', '2026-09-02T20:00:00Z', '2026-09-02T21:00:00Z'),
+        win('soon', '2026-09-02T23:00:00Z', '2026-09-02T23:15:00Z'),
+        win('later', '2026-09-03T02:00:00Z', '2026-09-03T03:00:00Z'),
+      ],
+      stale: [],
+      now: NOW_ISO,
+    };
+    const store = testStore();
+    sendSnapshot(store, { cards: [card('RB-1', 'todo')], leases });
+    renderApp(store);
+    const pill = screen.getByTestId('status-window');
+    expect(pill.textContent).toBe('window: soon 23:00Z–23:15Z vitest-lock');
+    expect(screen.getByTestId('status-line')).not.toHaveTextContent('already over');
+    act(() => store.setView('map'));
+    expect(screen.getByTestId('now-strip-window')).toHaveTextContent('soon 23:00Z–23:15Z');
+  });
+
+  // CONTROL: in StatusLine.tsx render the window span unconditionally (`upcoming ? … : <span
+  // data-testid="status-window">window: —</span>`) — the no-window cases grow window text.
+  it('no window, or only ended ones: no window text at all', () => {
+    for (const windows of [[], [win('over', '2026-09-02T20:00:00Z', '2026-09-02T21:00:00Z')]]) {
+      const store = testStore();
+      sendSnapshot(store, {
+        cards: [card('RB-1', 'todo')],
+        leases: { leases: [lease], windows, stale: [], now: NOW_ISO },
+      });
+      const { unmount } = renderApp(store);
+      expect(screen.queryByTestId('status-window')).toBeNull();
+      expect(screen.getByTestId('status-line')).not.toHaveTextContent('window');
+      unmount();
+    }
+  });
+});

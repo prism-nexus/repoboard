@@ -4,6 +4,9 @@
  * expand/collapse control). RCB-66: this is the LOG row's body in `StatePanel`, not a strip beside
  * the Ticker. RCB-218: each block carries a mark for what it is (▲ took a seat, ▼ stood down, ✓
  * landed, • anything else), and the payload may be an earlier day's (`logDayLabel`).
+ *
+ * RCB-223: a row is a four-column grid — mark · time · seat · title — so the times and seats line
+ * up down the list (the time used to trail the title, ragged).
  */
 import { avatarFor, parseLogBlocks } from '@repoboard/core';
 import { useState } from 'react';
@@ -127,12 +130,14 @@ export function LogTimeline({ log, now }: Props) {
               >
                 {LOG_MARK[kind]}
               </span>
-              <span className="log-timeline__emoji" style={{ color }} aria-hidden="true">
-                {emoji}
-              </span>
-              <span className="log-timeline__seat">{b.seat}</span>
-              <span className="log-timeline__title">{b.title}</span>
               <span className="log-timeline__when">{when}</span>
+              <span className="log-timeline__seat">
+                <span className="log-timeline__emoji" style={{ color }} aria-hidden="true">
+                  {emoji}
+                </span>{' '}
+                {b.seat}
+              </span>
+              <span className="log-timeline__title">{b.title}</span>
             </summary>
             {open ? (
               <div

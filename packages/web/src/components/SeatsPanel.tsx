@@ -14,6 +14,8 @@ import {
   ageOf,
   cardsOfSeat,
   lastSeatEvents,
+  lastStoodDown,
+  owingText,
   SEAT_SYMBOL,
   type SeatKind,
   seatKey,
@@ -84,7 +86,12 @@ function SeatBlock({
       data-home={isHome ? 'true' : undefined}
       ref={(el) => register(key, el)}
     >
-      <span className="sym" role="img" aria-label={KIND_LABEL[kind]}>
+      <span
+        className="sym"
+        role="img"
+        aria-label={KIND_LABEL[kind]}
+        title={kind === 'up' && row.live === null ? 'no holder recorded' : undefined}
+      >
         {SEAT_SYMBOL[kind]}
       </span>
       <div>
@@ -106,9 +113,8 @@ function SeatBlock({
         ) : null}
         {kind === 'unknown' ? (
           <div className="seat__note muted">
-            {row.live === 'unknown'
-              ? 'Says UP; its holder is on another machine or has no process id recorded, so it cannot be told whether it is running.'
-              : 'Says UP; no holder is recorded for this seat.'}
+            Says UP; its holder is on another machine or has no process id recorded, so it cannot be
+            told whether it is running.
           </div>
         ) : null}
         <dl className="seat__kv">
@@ -176,8 +182,11 @@ export function SeatsPanel({ seats, doing, unclaimed, events, now, stateMissing,
     seats.length === 0
       ? null
       : up + dead === 0
-        ? 'nobody up'
-        : `${up} up${dead > 0 ? ` · ${dead} needs a look` : ''}`;
+        ? 'live · nobody up'
+        : `live · ${up} up${dead > 0 ? ` · ${dead} needs a look` : ''}`;
+  const quiet = seats.length > 0 && up + dead === 0 && doing.length === 0;
+  const stood = quiet ? lastStoodDown(seats) : null;
+  const owing = stood ? owingText(stood.owes) : null;
 
   return (
     <DeckPanel title="SEATS" meta={meta} testId="seats-panel">
@@ -188,9 +197,16 @@ export function SeatsPanel({ seats, doing, unclaimed, events, now, stateMissing,
             : 'No seats recorded in STATE.md.'}
         </div>
       ) : null}
-      {seats.length > 0 && up + dead === 0 && doing.length === 0 ? (
+      {quiet ? (
         <div className="empty-note" data-testid="seats-quiet">
           Nobody is on a seat and Doing is empty.
+          {stood?.at ? (
+            <>
+              {' '}
+              Last: <b>{stood.name}</b>
+              {` stood down ${whenLabel(stood.at, now)} (${relTime(stood.at, now)})${owing ? `, owing ${owing}` : ''}.`}
+            </>
+          ) : null}
         </div>
       ) : null}
       {seats.map((row) => (

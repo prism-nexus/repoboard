@@ -53,6 +53,14 @@ All notable changes to this project are documented in this file. The format is b
   `npm publish --dry-run`, which it skips, with a notice, when the version is already on npm (npm
   refuses a dry run of a published version). The route needs the owner to register the workflow as
   the package's trusted publisher on npmjs.com first; the workflow's header comment lists the steps.
+- **The top of the Board follows the approved layout in four places (RCB-223).** The status line
+  shows the current or next window (`window: <name> HH:MMZ–HH:MMZ <resource>`), the same one the
+  Now strip shows. An UP seat with no recorded holder draws ● (titled "no holder recorded"); ?
+  stays for a holder whose liveness cannot be told. The Seats panel's header reads `live · …`, and
+  on a quiet board (nobody UP, Doing empty) its note names the last seat to stand down, when, and
+  what it owes. `Columns…`, the filter, Size and Sort share one row; the open column editor takes
+  its own line below them. Log rows are a grid of mark, time, seat and title, so times and seats
+  line up; at 520 px or narrower the seat column is hidden.
 
 ### Fixed
 

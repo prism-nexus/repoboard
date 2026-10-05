@@ -328,9 +328,10 @@ button {
   border-bottom: none;
 }
 .log-timeline__summary {
-  display: flex;
-  align-items: center;
-  gap: 5px;
+  display: grid;
+  grid-template-columns: 16px 56px 96px minmax(0, 1fr);
+  align-items: baseline;
+  gap: 6px;
   padding: 4px 10px;
   cursor: pointer;
   list-style: none;
@@ -340,9 +341,7 @@ button {
 }
 /* RCB-218: ▲ took a seat, ▼ stood down, ✓ landed, • anything else. */
 .log-timeline__mark {
-  width: 1em;
   text-align: center;
-  flex: 0 0 auto;
 }
 .log-timeline__mark--up {
   color: var(--ok);
@@ -357,19 +356,34 @@ button {
   color: var(--line-strong);
 }
 .log-timeline__seat {
+  min-width: 0;
   font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
   white-space: nowrap;
 }
 .log-timeline__title {
-  flex: 1;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 .log-timeline__when {
+  min-width: 0;
   color: var(--muted);
+  font-variant-numeric: tabular-nums;
+  overflow: hidden;
+  text-overflow: ellipsis;
   white-space: nowrap;
+}
+/* RCB-223: a phone drops the seat column (the mockup's choice) and narrows the time. */
+@media (max-width: 520px) {
+  .log-timeline__summary {
+    grid-template-columns: 16px 48px minmax(0, 1fr);
+  }
+  .log-timeline__seat {
+    display: none;
+  }
 }
 .log-timeline__text {
   margin: 0 10px 8px;
@@ -2832,6 +2846,18 @@ button.pill:hover:not(:disabled) {
   gap: 14px;
   margin: 0 12px 6px;
   font-size: 12px;
+}
+/* RCB-223: the Columns… toggle rides in this row, so it drops the margin it has when it stands alone. */
+.board-tools .column-editor-toggle {
+  align-self: auto;
+  margin: 0;
+}
+/* RCB-223: the open Columns… panel takes its own full-width line BELOW the tools, and drops its side
+   margin so it does not overflow the row. */
+.board-tools .column-editor {
+  flex: 1 0 100%;
+  order: 99;
+  margin: 6px 0;
 }
 .board-tools__group {
   display: flex;

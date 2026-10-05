@@ -21,8 +21,9 @@ import { relTime, shortActor, shortTime } from '../time.js';
 import type { SeatRowPayload, StatePayload } from '../wire.js';
 import { tickerVerb } from './Ticker.jsx';
 
-/** What a seat's pill and block draw: `up` ● alive, `down` ○, `dead` ⚠ (says UP, its holder's
- * process is gone), `unknown` ? (says UP, liveness cannot be told — or nothing records a holder). */
+/** What a seat's pill and block draw: `up` ● (says UP, and its holder is alive or nothing records a
+ * holder to contradict it), `down` ○, `dead` ⚠ (says UP, its holder's process is gone), `unknown` ?
+ * (says UP, its holder was probed and liveness cannot be told: another machine, or no process id). */
 export type SeatKind = 'up' | 'down' | 'dead' | 'unknown';
 
 export const SEAT_SYMBOL: Record<SeatKind, string> = {
@@ -33,22 +34,22 @@ export const SEAT_SYMBOL: Record<SeatKind, string> = {
 };
 
 /**
- * DOWN is down. An UP seat is `up` only when its holder was probed and is alive; `dead` when the
- * probe says so; EVERYTHING else — another machine, no pid, no start time, and also no recorded
- * holder at all (`live: null`) — is `unknown`, because nothing measured it. A missing answer is
- * never drawn as a confident ●.
+ * DOWN is down. An UP seat is `dead` when the probe says its holder's process is gone, `unknown`
+ * when a holder is recorded but the probe cannot tell (another machine, no pid, no start time:
+ * `live: 'unknown'`), and `up` otherwise — alive, or no holder recorded at all (`live: null`; RCB-223
+ * decision: the seat's own UP line is the claim, and nothing contradicts it).
  */
 export function seatKind(row: SeatRowPayload): SeatKind {
   if (row.status === 'DOWN') return 'down';
   if (row.live === 'dead') return 'dead';
-  if (row.live === 'alive') return 'up';
-  return 'unknown';
+  if (row.live === 'unknown') return 'unknown';
+  return 'up';
 }
 
 /**
  * The server's `seats` when it sent them (an empty list is an answer: no seats), else core's parse
  * of STATE.md's SEATS section (a server that predates the payload), else nothing — no STATE.md.
- * The fallback carries no holder, so every `tag`/`live` is `null`: the pills read `?`, not ●.
+ * The fallback carries no holder, so every `tag`/`live` is `null`: an UP seat reads ● with no pane.
  */
 export function seatRowsFor(
   seats: SeatRowPayload[] | null,
@@ -82,6 +83,31 @@ export function whenLabel(iso: string, now: number): string {
 export function ageOf(iso: string | null, now: number): string {
   if (iso === null) return '';
   return relTime(iso, now).replace(/ ago$/, '');
+}
+
+/**
+ * RCB-223: the newest DOWN row by its stamp (`at`), for the Seats panel's quiet note. A DOWN row
+ * whose stamp did not parse (`at: null`) is not a candidate — a missing time is never ranked as
+ * old or new. `null` when no DOWN row has a stamp.
+ */
+export function lastStoodDown(seats: readonly SeatRowPayload[]): SeatRowPayload | null {
+  let best: SeatRowPayload | null = null;
+  let bestAt = Number.NEGATIVE_INFINITY;
+  for (const row of seats) {
+    if (row.status !== 'DOWN' || row.at === null) continue;
+    const t = Date.parse(row.at);
+    if (Number.isNaN(t) || t <= bestAt) continue;
+    best = row;
+    bestAt = t;
+  }
+  return best;
+}
+
+/** What a seat owes, or `null` when it owes nothing worth saying: no `owes:` line, an empty one,
+ * or the word `none`. */
+export function owingText(owes: string | null): string | null {
+  const text = owes?.trim() ?? '';
+  return text === '' || text.toLowerCase() === 'none' ? null : text;
 }
 
 // ---- Doing cards and seats ----------------------------------------------------------------------

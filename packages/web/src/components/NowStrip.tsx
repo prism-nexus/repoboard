@@ -16,8 +16,9 @@ function untilLabel(until: string | undefined): string {
   return until ? shortTime(until) : '—';
 }
 
-/** The soonest window on `resource`-agnostic terms that has not ended yet, current or upcoming. */
-function nextWindow(windows: Window[], nowMs: number): Window | undefined {
+/** The soonest window on `resource`-agnostic terms that has not ended yet, current or upcoming.
+ * Exported (RCB-223): the Board's status line words the same window the same way. */
+export function nextWindow(windows: Window[], nowMs: number): Window | undefined {
   return [...windows]
     .filter((w) => Date.parse(w.end) > nowMs)
     .sort((a, b) => Date.parse(a.start) - Date.parse(b.start))[0];

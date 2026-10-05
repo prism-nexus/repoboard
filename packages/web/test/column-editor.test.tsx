@@ -4,6 +4,8 @@
  * relies on the WS `config` broadcast the write triggers — so these tests only ever check the
  * PATCH request the panel sends and how it surfaces a failure, never a config change on save.
  */
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { defaultBoardConfig } from '@repoboard/core';
 import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -143,5 +145,37 @@ describe('ColumnEditor', () => {
     snapshot(store, [], defaultBoardConfig(), false);
     renderApp(store);
     expect(screen.queryByText('Columns…')).toBeNull();
+  });
+});
+
+describe('Columns… in the Board tools row (RCB-223)', () => {
+  // CONTROL: in views/Board.tsx put `<ColumnEditor … />` back as its own line above `<BoardTools>`
+  // and drop the `lead=` prop — the button's parent is then the board view, not `board-tools`, and
+  // this fails (the old lone-button row). Reading the parent catches the move in that direction;
+  // the button also being absent altogether fails `getByText`.
+  it('the Columns… button sits inside the board-tools row, before the filter', () => {
+    const store = testStore();
+    snapshot(store, [], defaultBoardConfig(), true);
+    renderApp(store);
+    const row = screen.getByTestId('board-tools');
+    const button = screen.getByText('Columns…');
+    expect(button.parentElement).toBe(row);
+    expect(button.compareDocumentPosition(screen.getByTestId('board-search'))).toBe(
+      Node.DOCUMENT_POSITION_FOLLOWING,
+    );
+    // Opening it keeps the panel in the same row element (it is wrapped onto its own line by CSS).
+    expect(openEditor().parentElement).toBe(row);
+  });
+
+  // CONTROL: delete the `.board-tools .column-editor` rule from styles.css (or drop `order` or the
+  // `100%` basis) — the open panel then shares the tools' line and overflows it by its 24px margin;
+  // the assertion reads the rule's own slice, so another `100%` elsewhere cannot satisfy it.
+  it('the open panel takes its own full-width line below the tools (CSS source)', () => {
+    const css = readFileSync(join(__dirname, '..', 'src', 'styles.css'), 'utf8');
+    const r = css.match(/\.board-tools \.column-editor\s*\{[^}]*\}/)?.[0];
+    expect(r).toBeDefined();
+    expect(r).toContain('flex: 1 0 100%;');
+    expect(r).toMatch(/order:\s*\d+;/);
+    expect(r).toContain('margin: 6px 0;');
   });
 });

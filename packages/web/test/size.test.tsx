@@ -3,8 +3,9 @@
  * `columnsWithCards` selectors (`store.ts`), and `BoardTools` (filter + sort).
  */
 import { defaultBoardConfig } from '@repoboard/core';
-import { fireEvent, screen, within } from '@testing-library/react';
+import { fireEvent, render, screen, within } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
+import { BoardTools } from '../src/components/BoardTools.jsx';
 import { SIZE_TITLE } from '../src/components/CardItem.jsx';
 import { createMockTransport } from '../src/mock/index.js';
 import { columnsWithCards, createStore, STORAGE_SORT, visibleCards } from '../src/store.js';
@@ -159,5 +160,44 @@ describe('BoardTools', () => {
     expect(screen.getByTestId('card-RB-2')).toBeInTheDocument();
     expect(screen.getByTestId('card-RB-3')).toBeInTheDocument();
     expect(within(screen.getByTestId('board')).queryAllByTestId(/^card-/)).toHaveLength(3);
+  });
+});
+
+describe('BoardTools: one row (RCB-223)', () => {
+  // CONTROL: in BoardTools.tsx wrap the filter input in its own `<div>` (or render `{lead}` outside
+  // the root element) — the filter/lead's parent is no longer the row that holds Size and Sort and
+  // the shared-parent assertions fail. This is the over-split direction; the over-merge direction
+  // (the count chip is not a tool) is guarded by the `.board-tools__count` absence below.
+  it('Columns… (the lead), the filter, Size and Sort share ONE row element', () => {
+    render(
+      <BoardTools
+        sizeFilter={[]}
+        sortBy="updated"
+        query=""
+        visible={3}
+        total={3}
+        onToggleSize={() => {}}
+        onClearSizeFilter={() => {}}
+        onSetSortBy={() => {}}
+        onSetQuery={() => {}}
+        lead={<button type="button">Columns…</button>}
+      />,
+    );
+    const row = screen.getByTestId('board-tools');
+    const columns = screen.getByText('Columns…');
+    const filter = screen.getByTestId('board-search');
+    const sizeS = screen.getByTestId('size-filter-S');
+    const sortUpdated = screen.getByTestId('sort-updated');
+    expect(columns.parentElement).toBe(row);
+    expect(filter.parentElement).toBe(row);
+    expect(sizeS.closest('.board-tools__group')?.parentElement).toBe(row);
+    expect(sortUpdated.closest('.board-tools__group')?.parentElement).toBe(row);
+    // Order, left to right: Columns…, filter, Size, Sort.
+    const order = [columns, filter, sizeS, sortUpdated].map((el) =>
+      [...row.querySelectorAll('button, input')].indexOf(el as Element),
+    );
+    expect(order).toEqual([...order].sort((a, b) => a - b));
+    expect(order).not.toContain(-1);
+    expect(row.querySelector('.board-tools__count')).toBeNull();
   });
 });

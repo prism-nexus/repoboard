@@ -21,13 +21,17 @@ const PILL_CASES: PillCase[] = [
   ['DOWN draws ○', { status: 'DOWN', live: null, tag: null }, '○', 'down'],
   ['UP, holder dead draws ⚠', { status: 'UP', live: 'dead' }, '⚠', 'dead'],
   ['UP, liveness unknown draws ?', { status: 'UP', live: 'unknown' }, '?', 'unknown'],
-  ['UP, no holder recorded draws ?', { status: 'UP', live: null, tag: null }, '?', 'unknown'],
+  // RCB-223: no holder recorded is the seat's own UP claim, drawn ●; only a probed-and-undecidable
+  // holder (`live: 'unknown'`) is ?.
+  ['UP, no holder recorded draws ●', { status: 'UP', live: null, tag: null }, '●', 'up'],
 ];
 
 describe('status line: a pill per seat', () => {
   // CONTROL: in status-model.ts `seatKind`, return 'up' for `live === 'dead'` — the ⚠ row fails;
-  // return 'up' for `live === null` — the "no holder recorded" row fails (a missing answer drawn as
-  // a confident ●); return 'up' for `status === 'DOWN'` — the ○ row fails.
+  // return 'up' for `live === 'unknown'` — the ? row fails (an undecidable holder drawn as a
+  // confident ●); return 'unknown' for `live === null` (the pre-RCB-223 rule) — the null row fails
+  // the other way, ? where ● is wanted; return 'up' for `status === 'DOWN'` — the ○ row fails.
+  // (RCB-223 test 2, pill half.)
   it.each(PILL_CASES)('%s', (_label, over, symbol, kind) => {
     const store = testStore();
     sendSnapshot(store, { seats: [seatRow(over)] });
@@ -35,6 +39,18 @@ describe('status line: a pill per seat', () => {
     const pill = screen.getByTestId('seat-pill-builder');
     expect(pill).toHaveAttribute('data-kind', kind);
     expect(within(pill).getByRole('img').textContent).toBe(symbol);
+  });
+
+  // CONTROL (RCB-223 test 2, seat-block half): in SeatsPanel.tsx replace `SEAT_SYMBOL[kind]` with
+  // `kind === 'up' && row.live === null ? '?' : SEAT_SYMBOL[kind]` — the null row fails (block ?,
+  // pill ●: the two disagree); replace it with `'●'` — the dead and unknown rows fail.
+  it.each(PILL_CASES)('seat block: %s', (_label, over, symbol, kind) => {
+    const store = testStore();
+    sendSnapshot(store, { seats: [seatRow(over)] });
+    renderApp(store);
+    const block = screen.getByTestId('seat-block-builder');
+    expect(block).toHaveAttribute('data-kind', kind);
+    expect(within(block).getAllByRole('img')[0]?.textContent).toBe(symbol);
   });
 
   // CONTROL: in StatusLine.tsx drop the `{row.tag ...}` or the `{age ...}` child — the pane or the
@@ -76,14 +92,14 @@ const BULLETS = [
 describe('seats from an older server (no `seats` payload)', () => {
   // CONTROL: in status-model.ts `seatRowsFor`, return `[]` when `seats === null` — no pills, fails.
   // Also fails if the fallback is a regex instead of core's parse: in-flight/owes are core-only.
-  it('reads STATE.md SEATS with core\'s parser: pills, in-flight and owes — and no holder, so "?" not "●"', () => {
+  it('reads STATE.md SEATS with core\'s parser: pills, in-flight and owes — and no holder, so "●" with no pane (RCB-223)', () => {
     const store = testStore();
     sendSnapshot(store, {
       state: mockState({ sections: { live: 'x', lastLandings: 'y', seats: BULLETS } }),
     });
     renderApp(store);
     const builder = screen.getByTestId('seat-pill-builder');
-    expect(builder).toHaveAttribute('data-kind', 'unknown');
+    expect(builder).toHaveAttribute('data-kind', 'up');
     expect(builder.querySelector('.mono')).toBeNull();
     expect(screen.getByTestId('seat-pill-coordinator')).toHaveAttribute('data-kind', 'down');
     // The non-seat bullet is not a seat.
@@ -430,5 +446,111 @@ describe('home rows (RCB-184)', () => {
       ...screen.getByTestId('seats-panel').querySelectorAll('[data-testid^="seat-block-"]'),
     ];
     expect(blocks.map((b) => b.getAttribute('data-home'))).toEqual([null, 'true']);
+  });
+});
+
+describe('the Seats panel header and quiet note (RCB-223)', () => {
+  // CONTROL (test 3): in SeatsPanel.tsx drop the `live · ` prefix from the three `meta` strings —
+  // the first word is then `nobody` / `1`, not `live`, and this fails for every branch below.
+  it('the meta starts with the word "live", whether nobody is up, some are, or one needs a look', () => {
+    const cases: Array<[SeatRowPayload[], string]> = [
+      [[seatRow({ status: 'DOWN', live: null, tag: null })], 'live · nobody up'],
+      [[seatRow()], 'live · 1 up'],
+      [[seatRow(), seatRow({ name: 'reviewer', live: 'dead' })], 'live · 1 up · 1 needs a look'],
+    ];
+    for (const [seats, meta] of cases) {
+      const store = testStore();
+      sendSnapshot(store, { seats });
+      const { unmount } = renderApp(store);
+      const el = within(screen.getByTestId('seats-panel')).getByText(/^live/);
+      expect(el.textContent?.split(' ')[0]).toBe('live');
+      expect(el.textContent).toBe(meta);
+      unmount();
+    }
+  });
+
+  const DOWN_OLD = {
+    name: 'reviewer',
+    status: 'DOWN',
+    live: null,
+    tag: null,
+    at: '2026-09-01T23:39:00Z',
+    owes: 'ACME-215 decision',
+  } as const;
+
+  // CONTROL (test 4b): in SeatsPanel.tsx drop the `owing ? … : ''` part — the first assertion
+  // loses `, owing …`; make `owingText` return the raw string — "none" and null rows grow a
+  // dangling `, owing none.` / `, owing null.`; swap `lastStoodDown`'s `t <= bestAt` for `t >= bestAt`
+  // — the OLDER stand-down wins and the seat name assertion fails (the wrong direction: oldest).
+  it('quiet board: "Last: <seat> stood down <when> (<rel>), owing <owes>." from the NEWEST DOWN row', () => {
+    const store = testStore();
+    sendSnapshot(store, {
+      seats: [
+        seatRow({ ...DOWN_OLD }),
+        seatRow({
+          ...DOWN_OLD,
+          name: 'coordinator',
+          at: '2026-09-02T20:41:00Z',
+          owes: 'the ACME-9 review',
+        }),
+        seatRow({ ...DOWN_OLD, name: 'ops', at: null, owes: 'never ranked' }),
+      ],
+      cards: [card('RB-1', 'todo')],
+    });
+    renderApp(store);
+    expect(screen.getByTestId('seats-quiet').textContent).toBe(
+      'Nobody is on a seat and Doing is empty. Last: coordinator stood down 20:41Z (2h ago), owing the ACME-9 review.',
+    );
+  });
+
+  it('owes "none" or no owes line: the sentence ends after the age, with no ", owing"', () => {
+    for (const owes of ['none', 'None', null]) {
+      const store = testStore();
+      sendSnapshot(store, {
+        seats: [seatRow({ ...DOWN_OLD, owes })],
+        cards: [card('RB-1', 'todo')],
+      });
+      const { unmount } = renderApp(store);
+      expect(screen.getByTestId('seats-quiet').textContent).toBe(
+        'Nobody is on a seat and Doing is empty. Last: reviewer stood down Sep 1 23:39Z (23h ago).',
+      );
+      unmount();
+    }
+  });
+
+  it('no DOWN row with a stamp: today\'s note, no "Last:"', () => {
+    const store = testStore();
+    sendSnapshot(store, {
+      seats: [seatRow({ ...DOWN_OLD, at: null })],
+      cards: [card('RB-1', 'todo')],
+    });
+    renderApp(store);
+    expect(screen.getByTestId('seats-quiet').textContent).toBe(
+      'Nobody is on a seat and Doing is empty.',
+    );
+  });
+
+  // CONTROL: in SeatsPanel.tsx compute `stood` without the `quiet ?` guard (always `lastStoodDown(seats)`)
+  // — the note then appears wherever the quiet note's own guard is true; to catch the guard
+  // itself, change `doing.length === 0` to `true` — the Doing-non-empty case grows the whole note.
+  it('absent when a seat is UP, and absent when Doing is not empty', () => {
+    const store = testStore();
+    sendSnapshot(store, {
+      seats: [seatRow(), seatRow({ ...DOWN_OLD })],
+      cards: [card('RB-1', 'todo')],
+    });
+    const first = renderApp(store);
+    expect(screen.queryByTestId('seats-quiet')).toBeNull();
+    expect(screen.getByTestId('seats-panel')).not.toHaveTextContent('Last:');
+    first.unmount();
+
+    const store2 = testStore();
+    sendSnapshot(store2, {
+      seats: [seatRow({ ...DOWN_OLD })],
+      cards: [card('RB-2', 'doing')],
+    });
+    renderApp(store2);
+    expect(screen.queryByTestId('seats-quiet')).toBeNull();
+    expect(screen.queryByText(/Last:/)).toBeNull();
   });
 });

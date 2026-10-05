@@ -383,7 +383,6 @@ export function Board() {
         log={log}
         now={now}
       />
-      <ColumnEditor config={config} cards={cards} onSave={saveColumns} />
       {cards.length <= 1 && !tipDismissed ? <TipStrip onDismiss={dismissTip} /> : null}
       <BoardTools
         sizeFilter={sizeFilter}
@@ -395,6 +394,7 @@ export function Board() {
         onClearSizeFilter={clearSizeFilter}
         onSetSortBy={setSortBy}
         onSetQuery={setQuery}
+        lead={<ColumnEditor config={config} cards={cards} onSave={saveColumns} />}
       />
       <DndContext
         sensors={sensors}

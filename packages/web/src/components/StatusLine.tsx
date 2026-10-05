@@ -8,6 +8,7 @@
 import type { Card, Event } from '@repoboard/core';
 import { relTime, shortActor, shortTime } from '../time.js';
 import type { LeasesPayload, SeatRowPayload } from '../wire.js';
+import { nextWindow } from './NowStrip.jsx';
 import {
   ageOf,
   lastEventText,
@@ -44,7 +45,8 @@ function seatTitle(row: SeatRowPayload, kind: SeatKind, now: number): string {
   const since = row.at ? ` since ${whenLabel(row.at, now)}` : '';
   switch (kind) {
     case 'up':
-      return `up${since}`;
+      // RCB-223: ● with no recorded holder is the seat's own claim; the title says nothing was probed.
+      return row.live === null ? `up${since}; no holder recorded` : `up${since}`;
     case 'down':
       return `down${since}`;
     case 'dead':
@@ -78,6 +80,8 @@ export function StatusLine({
 }: Props) {
   const first = queue[0];
   const stale = new Set(leases?.stale ?? []);
+  // RCB-223: the same current-or-upcoming window the Now strip shows on the Map, worded the same way.
+  const upcoming = leases ? nextWindow(leases.windows, now) : undefined;
   return (
     <div className="status" data-testid="status-line">
       {seats.map((row) => {
@@ -142,6 +146,16 @@ export function StatusLine({
           </span>
         );
       })}
+      {upcoming ? (
+        <span
+          className="pill pill--window"
+          data-testid="status-window"
+          title="current or next window"
+        >
+          window: {upcoming.name} {shortTime(upcoming.start)}–{shortTime(upcoming.end)}{' '}
+          <span className="mono">{upcoming.resource}</span>
+        </span>
+      ) : null}
       <span className="status__last" data-testid="status-last">
         {latest ? (
           <>

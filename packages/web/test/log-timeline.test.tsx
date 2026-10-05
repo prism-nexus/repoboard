@@ -347,3 +347,44 @@ describe('a mark per block', () => {
     ]);
   });
 });
+
+describe('a row is a grid: mark · time · seat · title (RCB-223)', () => {
+  // CONTROL: in LogTimeline.tsx move the `.log-timeline__when` span back after the title — the
+  // class order assertion fails (the old ragged layout); drop `log-timeline__summary` from the
+  // `<summary>` — the CSS grid never applies and the first assertion fails; replace the mark span
+  // with `LOG_MARK.other` — the marks assertion fails; delete `onToggle` — the expand assertion fails.
+  it("each row's cells run mark, time, seat, title; the marks and the expand still work", () => {
+    const store = testStore();
+    snapshot(store, [card('RB-1', 'todo')], undefined, undefined, undefined, undefined, {
+      date: '2026-09-02',
+      text: MARKS_LOG,
+    });
+    renderApp(store);
+    openLog();
+    const timeline = screen.getByTestId('log-timeline');
+    const summaries = [...timeline.querySelectorAll('summary')];
+    expect(summaries).toHaveLength(4);
+    for (const s of summaries) {
+      expect(s).toHaveClass('log-timeline__summary');
+      expect([...s.children].map((c) => c.className.split(' ')[0])).toEqual([
+        'log-timeline__mark',
+        'log-timeline__when',
+        'log-timeline__seat',
+        'log-timeline__title',
+      ]);
+    }
+    expect(summaries.map((s) => s.querySelector('.log-timeline__mark')?.textContent)).toEqual([
+      '▲',
+      '▼',
+      '✓',
+      '•',
+    ]);
+    // The seat cell still carries the avatar emoji and the name.
+    expect(summaries[0]?.querySelector('.log-timeline__seat .log-timeline__emoji')).not.toBeNull();
+    // Expanding a row still renders its body, and only then.
+    const item = timeline.querySelector('details.log-timeline__item') as Element;
+    expect(item.querySelector('.log-timeline__text')).toBeNull();
+    openBlock(item);
+    expect(item.querySelector('.log-timeline__text')).not.toBeNull();
+  });
+});

@@ -364,6 +364,17 @@ describe('styles.css: the top of the Board', () => {
     expect(css).not.toMatch(/\.status-row\b/);
   });
 
+  // RCB-223 test 4c, CSS half. CONTROL: change `display: grid;` to `display: flex;` in the
+  // `.log-timeline__summary` rule, or drop one of the four tracks — the row is no longer the
+  // mockup's mark · time · seat · title grid and this fails (the assertion reads the rule's own
+  // slice, so the same declaration elsewhere cannot satisfy it).
+  it('the .log-timeline__summary rule is the four-track grid: 16px 56px 96px minmax(0, 1fr)', () => {
+    const r = rule(/\.log-timeline__summary\s*\{[^}]*\}/);
+    expect(r).toBeDefined();
+    expect(r).toContain('display: grid;');
+    expect(r).toContain('grid-template-columns: 16px 56px 96px minmax(0, 1fr);');
+  });
+
   it('.log-timeline has no width declaration (it scrolls inside the LOG row body)', () => {
     const r = rule(/\.log-timeline\s*\{[^}]*\}/);
     expect(r).toBeDefined();

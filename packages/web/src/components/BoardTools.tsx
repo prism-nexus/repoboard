@@ -5,9 +5,12 @@
  *
  * RCB-147: a free-text search box narrows further, same non-persistence reasoning as
  * `sizeFilter` — see `State.query`'s doc comment.
+ *
+ * RCB-223: the tools are ONE row element — `lead` (the Columns… button, which the Board owns) first,
+ * then the filter, Size and Sort — so the Board's top does not spend a row on a lone button.
  */
 import type { Size } from '@repoboard/core';
-import { useEffect, useRef } from 'react';
+import { type ReactNode, useEffect, useRef } from 'react';
 import type { SortBy } from '../store.js';
 
 const SIZES: readonly Size[] = ['S', 'M', 'L', 'XL'];
@@ -32,6 +35,8 @@ interface Props {
   onClearSizeFilter: () => void;
   onSetSortBy: (sortBy: SortBy) => void;
   onSetQuery: (query: string) => void;
+  /** RCB-223: drawn first in the row, before the filter (the Columns… toggle). */
+  lead?: ReactNode;
 }
 
 export function BoardTools({
@@ -44,6 +49,7 @@ export function BoardTools({
   onClearSizeFilter,
   onSetSortBy,
   onSetQuery,
+  lead,
 }: Props) {
   const filtered = sizeFilter.length > 0 || query.trim() !== '';
   const inputRef = useRef<HTMLInputElement>(null);
@@ -64,6 +70,7 @@ export function BoardTools({
 
   return (
     <div className="board-tools" data-testid="board-tools">
+      {lead}
       <input
         ref={inputRef}
         type="search"

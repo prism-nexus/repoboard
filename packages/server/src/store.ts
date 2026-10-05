@@ -552,6 +552,12 @@ interface SeatWritePlan {
   leases: LeasesDoc | null;
   released: string | null;
   audit: { title: string; text: string } | null;
+  /**
+   * RCB-217: the pane tag of the pane that ran this write — what the `seat` events it appends carry
+   * as `resource`. `null` (the events say no pane) when no holder is recorded: a board with no local
+   * layer, a caller with no holder (serve's HTTP door), or a holder with no pane.
+   */
+  tag: string | null;
 }
 
 /**
@@ -1254,8 +1260,8 @@ export class CardStore extends EventEmitter<StoreEvents> {
    * written first, `seats.yml` second — if the second write fails, the bullet says what happened
    * and seats.yml is merely behind (a seat with no recorded holder, today's behaviour), never
    * ahead of it. `excludeSeatsFromLocalGit` runs before any of it, so the file is never on disk
-   * unexcluded; if that throws, nothing is written. No `appendEvent`: `events.jsonl` is
-   * git-tracked and a holder must not reach it.
+   * unexcluded; if that throws, nothing is written. No holder reaches `events.jsonl`:
+   * `appendSeatEvents` (RCB-217) writes the status change and the pane TAG, never the holder.
    *
    * RCB-197: an UP probes every recorded holder once, here under `seats.yml`'s lock (nothing can
    * change them meanwhile), before STATE.md's is taken; a DOWN needs no liveness and probes nobody.
@@ -1439,7 +1445,59 @@ export class CardStore extends EventEmitter<StoreEvents> {
     }
     const res = await this.commitSeatBullet(planned.text);
     if (plan.leases !== null) await writeSeatsFile(this.seatsPath, serializeLeases(plan.leases));
+    await this.appendSeatEvents(state.doc.sections.seats, plan);
     return { ...res, released: plan.released, audit: plan.audit?.title ?? null };
+  }
+
+  /**
+   * RCB-217: one `seat` event per SEATS bullet whose status this write CHANGED — `seatsBefore` is
+   * the section as `runSeatWrite` read it under the locks, so `from` is what the bullet said
+   * (`findSeatLine` + `parseSeatStamp`, the way `planSeatWrite` reads it), `null` when the seat had
+   * no bullet. A restamp of the status a seat already has changes nothing and appends nothing. The
+   * event's `actor` is the seat's name (`SeatBulletEdit.name`, what `seat list` will show) and its
+   * `resource` the pane tag the plan decided (`SeatWritePlan.tag`), left out when there is none.
+   * Appended LAST — after STATE.md and `seats.yml` — so a watcher that sees the event finds both
+   * files already written. The seat a pane leaves (`--from`) is edits[1]; it stands down BEFORE the
+   * new seat is taken, so the ticker, which lists newest first, reads "took the seat" on top.
+   *
+   * The pane tag is the one value here that names a holder. `seats.yml` keeps holders out of git
+   * because it lives under `.repoboard/local/`; `events.jsonl` is the board's own file (this repo
+   * ignores it, plan §2: "safe to gitignore") and the tag is only the short label `seat list`
+   * prints — never the pane id, session, pid or host.
+   */
+  private async appendSeatEvents(seatsBefore: string, plan: SeatWritePlan): Promise<void> {
+    const ts = toIso(this.now());
+    for (const edit of [...plan.edits].reverse()) {
+      const bullet = findSeatLine(seatsBefore, edit.name);
+      const from = bullet === null ? null : (parseSeatStamp(bullet)?.status ?? null);
+      if (from === edit.status) continue;
+      const event: Event = {
+        ts,
+        actor: edit.name,
+        type: 'seat',
+        cardId: null,
+        from,
+        to: edit.status,
+      };
+      if (plan.tag !== null) event.resource = plan.tag;
+      await this.appendEvent(event);
+    }
+  }
+
+  /**
+   * RCB-217: the pane tag of `caller` as `seat list` would print it next to the recorded holders in
+   * `doc` — `paneTag` widened against every recorded seat holder's pane — or `null` when the caller
+   * has no pane. The same pane set `checkSeatWrite` widens a DOWN's labels against.
+   */
+  private callerSeatTag(doc: LeasesDoc, caller: SeatHolder): string | null {
+    if (caller.pane === null) return null;
+    const panes = [
+      ...doc.leases
+        .filter((l) => l.resource.startsWith(SEAT_LEASE_PREFIX))
+        .map((l) => parseHolder(l.holder).pane),
+      caller.pane,
+    ].filter((p): p is string => p !== null);
+    return paneTag(caller.pane, panes);
   }
 
   /**
@@ -1480,7 +1538,10 @@ export class CardStore extends EventEmitter<StoreEvents> {
     if (req.status === 'DOWN') {
       // RCB-198: a DOWN is the holder's (or `force`d, audited). No local layer = no lease = free.
       if (seats === null) {
-        return { ok: true, plan: { edits: [edit], leases: null, released: null, audit: null } };
+        return {
+          ok: true,
+          plan: { edits: [edit], leases: null, released: null, audit: null, tag: null },
+        };
       }
       const decision = this.checkSeatWrite(seats.doc, {
         seat: req.name,
@@ -1505,6 +1566,7 @@ export class CardStore extends EventEmitter<StoreEvents> {
           leases: down.changed ? down.doc : null,
           released: null,
           audit: decision.audit,
+          tag: this.callerSeatTag(seats.doc, seats.holder),
         },
       };
     }
@@ -1581,7 +1643,13 @@ export class CardStore extends EventEmitter<StoreEvents> {
     if (seats === null) {
       return {
         ok: true,
-        plan: { edits: [edit], leases: null, released: claim.release, audit: claim.audit },
+        plan: {
+          edits: [edit],
+          leases: null,
+          released: claim.release,
+          audit: claim.audit,
+          tag: null,
+        },
       };
     }
     // The seat the pane leaves goes DOWN and loses its lease in this same write; this seat's
@@ -1618,7 +1686,13 @@ export class CardStore extends EventEmitter<StoreEvents> {
     }
     return {
       ok: true,
-      plan: { edits, leases: up.doc, released: claim.release, audit: claim.audit },
+      plan: {
+        edits,
+        leases: up.doc,
+        released: claim.release,
+        audit: claim.audit,
+        tag: caller.pane === null ? null : tagOf(caller.pane),
+      },
     };
   }
 
@@ -2034,6 +2108,27 @@ export class CardStore extends EventEmitter<StoreEvents> {
       .map((t, i) => (i < texts.length - 1 ? t.replace(/\s+$/, '') : t))
       .join('\n\n');
     return { date: day, text, blocks: parseLogBlocks(text) };
+  }
+
+  /**
+   * RCB-217: the log the Board's snapshot opens with — today's (`log()`, by this store's clock) when
+   * it has at least one block, else the newest EARLIER day within `maxDaysBack` days (UTC dates,
+   * yesterday first) that has one, else today's own answer: `null` when no file exists for today,
+   * or a file with no block in it. A day's file that exists but holds no block (a header only) is
+   * not "a day with entries". Each day is `log()`'s own read — merged across every log dir, fresh
+   * from disk, never cached — so this can never name a different day's text than `GET /api/log`.
+   */
+  async newestLog(maxDaysBack: number): Promise<LogFile | null> {
+    const today = toIso(this.now()).slice(0, 10);
+    const first = await this.log(today);
+    if (first !== null && first.blocks.length > 0) return first;
+    const midnight = Date.parse(`${today}T00:00:00Z`);
+    for (let back = 1; back <= maxDaysBack; back++) {
+      const day = new Date(midnight - back * 86_400_000).toISOString().slice(0, 10);
+      const earlier = await this.log(day);
+      if (earlier !== null && earlier.blocks.length > 0) return earlier;
+    }
+    return first;
   }
 
   /**
@@ -3612,6 +3707,7 @@ const EVENT_TYPES: ReadonlySet<string> = new Set([
   'archive',
   'columns',
   'note',
+  'seat',
 ]);
 
 function parseEventLines(text: string): Event[] {

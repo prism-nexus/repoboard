@@ -176,6 +176,28 @@ function utcMidnightDaysAgo(now: Date, days: number): string {
   return new Date(midnight - days * 86_400_000).toISOString();
 }
 
+/**
+ * HEAD's commits since UTC midnight `days - 1` days ago — today plus the `days - 1` before it, so
+ * `days = 14` is the 14-day window `perDay` charts — newest first, parsed with the SAME `LOG_FORMAT`
+ * and `parseCommitLog` as every other commit read here. `null` when git cannot answer (no git, no
+ * commit): a missing answer, never an empty list that reads as "nothing happened".
+ * `loadCommits`' cadence and per-seat counts and RCB-217's landings read through this one function,
+ * so the two can never disagree about which commits are "recent".
+ */
+export async function recentCommits(
+  root: string,
+  now: Date,
+  days: number,
+): Promise<CommitRow[] | null> {
+  try {
+    const since = utcMidnightDaysAgo(now, days - 1);
+    const out = await git(root, ['log', `--since=${since}`, `--format=${LOG_FORMAT}`, 'HEAD']);
+    return parseCommitLog(out);
+  } catch {
+    return null;
+  }
+}
+
 async function loadCommits(root: string, now: Date): Promise<RepoCommits> {
   const inGit = await isGitRepo(root);
   if (!inGit) {
@@ -203,14 +225,7 @@ async function loadCommits(root: string, now: Date): Promise<RepoCommits> {
     ? await commitRows(root, 'origin/main', 10)
     : null;
 
-  let recent: CommitRow[] | null = null;
-  try {
-    const since = utcMidnightDaysAgo(now, 13);
-    const out = await git(root, ['log', `--since=${since}`, `--format=${LOG_FORMAT}`, 'HEAD']);
-    recent = parseCommitLog(out);
-  } catch {
-    recent = null;
-  }
+  const recent = await recentCommits(root, now, 14);
 
   return {
     branch,

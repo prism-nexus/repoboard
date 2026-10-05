@@ -575,3 +575,162 @@ describe('HTTP POST /api/log writes as `web` (RCB-198)', () => {
     expect(res.status).toBe(200);
   });
 });
+
+// ---- RCB-217: a seat going UP or DOWN is an event --------------------------------------------------
+//
+// `store.setSeatBullet` appends one `seat` event to `.repoboard/events.jsonl` per SEATS bullet whose
+// status it CHANGED, so the ticker (and the Board's Seats panel) can say a seat was taken. Nothing
+// else about a seat write moves: an update and a restamp of the status a seat already has append
+// nothing, and the pane tag is the only holder fact that reaches the file.
+//
+// CONTROLS (run by the seat, not part of the suite) — each perturbation is applied to
+// `packages/server/src/store.ts`, read back, typechecked, and must turn the named test red:
+//  - delete the `await this.appendSeatEvents(state.doc.sections.seats, plan);` line in
+//    `runSeatWrite`: (a), (b), (e) and (f) fail (no `seat` events at all).
+//  - delete `if (from === edit.status) continue;` in `appendSeatEvents`: (c) fails (the renewal
+//    appends a second UP).
+//  - add an `appendEvent` of a `seat` event inside `runSeatUpdate`: (c) fails (an update appends).
+//  - `tag: caller.pane === null ? null : tagOf(caller.pane)` -> `tag: null` (UP path): (a) and (e)
+//    fail (no `resource`); (d) still passes — which is why (d) asserts the key is ABSENT, not null.
+//  - `tag: this.callerSeatTag(seats.doc, seats.holder)` -> `tag: null` (DOWN path): (b) fails.
+//  - drop `.reverse()` in `appendSeatEvents`: (e) fails (the new seat's UP is written before the
+//    seat the pane leaves goes DOWN).
+//  - remove `'seat'` from `EVENT_TYPES` in `store.ts`: (f) fails (a re-opened store loses them).
+describe('a seat going UP or DOWN appends a `seat` event (RCB-217)', () => {
+  const eventsFile = (root: string) => join(root, '.repoboard', 'events.jsonl');
+
+  async function eventLines(root: string): Promise<Record<string, unknown>[]> {
+    const text = (await readOrNull(eventsFile(root))) ?? '';
+    return text
+      .split('\n')
+      .filter((l) => l.trim().length > 0)
+      .map((l) => JSON.parse(l) as Record<string, unknown>);
+  }
+
+  const TS = '2026-09-02T22:41:10Z';
+
+  it('(a) taking a seat from a pane: exactly one event — actor the seat, from null, to UP, resource the pane TAG (never the pane id)', async () => {
+    const root = await makeBoard(true);
+    const up = await cli(root, ENV_A, 'seat', 'builder', '--up', 'holding RCB-217');
+    expect(up.code, up.err).toBe(0);
+
+    expect(await eventLines(root)).toEqual([
+      {
+        ts: TS,
+        actor: 'builder',
+        type: 'seat',
+        cardId: null,
+        from: null,
+        to: 'UP',
+        resource: 'A7B2',
+      },
+    ]);
+    expectNoIdentity((await readOrNull(eventsFile(root))) ?? '');
+  });
+
+  it('(b) standing a seat down from its holder: one more event — from UP, to DOWN, resource the holder tag', async () => {
+    const root = await heldByA();
+    const down = await cli(root, ENV_A, 'seat', 'builder', '--down', DOWN_TEXT);
+    expect(down.code, down.err).toBe(0);
+
+    const events = await eventLines(root);
+    expect(events).toHaveLength(2);
+    expect(events[1]).toEqual({
+      ts: TS,
+      actor: 'builder',
+      type: 'seat',
+      cardId: null,
+      from: 'UP',
+      to: 'DOWN',
+      resource: 'A7B2',
+    });
+  });
+
+  it('(c) an update and a restamp of the status the seat already has append nothing', async () => {
+    const root = await heldByA();
+    expect(await eventLines(root)).toHaveLength(1);
+
+    const update = await cli(root, ENV_A, 'seat', 'builder', '--update', 'still holding');
+    expect(update.code, update.err).toBe(0);
+    expect(await eventLines(root)).toHaveLength(1);
+
+    // The same pane taking the seat it already holds renews it: UP -> UP is no status change.
+    const renew = await cli(root, ENV_A, 'seat', 'builder', '--up', 'renewed');
+    expect(renew.code, renew.err).toBe(0);
+    expect(await bulletOf(root, 'builder')).toContain('renewed');
+    expect(await eventLines(root)).toHaveLength(1);
+  });
+
+  it('(d) no pane to name: the event is written WITHOUT a resource key — no local layer, or a caller with no holder', async () => {
+    const plain = await makeBoard(false);
+    const up = await cli(plain, ENV_A, 'seat', 'builder', '--up', 'no local layer');
+    expect(up.code, up.err).toBe(0);
+    const [event] = await eventLines(plain);
+    expect(event).toEqual({
+      ts: TS,
+      actor: 'builder',
+      type: 'seat',
+      cardId: null,
+      from: null,
+      to: 'UP',
+    });
+    expect(event).not.toHaveProperty('resource');
+
+    // serve's HTTP door has no pane: a forced DOWN over A's seat is by "web", so names no tag.
+    const root = await heldByA();
+    const store = await openStore(root, { watch: false, now: () => NOW });
+    cleanups.push(() => store.close());
+    const forced = await store.setSeatBullet('builder', 'DOWN', DOWN_TEXT, null, { force: true });
+    expect(forced.ok).toBe(true);
+    const last = (await eventLines(root)).at(-1);
+    expect(last).toMatchObject({ actor: 'builder', type: 'seat', from: 'UP', to: 'DOWN' });
+    expect(last).not.toHaveProperty('resource');
+  });
+
+  it('(e) a pane moving seats: the seat it leaves goes DOWN first, then the new seat UP — two events, one tag', async () => {
+    const root = await heldByA();
+    const moved = await cli(
+      root,
+      ENV_A,
+      'seat',
+      'reviewer',
+      '--up',
+      'reviewing',
+      '--from',
+      'builder',
+    );
+    expect(moved.code, moved.err).toBe(0);
+
+    expect((await eventLines(root)).slice(1)).toEqual([
+      {
+        ts: TS,
+        actor: 'builder',
+        type: 'seat',
+        cardId: null,
+        from: 'UP',
+        to: 'DOWN',
+        resource: 'A7B2',
+      },
+      {
+        ts: TS,
+        actor: 'reviewer',
+        type: 'seat',
+        cardId: null,
+        from: null,
+        to: 'UP',
+        resource: 'A7B2',
+      },
+    ]);
+  });
+
+  it('(f) a re-opened store reads the seat events back — `seat` is a type the event log keeps', async () => {
+    const root = await heldByA();
+    await cli(root, ENV_A, 'seat', 'builder', '--down', DOWN_TEXT);
+    const store = await openStore(root, { watch: false, now: () => NOW });
+    cleanups.push(() => store.close());
+    expect(store.events().map((e) => [e.type, e.actor, e.from, e.to, e.resource])).toEqual([
+      ['seat', 'builder', null, 'UP', 'A7B2'],
+      ['seat', 'builder', 'UP', 'DOWN', 'A7B2'],
+    ]);
+  });
+});

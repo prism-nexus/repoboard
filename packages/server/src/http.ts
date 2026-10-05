@@ -86,6 +86,8 @@ export interface ServerOptions {
    * (`openStore`'s own default).
    */
   now?: () => Date;
+  /** RCB-217 test seam: ms between the seat-row and landings re-checks (default 30 s). */
+  livenessPollMs?: number;
 }
 
 /** K12 default for `ServerOptions.watchCap`. */
@@ -406,6 +408,7 @@ export async function startServer(opts: ServerOptions): Promise<RunningServer> {
     warn,
     siblingsFlag,
     now: opts.now,
+    livenessPollMs: opts.livenessPollMs,
   });
   // RCB-209 (a): from here until `listen` resolves, the registry owns a primary context (repo
   // watcher, wss, timers). A failure anywhere in this span (a busy port, a throwing first scan)
@@ -436,6 +439,7 @@ export async function startServer(opts: ServerOptions): Promise<RunningServer> {
       warn,
       siblingsFlag,
       now: opts.now,
+      livenessPollMs: opts.livenessPollMs,
       gateMembers,
     });
     registry.setOpened(registry.primaryKey, primary);

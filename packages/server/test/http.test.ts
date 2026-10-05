@@ -3,7 +3,15 @@ import { existsSync } from 'node:fs';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { basename, join } from 'node:path';
 import { promisify } from 'node:util';
-import { type Card, defaultBoardConfig, serializeBoard } from '@repoboard/core';
+import {
+  appendLogBlock,
+  type Card,
+  dailyLogHeader,
+  defaultBoardConfig,
+  formatLogBlock,
+  serializeBoard,
+  serializeLeases,
+} from '@repoboard/core';
 import { afterEach, describe, expect, it } from 'vitest';
 import { WebSocket } from 'ws';
 import { type RunningServer, startServer } from '../src/http.js';
@@ -2290,5 +2298,307 @@ connections: []
     const res = await fetch(`${noFile.url}/api/systems/api/docs`);
     expect(res.status).toBe(404);
     expect(await json(res)).toMatchObject({ error: expect.any(String) });
+  });
+});
+
+// ---- RCB-217: seat rows, landings and the newest log day on the wire -------------------------------
+//
+// The WS snapshot gains `seats` (core's `seatRowPayloads`: STATE.md's SEATS bullets joined to the
+// holders recorded in `.repoboard/local/seats.yml`), `landings` (the last 14 days of HEAD's commits
+// whose subject starts with a card id, grouped by card) and a `log` that is today's day when it has
+// an entry, else the newest earlier day within 14 days that has one. `{type:"seats"}` follows every
+// STATE.md change and a poll that catches what no file event reports; `{type:"landings"}` follows a
+// new HEAD. The poll interval is a test seam (`livenessPollMs`).
+//
+// CONTROLS (run by the seat, not part of the suite) — each perturbation is applied, read back,
+// typechecked, and must turn the named test red:
+//  - `packages/server/src/repo-context.ts`: drop `seats` from the snapshot object: (1), (2), (4) fail.
+//  - drop `landings` from the snapshot object: (5) and (6) fail.
+//  - `snapshotLogPayload` back to `store.log()`: (7) fails (today's empty payload, not yesterday's).
+//  - `sendSeats`: delete `if (onlyIfChanged && json === lastSeatsJson) return;`: (4) fails on its
+//    "no further seats message" assertion (the poll re-sends every 50 ms).
+//  - `onState`: delete `void sendSeats(false);`: (3) fails (no `seats` message after the write).
+//  - delete the `lastSeatsJson = null; lastLandingsKey = null;` reset in the connection handler:
+//    (4) times out waiting for its first poll message (STATE.md's own broadcast already recorded it).
+//  - `sendLandings`: compare nothing (delete `if (key === lastLandingsKey) return;`): (6) fails on
+//    its "no further landings message" assertion.
+//  - `packages/server/src/store.ts`, `newestLog`: loop `back <= maxDaysBack` -> `back < maxDaysBack`:
+//    (7)'s boundary assertion fails (the day exactly 14 back is no longer found).
+//  - `packages/core/src/landings.ts` as in `landings.test.ts`: (5) fails with the `cards: …` commit.
+describe('seats, landings and the newest log day on the wire (RCB-217)', () => {
+  const POLL_MS = 50;
+  const PANE = 'A7B2A3F2-1B2D-4E5F';
+  const LEASES = serializeLeases({
+    leases: [{ resource: 'seat:builder', holder: `pane=${PANE}`, since: '2026-09-02T22:40:00Z' }],
+    windows: [],
+  });
+  const BUILDER_TEXT = 'building\nin-flight: none\nowes: nothing';
+  /** What `seatRowPayloads` makes of the bullet `setSeatBullet` writes at the fixed `NOW`. */
+  const BUILDER_ROW = {
+    name: 'builder',
+    status: 'UP',
+    at: '2026-09-02T22:41:00Z',
+    tag: null,
+    label: null,
+    live: null,
+    inFlight: 'none',
+    owes: 'nothing',
+  };
+
+  interface WireRig {
+    repo: TempRepo;
+    store: CardStore;
+    url: string;
+    seatsFile: string;
+  }
+
+  /** A board with a local layer (so `seats.yml` is read), the server polling every `POLL_MS`. */
+  async function wireRig(
+    setup: (root: string) => Promise<void> = async () => {},
+    cards: Record<string, string> = {},
+  ): Promise<WireRig> {
+    const repo = await makeTempRepoboard(cards);
+    cleanups.push(repo.cleanup);
+    await mkdir(join(repo.root, '.repoboard', 'local'), { recursive: true });
+    await setup(repo.root);
+    const store = await openStore(repo.root, { watch: true, now: () => NOW });
+    cleanups.push(() => store.close());
+    const server = await startServer({ store, port: 0, scan: false, livenessPollMs: POLL_MS });
+    cleanups.push(() => server.close());
+    return {
+      repo,
+      store,
+      url: server.url.replace(/\/$/, ''),
+      seatsFile: join(repo.root, '.repoboard', 'local', 'seats.yml'),
+    };
+  }
+
+  async function open(r: WireRig): Promise<WsClient> {
+    const ws = await connect(r.url, [r.repo.root]);
+    cleanups.push(async () => ws.close());
+    return ws;
+  }
+
+  type Snap = {
+    type: string;
+    seats: Record<string, unknown>[];
+    landings: {
+      rows: { cardId: string; commits: Record<string, unknown>[] }[];
+      web: string | null;
+    };
+    log: { date: string; text: string; blocks: unknown[] };
+  };
+  const isSnapshot = (m: Msg) => m.type === 'snapshot';
+
+  /**
+   * Consume the `type` messages that are buffered or about to arrive — a poll or two, or a
+   * duplicate raced in by the same change — and return once 150 ms pass in silence. Bounded: an
+   * endless stream (a poll that re-sends every tick) leaves messages behind for the NEXT assertion.
+   */
+  async function drain(ws: WsClient, type: string): Promise<void> {
+    for (let i = 0; i < 10; i++) {
+      try {
+        await ws.next((m) => m.type === type, 150, true);
+      } catch {
+        return;
+      }
+    }
+  }
+
+  it('(1) the snapshot carries seat rows: the SEATS bullet joined to the holder in seats.yml', async () => {
+    const r = await wireRig(async (root) => {
+      await writeFile(join(root, '.repoboard', 'local', 'seats.yml'), LEASES);
+    });
+    expect((await r.store.setSeatBullet('builder', 'UP', BUILDER_TEXT)).ok).toBe(true);
+
+    const snap = await nextMessage<Snap>(await open(r), isSnapshot);
+    expect(snap.seats).toEqual([{ ...BUILDER_ROW, tag: 'A7B2', live: 'unknown' }]);
+  });
+
+  it('(2) a seats.yml that cannot be read gives rows with null holder fields, never an error', async () => {
+    // Two ways to be unreadable: invalid YAML, and a directory where the file should be (EISDIR).
+    for (const unreadable of ['yaml', 'directory'] as const) {
+      const r = await wireRig(async (root) => {
+        const path = join(root, '.repoboard', 'local', 'seats.yml');
+        if (unreadable === 'yaml') await writeFile(path, 'leases: {{{ not yaml [');
+        else await mkdir(path);
+      });
+      expect((await r.store.setSeatBullet('builder', 'UP', BUILDER_TEXT)).ok).toBe(true);
+
+      const snap = await nextMessage<Snap>(await open(r), isSnapshot);
+      expect(snap.type, unreadable).toBe('snapshot');
+      expect(snap.seats, unreadable).toEqual([BUILDER_ROW]);
+    }
+  });
+
+  it('(3) a seat write while connected broadcasts the rows, and a `seat` event, with no reload', async () => {
+    const r = await wireRig();
+    const ws = await open(r);
+    const snap = await nextMessage<Snap>(ws, isSnapshot);
+    expect(snap.seats).toEqual([]);
+
+    const seen = nextMessage<{ type: string; seats: Record<string, unknown>[] }>(
+      ws,
+      (m) => m.type === 'seats' && (m.seats as unknown[]).length === 1,
+    );
+    const event = nextMessage<{ type: string; event: Record<string, unknown> }>(
+      ws,
+      (m) => m.type === 'event' && (m.event as { type?: string }).type === 'seat',
+    );
+    expect((await r.store.setSeatBullet('builder', 'UP', BUILDER_TEXT)).ok).toBe(true);
+    expect((await seen).seats).toEqual([BUILDER_ROW]);
+    expect((await event).event).toEqual({
+      ts: '2026-09-02T22:41:10Z',
+      actor: 'builder',
+      type: 'seat',
+      cardId: null,
+      from: null,
+      to: 'UP',
+    });
+  });
+
+  it('(4) the poll re-sends seat rows only when they differ from the last it sent — a holder change with no file event', async () => {
+    const r = await wireRig();
+    expect((await r.store.setSeatBullet('builder', 'UP', BUILDER_TEXT)).ok).toBe(true);
+    const ws = await open(r);
+    const snap = await nextMessage<Snap>(ws, isSnapshot);
+    expect(snap.seats).toEqual([BUILDER_ROW]);
+
+    // A connection makes the next poll send once (so a client is stale for one poll at most): the
+    // same rows as the snapshot.
+    const first = await nextMessage<{ type: string; seats: unknown }>(
+      ws,
+      (m) => m.type === 'seats',
+    );
+    expect(first.seats).toEqual(snap.seats);
+
+    // seats.yml is not watched: this is a change nothing but the poll can see.
+    await writeFile(r.seatsFile, LEASES);
+    const changed = await nextMessage<{ type: string; seats: Record<string, unknown>[] }>(
+      ws,
+      (m) => m.type === 'seats' && (m.seats as { tag?: string }[])[0]?.tag === 'A7B2',
+    );
+    expect(changed.seats).toEqual([{ ...BUILDER_ROW, tag: 'A7B2', live: 'unknown' }]);
+
+    // ...and then nothing, however many polls pass (8 at 50 ms) while the rows stay as they are.
+    await drain(ws, 'seats');
+    await expect(ws.next((m) => m.type === 'seats', 400, true)).rejects.toThrow('timed out');
+  });
+
+  /** A git repo at the board root, origin on GitHub, one commit per subject (oldest first). */
+  async function gitWire(subjects: string[]) {
+    return wireRig(
+      async (root) => {
+        await runGit(root, 'init', '-q');
+        await runGit(root, 'remote', 'add', 'origin', 'git@github.com:acme/widgets.git');
+        for (const subject of subjects) {
+          await runGit(root, 'commit', '-q', '--allow-empty', '-m', subject);
+        }
+      },
+      { 'RB-1.md': cardText('RB-1', 'todo') },
+    );
+  }
+
+  it('(5) the snapshot carries landings from git: commits whose subject starts with a card id, grouped, with the GitHub base', async () => {
+    const r = await gitWire(['RB-1: first slice', 'cards: RB-9 filed', 'RB-2: second slice']);
+    const [sha2, , sha1] = (await runGit(r.repo.root, 'log', '--format=%h')).split('\n');
+
+    const snap = await nextMessage<Snap>(await open(r), isSnapshot);
+    expect(snap.landings).toEqual({
+      rows: [
+        {
+          cardId: 'RB-2',
+          commits: [
+            { sha: sha2, at: expect.any(String), author: 't', subject: 'RB-2: second slice' },
+          ],
+        },
+        {
+          cardId: 'RB-1',
+          commits: [
+            { sha: sha1, at: expect.any(String), author: 't', subject: 'RB-1: first slice' },
+          ],
+        },
+      ],
+      web: 'https://github.com/acme/widgets',
+      source: expect.stringContaining('git log'),
+    });
+  });
+
+  it('(5b) no git: landings is {rows: [], web: null, source} — a payload, not a crash', async () => {
+    const r = await wireRig();
+    const snap = await nextMessage<Snap>(await open(r), isSnapshot);
+    expect(snap.landings).toEqual({
+      rows: [],
+      web: null,
+      source: expect.stringContaining('git log'),
+    });
+  });
+
+  it('(6) a new commit re-sends landings, and an unchanged HEAD does not', async () => {
+    const r = await gitWire(['RB-1: first slice']);
+    const ws = await open(r);
+    await nextMessage<Snap>(ws, isSnapshot);
+    type Landings = { type: string; landings: { rows: { cardId: string }[] } };
+    const firstRows = (m: Landings) => m.landings.rows.map((row) => row.cardId);
+
+    // The poll after a connection sends once, for the HEAD the snapshot was read at.
+    const first = await nextMessage<Landings>(ws, (m) => m.type === 'landings');
+    expect(firstRows(first)).toEqual(['RB-1']);
+
+    await runGit(r.repo.root, 'commit', '-q', '--allow-empty', '-m', 'RB-3: third slice');
+    const next = await nextMessage<Landings>(ws, (m) => m.type === 'landings');
+    expect(firstRows(next)).toEqual(['RB-3', 'RB-1']);
+
+    // A commit that lands between a poll's two git reads can be sent twice; once drained, silence.
+    await drain(ws, 'landings');
+    await expect(ws.next((m) => m.type === 'landings', 400, true)).rejects.toThrow('timed out');
+  });
+
+  /** `.repoboard/log/<day>.md`: the header, plus one block when `withBlock`. */
+  async function writeLogDay(root: string, day: string, withBlock: boolean): Promise<void> {
+    const dir = join(root, '.repoboard', 'log');
+    await mkdir(dir, { recursive: true });
+    const header = `${dailyLogHeader(day)}\n`;
+    const block = formatLogBlock({
+      seat: 'builder',
+      ts: `${day}T10:00:00Z`,
+      title: `work on ${day}`,
+      text: 'the body',
+    });
+    await writeFile(join(dir, `${day}.md`), withBlock ? appendLogBlock(header, block) : header);
+  }
+
+  it("(7) the snapshot's log is today's when it has an entry, else the newest earlier day with one within 14 days", async () => {
+    // The fixed clock is 2026-09-02. Today has a header and no block; the 1st has one; so does the
+    // 14th day back (08-19), but 08-18 (15 back) is out of reach.
+    const r = await wireRig(async (root) => {
+      await writeLogDay(root, '2026-09-02', false);
+      await writeLogDay(root, '2026-08-19', true);
+      await writeLogDay(root, '2026-08-18', true);
+    });
+    const snap = await nextMessage<Snap>(await open(r), isSnapshot);
+    expect(snap.log.date).toBe('2026-08-19');
+    expect(snap.log.blocks).toHaveLength(1);
+    expect(snap.log.text).toContain('work on 2026-08-19');
+
+    // the newest earlier day wins over an older one; today's own block wins over both
+    await writeLogDay(r.repo.root, '2026-09-01', true);
+    expect((await r.store.newestLog(14))?.date).toBe('2026-09-01');
+    await writeLogDay(r.repo.root, '2026-09-02', true);
+    expect((await r.store.newestLog(14))?.date).toBe('2026-09-02');
+
+    // GET /api/log is unchanged: it answers for the day it is asked about, today by default.
+    const today = (await json(await fetch(`${r.url}/api/log`))) as { date: string };
+    expect(today.date).toBe('2026-09-02');
+    expect((await fetch(`${r.url}/api/log?date=2026-08-30`)).status).toBe(404);
+  });
+
+  it('(7b) no day with an entry within 14 days: today’s empty payload, as before', async () => {
+    const r = await wireRig(async (root) => {
+      await writeLogDay(root, '2026-08-18', true); // 15 days back: out of reach
+    });
+    const snap = await nextMessage<Snap>(await open(r), isSnapshot);
+    expect(snap.log).toEqual({ date: '2026-09-02', text: '', blocks: [] });
+    expect(await r.store.newestLog(14)).toBeNull();
   });
 });

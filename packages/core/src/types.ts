@@ -211,6 +211,12 @@ export interface BoardConfig {
  * previous column ids joined by `,`, `to` the new ones, same order as `board.yml`.
  * RCB-70: `note` is written by `addNote` (`notes.ts`) — `from === to === card.status` like
  * `update`, since a note never changes status.
+ * RCB-217: `seat` is one event per SEATS status change (`store.setSeatBullet`) — `actor` is the
+ * seat's name as `seat list` shows it, `cardId` is `null`, `from` the bullet's previous status
+ * (`null` when the seat had no bullet), `to` the new one (`UP` or `DOWN`), and `resource` the pane
+ * tag of the pane that ran the command (`1D3F`), present only when a holder was recorded and it
+ * has a pane. `--update` (no status change) and a restamp of the status a seat already has write
+ * nothing.
  */
 export interface Event {
   ts: string;
@@ -225,7 +231,8 @@ export interface Event {
     | 'window'
     | 'archive'
     | 'columns'
-    | 'note';
+    | 'note'
+    | 'seat';
   cardId: string | null;
   /** P8.2: present on `lease`/`window` events, absent on card events. */
   resource?: string;

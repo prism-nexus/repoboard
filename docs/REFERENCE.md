@@ -392,8 +392,33 @@ map-only. `GET /api/log?date=` → `{date, text, blocks}` — merged with `board
 `POST /api/log` `{seat, text, title?, force?}` — 200 with `{date, text, block, restamped}`, 400/409 as above (RCB-198: this door has no pane — it writes as `web` — so a seat with a recorded holder on a board with a local layer is refused with 409 `… you are web — use --force …`, nothing written, unless the body says `force: true`, which is audited in the log; a non-boolean `force` is a 400); `restamped` is true when `seat` had an UP bullet in SEATS, so STATE.md was restamped too (RCB-127, same function as `log --as`).
 `GET /api/check?strict=1` is a pure read, always 200 (`{findings, exitCode}` — exitCode is data,
 not a status code, the same reasoning as `GET /api/leases/check/:resource`). The WS `snapshot`
-carries `state` and today's `log`; a `{type:"state", state}` message follows any rewrite (from any
+carries `state` and `log`; a `{type:"state", state}` message follows any rewrite (from any
 surface), and `{type:"log", date, text}` follows any append or external edit of that day's file.
+RCB-217: the snapshot's `log` is today's day when it has at least one block, else the newest
+earlier day within 14 days that has one, else today's empty payload (`GET /api/log` still answers
+for the day it is asked about). The snapshot also carries two derived payloads, each re-sent as its
+own message:
+
+- `seats` — `SeatRowPayload[]`, one per stamped SEATS bullet, the rows and holder join `seat list`
+  prints (core's `seatRowPayloads`, built on `seatListRows`, `parseSeatFields` and `parseSeatStamp`
+  — one parser): `{name, status: "UP"|"DOWN", at, tag, label, live: "alive"|"dead"|"unknown"|null,
+  inFlight, owes}`. `at` is the stamp as ISO, `null` when it does not parse; `tag`/`label`/`live`
+  are `null` when nobody holds the seat (or `seats.yml` cannot be read — rows with null holder
+  fields, never an error); `inFlight`/`owes` are `null` when the bullet has no such line.
+  `{type:"seats", seats}` follows every STATE.md change and every `seat` event, and a 30 s poll
+  sends it again ONLY when the JSON differs from the last one sent — a holder's process ending
+  leaves no file event. Nothing is polled while no client is connected; a new connection makes the
+  next poll re-send once.
+- `landings` — `{rows, web, source}`: the last 14 days of HEAD's commits (`git log`, the dashboard's
+  own read) whose subject starts with a card id of the board's prefix followed by `:` or a space
+  (`RCB-217: …`; `cards: RCB-1 filed` is not a landing), grouped by card id — `rows[]` is
+  `{cardId, commits: {sha, at, author, subject}[]}`, commits newest first, cards ordered by their
+  newest commit. `web` is the GitHub https base `GET /api/git` reports (`null` without one);
+  `source` names the command. No git: `{rows: [], web: null, source}`. `{type:"landings",
+  landings}` follows a new HEAD (checked by the same poll).
+
+The ticker's `seat` events (`events.jsonl`, plan §2) are one per SEATS status change — `took the
+seat` / `stood down`, with ` · <pane tag>` when a holder was recorded.
 
 ### Web
 

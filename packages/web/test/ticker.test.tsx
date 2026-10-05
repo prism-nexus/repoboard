@@ -34,6 +34,8 @@ describe('Ticker', () => {
     const store = testStore();
     store.setFun(false);
     snapshot(store, [card('RCB-9', 'todo', { title: 'Fix the watcher' })]);
+    // RCB-218: the Board no longer renders the Ticker; the Map still does.
+    store.setView('map');
     renderApp(store);
     act(() => store.dispatch({ type: 'event', event: moveEvent() }));
     const ticker = screen.getByText(/moved/).closest('.ticker');
@@ -45,6 +47,7 @@ describe('Ticker', () => {
     const store = testStore();
     store.setFun(false);
     snapshot(store, [card('RCB-9', 'todo', { title: longTitle })]);
+    store.setView('map');
     renderApp(store);
     act(() => store.dispatch({ type: 'event', event: moveEvent() }));
     const ticker = screen.getByText(/moved/).closest('.ticker');
@@ -56,6 +59,7 @@ describe('Ticker', () => {
     const store = testStore();
     store.setFun(false);
     snapshot(store, [card('RCB-9', 'todo', { title: 'Fix the watcher' })]);
+    store.setView('map');
     renderApp(store);
     act(() => store.dispatch({ type: 'event', event: moveEvent({ cardId: 'RCB-404' }) }));
     const ticker = screen.getByText(/moved/).closest('.ticker');
@@ -71,6 +75,8 @@ describe('Ticker verbs (RCB-65)', () => {
     const store = testStore();
     store.setFun(false);
     snapshot(store, [card('RCB-9', 'todo', { title: 'Fix the watcher' })]);
+    // RCB-218: the Board no longer renders the Ticker; the Map still does.
+    store.setView('map');
     renderApp(store);
     return store;
   }
@@ -236,6 +242,65 @@ describe('Ticker verbs (RCB-65)', () => {
     const ticker = document.querySelector('.ticker');
     expect(ticker).toHaveTextContent('set columns → backlog,decide,todo,doing,done,archive');
     expect(ticker?.querySelector('.ticker__title')).toBeNull();
+  });
+
+  // RCB-217. CONTROLS (run by the seat): in `Ticker.tsx`, `tickerVerb`'s `'seat'` case returning
+  // `'stood down'` for both statuses fails the "took the seat" test; dropping the `e.resource ?
+  // … : null` guard (rendering ` · {e.resource}` always) fails the "no tag" test with a literal
+  // "undefined"; removing the `'seat'` case from either switch fails TYPECHECK (the `never` guard).
+  it('a seat UP line reads "<actor> took the seat · <tag>"; no card id or title', () => {
+    const store = setup();
+    act(() =>
+      store.dispatch({
+        type: 'event',
+        event: moveEvent({
+          actor: 'builder',
+          type: 'seat',
+          cardId: null,
+          resource: '1D3F',
+          from: 'DOWN',
+          to: 'UP',
+        }),
+      }),
+    );
+    const ticker = document.querySelector('.ticker');
+    expect(ticker).toHaveTextContent('builder took the seat · 1D3F');
+    expect(ticker?.querySelector('.ticker__title')).toBeNull();
+    expect(ticker).not.toHaveTextContent('→');
+  });
+
+  it('a seat DOWN line reads "<actor> stood down · <tag>"', () => {
+    const store = setup();
+    act(() =>
+      store.dispatch({
+        type: 'event',
+        event: moveEvent({
+          actor: 'builder',
+          type: 'seat',
+          cardId: null,
+          resource: '1D3F',
+          from: 'UP',
+          to: 'DOWN',
+        }),
+      }),
+    );
+    const ticker = document.querySelector('.ticker');
+    expect(ticker).toHaveTextContent('builder stood down · 1D3F');
+    expect(ticker).not.toHaveTextContent('took the seat');
+  });
+
+  it('a seat event with no `resource` has no tag: "<actor> took the seat", never "· undefined"', () => {
+    const store = setup();
+    act(() =>
+      store.dispatch({
+        type: 'event',
+        event: moveEvent({ actor: 'builder', type: 'seat', cardId: null, from: null, to: 'UP' }),
+      }),
+    );
+    const ticker = document.querySelector('.ticker');
+    expect(ticker).toHaveTextContent('builder took the seat');
+    expect(ticker).not.toHaveTextContent('undefined');
+    expect(ticker?.querySelector('.mono')).toBeNull();
   });
 
   it('a lease event with no `resource` renders empty, never the literal "undefined"', () => {

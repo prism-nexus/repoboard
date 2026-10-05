@@ -111,6 +111,8 @@ export type {
   PlanSyncResult,
 } from './issues.js';
 export { closeSyncedCard, parseIssueItems, planSync } from './issues.js';
+export type { LandingCommit, LandingRow, LandingsPayload } from './landings.js';
+export { landingsFromCommits } from './landings.js';
 export type {
   AddWindowInput,
   AddWindowResult,
@@ -223,6 +225,7 @@ export type {
   SeatLivenessSource,
   SeatNameResult,
   SeatRow,
+  SeatRowPayload,
   SeatSighting,
   SeatUpConflict,
 } from './seat.js';
@@ -247,6 +250,7 @@ export {
   seatLabel,
   seatListRows,
   seatNameKey,
+  seatRowPayloads,
   seatSightings,
   seatUpConflict,
   stampedSeatBullets,

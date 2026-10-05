@@ -907,13 +907,73 @@ export function seatListRows(
   seatsSection: string,
   holders: readonly SeatHolderInfo[] = [],
 ): SeatListRow[] {
+  return seatListEntries(seatsSection, holders).map((entry) => entry.row);
+}
+
+/**
+ * RCB-217: `seatListRows`' one pass, each row kept with the bullet it was read from — so
+ * `seatRowPayloads` reads a row's stamp and `owes:` off THAT bullet, never off a second walk that
+ * has to skip the same bullets in the same order to line up. The join to `holders` lives here and
+ * only here: `seatListRows` and `seatRowPayloads` cannot disagree about who holds a seat.
+ */
+function seatListEntries(
+  seatsSection: string,
+  holders: readonly SeatHolderInfo[],
+): { row: SeatListRow; bullet: string }[] {
   return seatRowBullets(seatsSection).map(({ row, bullet }) => {
     const holder = holders.find((h) => h.seat.toLowerCase() === row.name.toLowerCase());
     return {
-      ...row,
-      label: parseSeatHolderLabel(bullet),
-      tag: holder?.tag ?? null,
-      live: holder?.liveness ?? null,
+      row: {
+        ...row,
+        label: parseSeatHolderLabel(bullet),
+        tag: holder?.tag ?? null,
+        live: holder?.liveness ?? null,
+      },
+      bullet,
+    };
+  });
+}
+
+/**
+ * RCB-217: one seat as the Board's Seats panel receives it (snapshot `seats`, `{type:"seats"}`) —
+ * `seatListRows`' row, each field answered or `null`, never a placeholder. `at` is the bullet's
+ * stamp as ISO (`parseSeatStamp`; `null` when the stamp does not parse — the raw text stays
+ * `seat list`'s `stamp`), `live` is the holder's `HolderLiveness.state`, `owes` the bullet's
+ * `owes:` line (`parseSeatFields`; `''` when the key is there with nothing after it).
+ */
+export interface SeatRowPayload {
+  name: string;
+  status: 'UP' | 'DOWN';
+  at: string | null;
+  tag: string | null;
+  label: string | null;
+  live: HolderLiveness['state'] | null;
+  inFlight: string | null;
+  owes: string | null;
+}
+
+/**
+ * RCB-217: `seatListRows` (the rows and the holder join `seat list` prints) as `SeatRowPayload[]`,
+ * same order, same skipping — no second parser: the stamp is `parseSeatStamp` and `owes` is
+ * `parseSeatFields`, both off the bullet `seatListEntries` already paired with the row. `holders`
+ * defaults to `[]`: no lease information is inert, every `tag` and `live` is `null` and the rows
+ * are otherwise complete (an unreadable `seats.yml` is exactly this call).
+ */
+export function seatRowPayloads(
+  seatsSection: string,
+  holders: readonly SeatHolderInfo[] = [],
+): SeatRowPayload[] {
+  return seatListEntries(seatsSection, holders).map(({ row, bullet }) => {
+    const at = parseSeatStamp(bullet)?.at ?? null;
+    return {
+      name: row.name,
+      status: row.status,
+      at: at === null ? null : toIso(at),
+      tag: row.tag,
+      label: row.label,
+      live: row.live?.state ?? null,
+      inFlight: row.inFlight,
+      owes: parseSeatFields(bullet).owes,
     };
   });
 }

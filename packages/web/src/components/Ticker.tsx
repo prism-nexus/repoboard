@@ -46,6 +46,8 @@ export function tickerVerb(e: Event): string {
       return 'added window';
     case 'columns':
       return 'set columns';
+    case 'seat':
+      return e.to === 'UP' ? 'took the seat' : 'stood down';
   }
   const exhaustive: never = e.type;
   return exhaustive;
@@ -55,7 +57,7 @@ export function tickerVerb(e: Event): string {
  * RCB-65: the per-type line body (everything between the emoji and the "· <relTime>" suffix).
  * `parts` carries the pre-rendered actor/id/title/resource spans so this switch only decides
  * shape (arrow or not, which fields, which words). Same exhaustiveness guard as `tickerVerb`:
- * no `default`, so a tenth `Event.type` fails typecheck here too.
+ * no `default`, so a new `Event.type` fails typecheck here too.
  */
 function lineBody(
   e: Event,
@@ -117,6 +119,20 @@ function lineBody(
       return (
         <>
           {actor} {tickerVerb(e)} → <span className="mono">{e.to}</span>
+        </>
+      );
+    case 'seat':
+      // RCB-217: `resource` is the pane tag of whoever ran the command; absent (no holder was
+      // recorded) the line is just "<actor> <verb>", never "· undefined".
+      return (
+        <>
+          {actor} {tickerVerb(e)}
+          {e.resource ? (
+            <>
+              {' · '}
+              <span className="mono">{e.resource}</span>
+            </>
+          ) : null}
         </>
       );
   }

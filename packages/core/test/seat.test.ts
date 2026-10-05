@@ -28,6 +28,7 @@ import {
   seatBundle,
   seatLabel,
   seatListRows,
+  seatRowPayloads,
   seatSightings,
   seatUpConflict,
 } from '../src/seat.js';
@@ -2750,5 +2751,174 @@ describe('seatBundle: the holder (RCB-199)', () => {
       NOW,
     );
     expect(withHolder).toBe(without);
+  });
+});
+
+// ---- RCB-217: the rows the Board's Seats panel receives ------------------------------------------
+//
+// CONTROLS (run by the seat, not part of the suite) — each perturbation is applied to
+// `packages/core/src/seat.ts`, read back, typechecked, and must turn the named test red:
+//  - `at: at === null ? null : toIso(at)` -> `at: row.stamp`: "one payload per stamped bullet" fails
+//    (`2026-09-18 21:00Z` is not ISO) and "an unparseable stamp" fails (its raw text is not null).
+//  - `live: row.live?.state ?? null` -> `live: null`: "one payload per stamped bullet" fails
+//    (alive/dead/unknown all read null).
+//  - `owes: parseSeatFields(bullet).owes` -> `owes: null`: "one payload per stamped bullet" and
+//    "owes is read off the bullet" fail.
+//  - in `seatListEntries`, `holders.find(...)` -> `undefined`: "one payload per stamped bullet" and
+//    "name, status and in-flight are seatListRows' own" (via the holder join) fail — and so do the
+//    RCB-199 `seatListRows` tests above, because the join is the one both functions share.
+describe('seatRowPayloads (RCB-217)', () => {
+  const STARTED = 'Tue Sep 29 12:34:56 2026';
+
+  function lease(
+    seat: string,
+    pane: string | null,
+    state: 'alive' | 'dead' | 'unknown',
+  ): SeatLeaseView {
+    return {
+      seat,
+      holder: { pane, session: null, start: STARTED, host: 'mac-mini', pid: 4242 },
+      since: '2026-09-18T20:00:00Z',
+      liveness:
+        state === 'alive'
+          ? { state: 'alive' }
+          : state === 'dead'
+            ? { state: 'dead', reason: 'no-process' }
+            : { state: 'unknown', reason: 'other-host' },
+    };
+  }
+
+  // A non-seat bullet FIRST (skipped, as `seat list` skips it), and a hand-typed stamp LAST.
+  const section = [
+    '- Owner tasks elsewhere: whatever',
+    formatSeatBullet('coordinator', 'UP', 'routing work', NOW, undefined, '1D3F · rcb coordinator'),
+    formatSeatBullet(
+      'builder',
+      'UP',
+      'building\nin-flight: sonnet B\nowes: RCB-2',
+      NOW,
+      undefined,
+      'A7B2 · rcb builder',
+    ),
+    formatSeatBullet('ops', 'DOWN', 'stood down\nin-flight: none\nowes: nothing', NOW),
+    '- **reviewer: UP 2026-09-18 18:0xZ.** hand-typed stamp that does not parse',
+  ].join('\n');
+
+  // `Builder` is capitalised on purpose: the join is case-insensitive. `ops` has no lease.
+  const holders = seatHolderInfos(
+    [
+      lease('Builder', 'A7B21234', 'dead'),
+      lease('coordinator', '1D3F9999', 'alive'),
+      lease('reviewer', null, 'unknown'),
+    ],
+    'rcb',
+  );
+
+  it('one payload per stamped bullet, in order: status, ISO stamp, holder tag/label/liveness, in-flight, owes', () => {
+    expect(seatRowPayloads(section, holders)).toEqual([
+      {
+        name: 'coordinator',
+        status: 'UP',
+        at: '2026-09-18T21:00:00Z',
+        tag: '1D3F',
+        label: '1D3F · rcb coordinator',
+        live: 'alive',
+        inFlight: null,
+        owes: null,
+      },
+      {
+        name: 'builder',
+        status: 'UP',
+        at: '2026-09-18T21:00:00Z',
+        tag: 'A7B2',
+        label: 'A7B2 · rcb builder',
+        live: 'dead',
+        inFlight: 'sonnet B',
+        owes: 'RCB-2',
+      },
+      {
+        name: 'ops',
+        status: 'DOWN',
+        at: '2026-09-18T21:00:00Z',
+        tag: null,
+        label: null,
+        live: null,
+        inFlight: 'none',
+        owes: 'nothing',
+      },
+      {
+        name: 'reviewer',
+        status: 'UP',
+        at: null,
+        tag: null,
+        label: null,
+        live: 'unknown',
+        inFlight: null,
+        owes: null,
+      },
+    ]);
+  });
+
+  it("name, status and in-flight are seatListRows' own — the same rows, no second parse", () => {
+    const pick = (r: { name: string; status: string; inFlight: string | null }) => ({
+      name: r.name,
+      status: r.status,
+      inFlight: r.inFlight,
+    });
+    expect(seatRowPayloads(section, holders).map(pick)).toEqual(
+      seatListRows(section, holders).map(pick),
+    );
+    const rows = seatListRows(section, holders);
+    expect(seatRowPayloads(section, holders).map((p) => [p.tag, p.label])).toEqual(
+      rows.map((r) => [r.tag, r.label]),
+    );
+  });
+
+  it('an unparseable stamp is at: null — the row is kept, the status still read', () => {
+    const bad = '- **reviewer: DOWN 2026-09-18 18:0xZ.** hand-typed\n  owes: RCB-9';
+    expect(seatListRows(bad)[0]?.stamp).toBe('2026-09-18 18:0xZ');
+    expect(seatRowPayloads(bad)).toEqual([
+      {
+        name: 'reviewer',
+        status: 'DOWN',
+        at: null,
+        tag: null,
+        label: null,
+        live: null,
+        inFlight: null,
+        owes: 'RCB-9',
+      },
+    ]);
+  });
+
+  it('owes is read off the bullet: present gives its text, absent gives null', () => {
+    const rows = seatRowPayloads(section);
+    expect(rows.map((r) => [r.name, r.owes])).toEqual([
+      ['coordinator', null],
+      ['builder', 'RCB-2'],
+      ['ops', 'nothing'],
+      ['reviewer', null],
+    ]);
+  });
+
+  it('no holders (the default, or []) is inert: tag and live null, the bullet label and fields still read', () => {
+    const none = seatRowPayloads(section);
+    expect(none).toEqual(seatRowPayloads(section, []));
+    expect(none.map((r) => r.tag)).toEqual([null, null, null, null]);
+    expect(none.map((r) => r.live)).toEqual([null, null, null, null]);
+    expect(none.map((r) => r.label)).toEqual([
+      '1D3F · rcb coordinator',
+      'A7B2 · rcb builder',
+      null,
+      null,
+    ]);
+    expect(none.map((r) => r.inFlight)).toEqual([null, 'sonnet B', 'none', null]);
+  });
+
+  it('a holder whose seat is not on the board joins nothing; no seat bullets at all is []', () => {
+    const stray = seatHolderInfos([lease('planner', 'ABCD0000', 'alive')], 'rcb');
+    expect(seatRowPayloads(section, stray).map((r) => r.tag)).toEqual([null, null, null, null]);
+    expect(seatRowPayloads('- Owner tasks elsewhere: whatever', holders)).toEqual([]);
+    expect(seatRowPayloads('', holders)).toEqual([]);
   });
 });

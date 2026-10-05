@@ -115,6 +115,15 @@ which would break §0.3. A reader of this file must also catch up before appendi
 offset cannot be maintained by arithmetic when another process appends too. The ticker reads
 this. Safe to delete; safe to gitignore.
 
+`type` is one of `move`, `update`, `create`, `ask`, `decide`, `lease`, `window`, `archive`,
+`columns`, `note`, `seat`. **`seat`** (RCB-217) is one line per SEATS bullet whose status a seat
+write changed: `{ts, actor: <seat name as seat list shows it>, type: "seat", cardId: null, from:
+<previous status or null>, to: "UP"|"DOWN", resource?: <pane tag>}`. `resource` is the 4-character
+(6 when another holder shares them) pane tag `seat list` prints — never the pane id, session, pid
+or host — and is absent when no holder was recorded (no local layer, a caller with no pane). A
+pane moving seats (`--from`) appends the DOWN of the seat it leaves, then the UP. A seat's body
+rewrite and a restamp of the status it already has append nothing.
+
 ---
 
 ## §3 Wire contract (server ↔ web)
@@ -138,7 +147,14 @@ HTTP, JSON, localhost only:
 
 WebSocket `/ws`, server → client:
 - `{type:"snapshot", board, repo}` on connect — `board` is the `GET /api/board` payload verbatim,
-  `hasBoard` included (one function builds both, so they cannot disagree)
+  `hasBoard` included (one function builds both, so they cannot disagree). RCB-217: the snapshot
+  also carries `seats: SeatRowPayload[]`, `landings: LandingsPayload` and a `log` that is today's
+  day when it has an entry, else the newest earlier day within 14 days that has one (else today's
+  empty payload); `GET /api/log` is unchanged.
+- `{type:"seats", seats}` (RCB-217) after every STATE.md change and every `seat` event, and from a
+  30 s poll that sends only when the rows differ from the last sent (a holder's process ending is
+  no file event); `{type:"landings", landings}` when HEAD changes (the same poll). Neither is read
+  while no client is connected, and a new connection makes the next poll re-send both.
 - `{type:"card", card}` · `{type:"card:removed", id}`
 - `{type:"repo", repo}` (debounced, ≤ 1 per 2 s)
 - `{type:"event", event}`

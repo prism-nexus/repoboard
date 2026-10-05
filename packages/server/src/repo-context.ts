@@ -24,15 +24,19 @@ import {
   type DecisionOption,
   type GateMemberFacts,
   isOwnerTask,
+  type LandingsPayload,
+  landingsFromCommits,
   mergeSiblings,
   needsDecision,
   type Priority,
   planSystemsMap,
   renderState,
   resolveOlderThan,
+  type SeatRowPayload,
   type Sibling,
   type Size,
   type StateSectionName,
+  seatRowPayloads,
   staleLeases,
   toIso,
 } from '@repoboard/core';
@@ -40,7 +44,7 @@ import { watch as chokidarWatch, type FSWatcher } from 'chokidar';
 import { type WebSocket, WebSocketServer } from 'ws';
 import { applySyncPlan, computeSyncPlan } from './issues.js';
 import { resolveCardRefs, resolveRefSpec } from './refs.js';
-import { repoDashboard } from './repo-health.js';
+import { recentCommits, repoDashboard } from './repo-health.js';
 import { git, isGitRepo, type ScanResult, scanRepo } from './scanner.js';
 import { type CardStore, openStore } from './store.js';
 import { runDetect } from './systems-detect.js';
@@ -681,6 +685,39 @@ export async function repoGitInfo(root: string): Promise<RepoGitInfo> {
   };
 }
 
+/** RCB-217: how far back `landings` reads — HEAD's commits since UTC midnight of day `-13`. */
+const LANDINGS_DAYS = 14;
+
+/**
+ * RCB-217: `landings` — the commits of the last 14 days (`recentCommits`, the dashboard's own read)
+ * whose subject starts with a card id of `prefix`, grouped by card (`landingsFromCommits`), and the
+ * GitHub base `GET /api/git` reports (`RepoGitInfo.web`, the same function). `known` is what
+ * `repoGitInfo` just read, so a caller that already has it does not ask twice. No git, or no
+ * commit: `{rows: [], web: null, source}` — never a throw.
+ */
+export async function repoLandings(
+  root: string,
+  prefix: string,
+  now: Date,
+  known?: RepoGitInfo,
+): Promise<LandingsPayload> {
+  const [info, commits] = await Promise.all([
+    known ?? repoGitInfo(root),
+    recentCommits(root, now, LANDINGS_DAYS),
+  ]);
+  return {
+    rows: commits === null ? [] : landingsFromCommits(commits, prefix),
+    web: info.web,
+    source: `git log (HEAD --since=<UTC midnight ${LANDINGS_DAYS - 1} days ago>); a subject starting "${prefix}-<n>:" or "${prefix}-<n> " is a landing`,
+  };
+}
+
+/** RCB-217: how far back the snapshot's `log` looks for a day with an entry when today has none. */
+const NEWEST_LOG_DAYS = 14;
+
+/** RCB-217: how often a connected client's seat rows and landings are re-checked with no file event. */
+export const DEFAULT_LIVENESS_POLL_MS = 30_000;
+
 export interface RepoContextOptions {
   store: CardStore;
   fun: boolean;
@@ -696,6 +733,10 @@ export interface RepoContextOptions {
   /** RCB-125 test seam only: fires once the initial scan has resolved but before the repo
    * watcher is created — the exact gap K16 names. Production callers never set this. */
   afterInitialScan?: () => Promise<void> | void;
+  /** RCB-217: milliseconds between the re-checks that catch what no file event reports — a seat
+   * holder's process ending, a commit landing. Default `DEFAULT_LIVENESS_POLL_MS` (30 s); only a
+   * test sets it. Nothing is read while no client is connected. */
+  livenessPollMs?: number;
   /** RCB-154 slice 2a: this root's PRIMARY-only source of workspace member gate facts (`http.ts`,
    * built over `keyedRoots.slice(1)`). Absent means "not a multi-root workspace serve" — the
    * snapshot then carries no `gateMembers` key at all, byte-identical to before this card. */
@@ -801,11 +842,29 @@ export async function openRepoContext(key: string, opts: RepoContextOptions): Pr
     return { stamp: doc.stamp, actor: doc.actor, sections: doc.sections, ownerQueue, text };
   };
 
-  // P8.3: today's log, by the server's own clock — the WS snapshot's `log` half.
-  const todayLogPayload = async () => {
-    const log = await store.log();
+  // P8.3: the WS snapshot's `log` half. RCB-217: today's log by the server's own clock when it has
+  // an entry, else the newest earlier day within 14 days that has one (`store.newestLog`), else
+  // today's empty payload — so the morning's first connection shows yesterday, not "no entries".
+  // `GET /api/log` is unchanged: it answers for the day it is asked about.
+  const snapshotLogPayload = async () => {
+    const log = await store.newestLog(NEWEST_LOG_DAYS);
     return log ?? { date: toIso(store.clock).slice(0, 10), text: '', blocks: [] };
   };
+
+  // RCB-217: the `seats` half of the WS snapshot and of `{type:'seats'}` — core's `seatRowPayloads`
+  // over STATE.md's SEATS section and `store.seatHolders()` (the rows and the holder join `seat list`
+  // prints). A `seats.yml` that cannot be read is `holders: []` — rows with null holder fields, never
+  // an error on the wire.
+  const seatsPayload = async (): Promise<SeatRowPayload[]> => {
+    const held = await store
+      .seatHolders()
+      .catch(() => ({ holders: [], error: 'seat holders unreadable' }));
+    return seatRowPayloads(store.state()?.sections.seats ?? '', held.holders);
+  };
+
+  // RCB-217: the `landings` half — from git, by the store's own clock (`store.clock`, like the log's).
+  const landingsPayload = (info?: RepoGitInfo): Promise<LandingsPayload> =>
+    repoLandings(root, store.config.prefix, store.clock, info);
 
   // RCB-154 slice 2a: `undefined` when there is no `gateMembers` source at all — the ONLY signal
   // that decides whether the key is present on the wire (never an empty array standing in for
@@ -823,6 +882,45 @@ export async function openRepoContext(key: string, opts: RepoContextOptions): Pr
     for (const client of wss.clients) {
       if (client.readyState === client.OPEN) client.send(text);
     }
+  }
+
+  // ---- RCB-217: seat rows and landings, re-sent --------------------------------------------
+  // Both are derived from more than one source (STATE.md + `seats.yml` + a probe of each holder's
+  // process; git), so none of the store's file events says "these changed". `lastSeatsJson` is the
+  // last `seats` message SENT (never what a snapshot carried: a client that connected earlier did
+  // not get that one), so a re-check broadcasts only when the rows differ from what clients hold.
+  // Sends are chained: two overlapping re-checks can never deliver their results out of order.
+  let lastSeatsJson: string | null = null;
+  let seatsChain: Promise<void> = Promise.resolve();
+  function sendSeats(onlyIfChanged: boolean): Promise<void> {
+    seatsChain = seatsChain
+      .then(async () => {
+        const seats = await seatsPayload();
+        const json = JSON.stringify(seats);
+        if (onlyIfChanged && json === lastSeatsJson) return;
+        lastSeatsJson = json;
+        broadcast({ type: 'seats', seats });
+      })
+      .catch(() => undefined);
+    return seatsChain;
+  }
+
+  // `landings` is re-sent when HEAD (or the UTC day, which moves the 14-day window) is not what the
+  // last `landings` message was built from. `lastLandingsKey` is `null` until the first send.
+  let lastLandingsKey: string | null = null;
+  let landingsChain: Promise<void> = Promise.resolve();
+  function sendLandings(): Promise<void> {
+    landingsChain = landingsChain
+      .then(async () => {
+        const info = await repoGitInfo(root);
+        const key = `${info.head ?? ''}|${toIso(store.clock).slice(0, 10)}`;
+        if (key === lastLandingsKey) return;
+        const landings = await landingsPayload(info);
+        lastLandingsKey = key;
+        broadcast({ type: 'landings', landings });
+      })
+      .catch(() => undefined);
+    return landingsChain;
   }
 
   // ---- repo scan + debounced rescan ---------------------------------------------------
@@ -940,13 +1038,22 @@ export async function openRepoContext(key: string, opts: RepoContextOptions): Pr
   // ---- store → clients ----------------------------------------------------------------
   const onCard = (card: Card) => broadcast({ type: 'card', card });
   const onRemoved = (id: string) => broadcast({ type: 'card:removed', id });
-  const onEvent = (event: unknown) => broadcast({ type: 'event', event });
+  const onEvent = (event: unknown) => {
+    broadcast({ type: 'event', event });
+    // A seat write appends its `seat` event LAST, after STATE.md and `seats.yml` (`store.
+    // appendSeatEvents`): by now both files are on disk, so a re-check here sees the holder that
+    // STATE.md's own change (which can arrive first) did not.
+    if ((event as { type?: unknown } | null)?.type === 'seat') void sendSeats(true);
+  };
   const onConfig = () =>
     broadcast({ type: 'config', config: { ...store.config, fun }, siblings: mergedSiblings() });
   const onInvalid = (invalid: unknown) => broadcast({ type: 'invalid', invalid });
   const onLeases = () => broadcast({ type: 'leases', leases: leasesPayload() });
   const onSystems = () => broadcast({ type: 'systems', ...systemsPayload() });
-  const onState = () => broadcast({ type: 'state', state: statePayload() });
+  const onState = () => {
+    broadcast({ type: 'state', state: statePayload() });
+    void sendSeats(false);
+  };
   const onLog = (payload: { date: string; text: string }) =>
     broadcast({ type: 'log', date: payload.date, text: payload.text });
   store.on('card', onCard);
@@ -975,6 +1082,16 @@ export async function openRepoContext(key: string, opts: RepoContextOptions): Pr
       });
     }, 100);
   });
+
+  // RCB-217: what no file event reports — a holder's process ending, a commit — is caught by one
+  // poll. Nothing is read while nobody is connected (a client that connects later gets a fresh
+  // snapshot). `unref`: this timer never keeps the process alive.
+  const livenessTimer = setInterval(() => {
+    if (wss.clients.size === 0) return;
+    void sendSeats(true);
+    void sendLandings();
+  }, opts.livenessPollMs ?? DEFAULT_LIVENESS_POLL_MS);
+  livenessTimer.unref();
 
   // ---- clients → store ----------------------------------------------------------------
   async function onClientMessage(ws: WebSocket, raw: unknown): Promise<void> {
@@ -1014,7 +1131,18 @@ export async function openRepoContext(key: string, opts: RepoContextOptions): Pr
   }
 
   wss.on('connection', (ws) => {
-    void Promise.all([todayLogPayload(), gateMembersPayload()]).then(([log, gateMembers]) => {
+    // RCB-217: this client's snapshot is read now and sent a moment from now; a `seats`/`landings`
+    // broadcast in between would reach it BEFORE the snapshot and be overwritten by it. Forgetting
+    // what was last sent makes the next poll re-send both to everyone — the same rows, harmlessly —
+    // so a client can be stale for one poll at most, never until the next change.
+    lastSeatsJson = null;
+    lastLandingsKey = null;
+    void Promise.all([
+      snapshotLogPayload(),
+      gateMembersPayload(),
+      seatsPayload(),
+      landingsPayload(),
+    ]).then(([log, gateMembers, seats, landings]) => {
       if (ws.readyState !== ws.OPEN) return;
       ws.send(
         JSON.stringify({
@@ -1025,6 +1153,8 @@ export async function openRepoContext(key: string, opts: RepoContextOptions): Pr
           systems: systemsPayload(),
           state: statePayload(),
           log,
+          seats,
+          landings,
           ...(gateMembers !== undefined ? { gateMembers } : {}),
         }),
       );
@@ -1435,6 +1565,7 @@ export async function openRepoContext(key: string, opts: RepoContextOptions): Pr
       closed = true;
       if (timer) clearTimeout(timer);
       if (gateMembersTimer) clearTimeout(gateMembersTimer);
+      clearInterval(livenessTimer);
       unsubscribeGateMembers?.();
       store.off('card', onCard);
       store.off('card:removed', onRemoved);

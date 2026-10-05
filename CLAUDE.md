@@ -15,6 +15,8 @@ builder seat · 1D3F`) names your pane: stand up with `seat <name> --up "…" --
 first: `--up` takes the next word as its text), which refuses a wrong pane. Then that card; `docs/BRIEF-TEMPLATE.md` is the
 brief pattern (landed briefs: `.repoboard/local/briefs/`); plan §11 only if the card points at a decision. A builder reads the plan or
 HANDOFF §1 only when a card sends it there. Rig facts (lock, ports, seat names): `.repoboard/local/RIG.md` — the local layer (RCB-83): gitignored, its own git repo, also holding STATE.md, log/, briefs and HANDOFF; `seat <name>` prints RIG.md.
+- Where work lands: commit to `dev`; `main` (public) changes only by a PR from
+  `scripts/publish.sh` (RCB-222), dry run by default. The procedure: RIG.md §Branches.
 - Unfinished work: `README.md` §"Known issues", a numbered list `K1` upward. A commit that closes
   one says `Closes K<n>` and edits that list in the same commit.
 

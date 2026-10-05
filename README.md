@@ -39,14 +39,14 @@ path; the agents bring the intelligence, and the board only shows it.
 
 Three surfaces write the same files through the same core code. Use them in this order — the
 ranking is by tokens; per-operation costs measured 2026-09-03 on the built binary, standing costs
-and list sizes re-measured 2026-09-07 on 31 cards, the AGENTS.md size re-measured 2026-10-01,
+and list sizes re-measured 2026-09-07 on 31 cards, the AGENTS.md size re-measured 2026-10-05,
 the MCP schema size re-measured 2026-09-30 (bytes on the wire, ≈4 bytes per token; plan §11 O3):
 
 | Surface | Standing cost | Per move | Per list |
 |---|---|---|---|
-| **CLI** — `repoboard card move RB-12 doing --as claude/dev` | [`docs/AGENTS.md`](docs/AGENTS.md) read once: 26.2 KB (measured 2026-10-01) | ~40 B in, 33 B out | table 2,529 B; `--json` 7,639 B; `--json --full` 20,758 B |
-| **MCP** — `claude mcp add repoboard -- npx repoboard mcp` | tool schema 27.9 KB (30 tools, measured 2026-09-30) per turn where the harness loads it | ~80 B call, ~200 B result | 7,638 B — the same formatter, to the byte |
-| **File edit** — `sed -i.bak 's/^status: todo$/status: doing/' .repoboard/cards/RB-12.md` (`-i.bak` runs on GNU and macOS `sed`; delete the `.bak`) | same AGENTS.md | 70 B of command (counted 2026-09-30), but a correct move also bumps `updated` and appends a `## Log` line | n/a |
+| **CLI** — `repoboard card move RB-12 doing --as claude/dev` | [`docs/AGENTS.md`](docs/AGENTS.md) read once: 26.3 KB (measured 2026-10-05) | ~40 B in, 33 B out | table 2,529 B; `--json` 7,639 B; `--json --full` 20,758 B |
+| **MCP** — `claude mcp add repoboard -- npx repoboard mcp` | tool schema 27.9 KB (30 tools, measured 2026-09-30) per turn where the harness loads it | ~80 B call, ~200 B result | 7,638 B; 20,757 B with `full: true` — the CLI's formatter, less the 1 B trailing newline the CLI prints |
+| **File edit** — `sed -i.bak 's/^status: todo$/status: doing/' .repoboard/cards/RB-12.md` (`-i.bak` runs on GNU and macOS `sed`; delete the `.bak`) | same AGENTS.md | 70 B of command (counted 2026-10-05), but a correct move also bumps `updated` and appends a `## Log` line | n/a |
 
 The systems model adds a 66 B `seat` line and `.repoboard/systems.yml` (2,558 B here) to the cold
 read; `repoboard systems` is 517 B (all three measured 2026-10-01 on this repo's board); `systems

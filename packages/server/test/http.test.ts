@@ -9,8 +9,10 @@ import {
   dailyLogHeader,
   defaultBoardConfig,
   formatLogBlock,
+  initialStateText,
   serializeBoard,
   serializeLeases,
+  setStateSection,
 } from '@repoboard/core';
 import { afterEach, describe, expect, it } from 'vitest';
 import { WebSocket } from 'ws';
@@ -2336,6 +2338,7 @@ describe('seats, landings and the newest log day on the wire (RCB-217)', () => {
   /** What `seatRowPayloads` makes of the bullet `setSeatBullet` writes at the fixed `NOW`. */
   const BUILDER_ROW = {
     name: 'builder',
+    home: null,
     status: 'UP',
     at: '2026-09-02T22:41:00Z',
     tag: null,
@@ -2483,6 +2486,116 @@ describe('seats, landings and the newest log day on the wire (RCB-217)', () => {
     // ...and then nothing, however many polls pass (8 at 50 ms) while the rows stay as they are.
     await drain(ws, 'seats');
     await expect(ws.next((m) => m.type === 'seats', 400, true)).rejects.toThrow('timed out');
+  });
+
+  // ---- RCB-184 slice 2: a member's `seats` carry its home board's rows --------------------------
+  //
+  // CONTROLS (run by the seat, not part of the suite), applied to `repo-context.ts` `seatsPayload`:
+  //  - return `seatRowPayloads(own, held.holders)` unconditionally: (H1) and (H4) fail (no home row),
+  //    (H2)/(H3) still pass.
+  //  - drop the `.catch(() => null)` on `readHome()` AND make `readHome` throw: (H3) fails (a throw).
+  //  - cache the first `readHome()` result for the process: (H4) times out (the edit never arrives).
+  //  - swap the spread order (home rows first): (H1) fails on its name order.
+  const HOME_SEATS = (owes: string) =>
+    [
+      '- **[acme] coordinator: UP 2026-10-05 11:00Z · A7B2 · acme coordinator.** coordinating',
+      '  in-flight: none',
+      `  owes: ${owes}`,
+      '- **ops: DOWN 2026-10-05 10:00Z.** done',
+    ].join('\n');
+  const MEMBER_SEATS = [
+    '- **[demo] builder: UP 2026-09-02 22:00Z.** building',
+    '  in-flight: none',
+    '  owes: nothing',
+    '- **[acme] coordinator: DOWN 2026-10-04 09:00Z.** stale copy',
+  ].join('\n');
+
+  async function writeSeats(root: string, seats: string): Promise<void> {
+    const opts = { now: NOW, actor: 'test-actor' };
+    const made = setStateSection(initialStateText(opts), 'seats', seats, opts);
+    if (!made.ok) throw new Error(made.error);
+    await writeFile(join(root, '.repoboard', 'STATE.md'), made.text, 'utf8');
+  }
+
+  /** The home `acme` (its own board.yml name and a SEATS section), then a member rig pointing at it. */
+  async function homeRig(
+    homeOwes: string,
+    workspace: 'home' | 'missing' | null,
+  ): Promise<WireRig & { home: string }> {
+    const home = await makeTempRepoboard();
+    cleanups.push(home.cleanup);
+    await writeFile(
+      join(home.root, '.repoboard', 'board.yml'),
+      serializeBoard({ ...defaultBoardConfig(), name: 'acme' }),
+    );
+    await writeSeats(home.root, HOME_SEATS(homeOwes));
+    const r = await wireRig(async (root) => {
+      const base = { ...defaultBoardConfig(), name: 'demo' };
+      const cfg =
+        workspace === null
+          ? base
+          : { ...base, workspace: workspace === 'home' ? home.root : join(home.root, 'not-there') };
+      await writeFile(join(root, '.repoboard', 'board.yml'), serializeBoard(cfg));
+      await writeSeats(root, MEMBER_SEATS);
+    });
+    return { ...r, home: home.root };
+  }
+
+  it("(H1) with `workspace:` set, the snapshot seats are this board's own rows then the home's, the copy hidden", async () => {
+    const r = await homeRig('RCB-9', 'home');
+    const snap = await nextMessage<Snap>(await open(r), isSnapshot);
+    expect(snap.seats.map((x) => [x.name, x.home])).toEqual([
+      ['builder', null],
+      ['[acme] coordinator', 'acme'],
+      ['[acme] ops', 'acme'],
+    ]);
+    expect(snap.seats[1]).toMatchObject({
+      status: 'UP',
+      tag: null,
+      owes: 'RCB-9',
+      inFlight: 'none',
+    });
+  });
+
+  it('(H2) `workspace:` absent: the same rows as today, each with home: null', async () => {
+    const r = await homeRig('RCB-9', null);
+    const snap = await nextMessage<Snap>(await open(r), isSnapshot);
+    expect(snap.seats.map((x) => [x.name, x.home])).toEqual([
+      ['builder', null],
+      ['coordinator', null],
+    ]);
+  });
+
+  it("(H3) a home that cannot be read gives this board's own rows only, and no error", async () => {
+    const r = await homeRig('RCB-9', 'missing');
+    const snap = await nextMessage<Snap>(await open(r), isSnapshot);
+    expect(snap.type).toBe('snapshot');
+    expect(snap.seats.map((x) => [x.name, x.home])).toEqual([
+      ['builder', null],
+      ['coordinator', null],
+    ]);
+  });
+
+  it('(H4) a home STATE.md edit reaches a connected client on the next poll', async () => {
+    const r = await homeRig('RCB-9', 'home');
+    const ws = await open(r);
+    const snap = await nextMessage<Snap>(ws, isSnapshot);
+    expect(snap.seats[1]?.owes).toBe('RCB-9');
+    // The home is not watched by this board's store: only the poll can see this change.
+    await writeSeats(r.home, HOME_SEATS('RCB-10'));
+    const changed = await nextMessage<{ type: string; seats: Record<string, unknown>[] }>(
+      ws,
+      (m) =>
+        m.type === 'seats' &&
+        (m.seats as { home?: string | null; owes?: string | null }[]).some(
+          (x) => x.home === 'acme' && x.owes === 'RCB-10',
+        ),
+    );
+    expect(changed.seats.map((x) => x.name)).toEqual([
+      'builder',
+      '[acme] coordinator',
+      '[acme] ops',
+    ]);
   });
 
   /** A git repo at the board root, origin on GitHub, one commit per subject (oldest first). */

@@ -170,6 +170,10 @@ export type HomeRead =
       configured: string;
       name: string;
       rows: SeatListRow[];
+      /** RCB-184 slice 2: the home's STATE.md SEATS text and its holders, as read — what the web
+       * payload (`homeSeatRowPayloads`) is built from, so `owes` comes off the bullet. */
+      seatsText: string;
+      holders: SeatHolderInfo[];
       holderError: string | null;
       listsMember: boolean;
     }
@@ -2319,6 +2323,8 @@ export class CardStore extends EventEmitter<StoreEvents> {
         configured,
         name,
         rows: homeSeatRows(state.sections.seats, held.holders, name),
+        seatsText: state.sections.seats,
+        holders: held.holders,
         holderError: held.error,
         listsMember: listed.some(Boolean),
       };

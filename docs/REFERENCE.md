@@ -404,10 +404,13 @@ own message:
 
 - `seats` — `SeatRowPayload[]`, one per stamped SEATS bullet, the rows and holder join `seat list`
   prints (core's `seatRowPayloads`, built on `seatListRows`, `parseSeatFields` and `parseSeatStamp`
-  — one parser): `{name, status: "UP"|"DOWN", at, tag, label, live: "alive"|"dead"|"unknown"|null,
-  inFlight, owes}`. `at` is the stamp as ISO, `null` when it does not parse; `tag`/`label`/`live`
-  are `null` when nobody holds the seat (or `seats.yml` cannot be read — rows with null holder
-  fields, never an error); `inFlight`/`owes` are `null` when the bullet has no such line.
+  — one parser): `{name, home, status: "UP"|"DOWN", at, tag, label,
+  live: "alive"|"dead"|"unknown"|null, inFlight, owes}`. `home` (RCB-184) is the home board's
+  display name on a row read from the home (`workspace:`; `name` is then `[<home>] <seat>`, listed
+  after this board's own rows, which omit the home's copies; the home is re-read on every send),
+  `null` on this board's own rows. `at` is the stamp as ISO, `null` when it does not parse;
+  `tag`/`label`/`live` are `null` when nobody holds the seat (or `seats.yml` cannot be read — rows
+  with null holder fields, never an error); `inFlight`/`owes` are `null` when the bullet has no such line.
   `{type:"seats", seats}` follows every STATE.md change and every `seat` event, and a 30 s poll
   sends it again ONLY when the JSON differs from the last one sent — a holder's process ending
   leaves no file event. Nothing is polled while no client is connected; a new connection makes the

@@ -13,6 +13,7 @@ import {
   lastEventText,
   SEAT_SYMBOL,
   type SeatKind,
+  seatKey,
   seatKind,
   whenLabel,
 } from './status-model.js';
@@ -85,12 +86,12 @@ export function StatusLine({
         return (
           <button
             type="button"
-            key={row.name}
+            key={seatKey(row)}
             className={`pill pill--${kind}`}
-            data-testid={`seat-pill-${row.name}`}
+            data-testid={`seat-pill-${seatKey(row)}`}
             data-kind={kind}
             title={seatTitle(row, kind, now)}
-            onClick={() => onSeat(row.name)}
+            onClick={() => onSeat(seatKey(row))}
           >
             <span className="sym" role="img" aria-label={KIND_LABEL[kind]}>
               {SEAT_SYMBOL[kind]}

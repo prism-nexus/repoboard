@@ -16,6 +16,16 @@ All notable changes to this project are documented in this file. The format is b
   refuses a dry run of a published version). The route needs the owner to register the workflow as
   the package's trusted publisher on npmjs.com first; the workflow's header comment lists the steps.
 
+### Fixed
+
+- **Text that starts with "- " is text, not an option (RCB-220).** `log --as s "- a bullet"`,
+  `card add "- x"`, `card note <id> "- x"` and an option value such as `--title "- x"` used to
+  exit 1 with `Unknown option '- '` or `argument is ambiguous`, and wrote nothing. The one shared
+  argument parser now reads an argument that starts with a dash and then whitespace as text, so a
+  Markdown bullet works in each of the 12 commands that take free text. Every other argument parses
+  as before: `-5 degrees` or `--title -x` still exit 1, and still need `--` before the text or the
+  `--title=-x` form.
+
 ## [0.3.1] — 2026-10-01
 
 ### Added

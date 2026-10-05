@@ -21,6 +21,7 @@ import {
   formatStepsTable,
   formatTable,
   run,
+  shieldDashText,
 } from '../src/cli.js';
 import { cardText, makeTempDir, makeTempRepoboard, makeTempRepoNoBoard, NOW } from './helpers.js';
 
@@ -4652,5 +4653,119 @@ describe('seat: dist staleness (RCB-60)', () => {
     const res = await repoboardWithSelfRoot(root, selfRoot, 'seat', 'builder');
     expect(res.code).toBe(0);
     expect(res.err).toBe('');
+  });
+});
+
+// ---- dash text (RCB-220): free text that starts with "- " is text, not an option -------------
+describe('dash text (RCB-220)', () => {
+  const opts: Parameters<typeof shieldDashText>[1] = {
+    title: { type: 'string', short: 't' },
+    label: { type: 'string', multiple: true },
+    json: { type: 'boolean', default: false },
+  };
+  /** The placeholder `shieldDashText` swaps in for the n-th dash text (argv cannot hold a NUL). */
+  const sentinel = (n: number) => `\u0000${n}`;
+
+  describe('shieldDashText', () => {
+    it('a dash text between two positionals becomes a sentinel, and restore puts it back in order', () => {
+      const shield = shieldDashText(['a', '- b', 'c', '- d'], opts);
+      expect(shield.args).toEqual(['a', sentinel(0), 'c', sentinel(1)]);
+      expect(shield.restore(['a', sentinel(0), 'c', sentinel(1)])).toEqual([
+        'a',
+        '- b',
+        'c',
+        '- d',
+      ]);
+      // A positional that is not a sentinel passes through restore untouched.
+      expect(shield.restore(['plain'])).toEqual(['plain']);
+    });
+
+    it('--title "- x" becomes the one token --title=- x', () => {
+      const shield = shieldDashText(['--title', '- x'], opts);
+      expect(shield.args).toEqual(['--title=- x']);
+      expect(shield.restore([])).toEqual([]);
+    });
+
+    it('a short alias becomes the long --name= form, also for a repeatable option', () => {
+      expect(shieldDashText(['-t', '- x'], opts).args).toEqual(['--title=- x']);
+      expect(shieldDashText(['--label', '- x', '--label', '- y'], opts).args).toEqual([
+        '--label=- x',
+        '--label=- y',
+      ]);
+    });
+
+    it('a boolean flag followed by a dash text leaves the text a positional', () => {
+      const shield = shieldDashText(['--json', '- x'], opts);
+      expect(shield.args).toEqual(['--json', sentinel(0)]);
+      expect(shield.restore([sentinel(0)])).toEqual(['- x']);
+    });
+
+    it('the first -- ends the rewriting: it and everything after it are copied as they are', () => {
+      expect(shieldDashText(['--', '- x', '--title', '- y'], opts).args).toEqual([
+        '--',
+        '- x',
+        '--title',
+        '- y',
+      ]);
+      expect(shieldDashText(['- a', '--', '- b'], opts).args).toEqual([sentinel(0), '--', '- b']);
+    });
+
+    it('anything that is not a dash text is unchanged: --x=- y, --bogus, -5 degrees, --title --json', () => {
+      for (const argv of [
+        ['--title=- y'],
+        ['--bogus'],
+        ['-5 degrees'],
+        ['--title', '--json'],
+        ['-t'],
+      ]) {
+        expect(shieldDashText(argv, opts).args).toEqual(argv);
+      }
+    });
+  });
+
+  describe('through the CLI', () => {
+    it('card add "- dash title" creates the card with that title', async () => {
+      const root = await freshRepo({});
+      const res = await repoboard(root, 'card', 'add', '- dash title');
+      expect(res.code).toBe(0);
+      expect(res.out).toBe('created RB-1 (backlog) - dash title\n');
+      const shown = await repoboard(root, 'card', 'show', 'RB-1', '--json');
+      expect((JSON.parse(shown.out) as { title: string }).title).toBe('- dash title');
+    });
+
+    it('card update <id> --title "- t" sets the title', async () => {
+      const root = await freshRepo({ 'RB-1.md': cardText('RB-1', 'todo') });
+      const res = await repoboard(root, 'card', 'update', 'RB-1', '--title', '- t');
+      expect(res.code).toBe(0);
+      expect(res.out).toBe('updated RB-1 title\n');
+      const shown = await repoboard(root, 'card', 'show', 'RB-1', '--json');
+      expect((JSON.parse(shown.out) as { title: string }).title).toBe('- t');
+    });
+
+    it('card note <id> "- n" lands under ## Notes', async () => {
+      const root = await freshRepo({ 'RB-1.md': cardText('RB-1', 'todo') });
+      const res = await repoboard(root, 'card', 'note', 'RB-1', '- n');
+      expect(res.code).toBe(0);
+      expect(res.out).toBe('noted RB-1\n');
+      const file = await readFile(join(root, '.repoboard', 'cards', 'RB-1.md'), 'utf8');
+      expect(file).toContain('## Notes\n- 2026-09-02T22:41:10Z test-actor — - n');
+    });
+
+    it('log --as ops "- a bullet" appends the block, and log show prints the bullet', async () => {
+      const root = await freshRepo({});
+      const res = await repoboard(root, 'log', '--as', 'ops', '- a bullet');
+      expect(res.code).toBe(0);
+      expect(res.out).toBe(`logged 2026-09-02 [${repoTagFor(root)}] ops\n`);
+      const shown = await repoboard(root, 'log', 'show');
+      expect(shown.out).toContain('- a bullet');
+    });
+
+    it('card add "-5 degrees" still exits 1 with the unknown-option error and writes nothing', async () => {
+      const root = await freshRepo({});
+      const res = await repoboard(root, 'card', 'add', '-5 degrees');
+      expect(res.code).toBe(1);
+      expect(res.err).toContain("Unknown option '-5'");
+      expect(await readdir(join(root, '.repoboard', 'cards'))).toEqual([]);
+    });
   });
 });

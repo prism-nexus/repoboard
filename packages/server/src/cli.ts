@@ -553,9 +553,69 @@ const SIZES: ReadonlySet<string> = new Set(['S', 'M', 'L', 'XL']);
 
 type Options = NonNullable<ParseArgsConfig['options']>;
 
+/** RCB-220: a dash, then whitespace — no option token can look like this, so it can only be text. */
+const DASH_TEXT = /^-\s/;
+
+/**
+ * RCB-220: `parseArgs` (strict) reads every argument that starts with `-` as an option, so a
+ * Markdown body that opens with a bullet — `log --as s "- a bullet"`, `card add "- x"`,
+ * `--title "- x"` — was refused ("Unknown option '- '", "argument is ambiguous") and nothing was
+ * written. Said here, once, for every `parse()` site: a "dash text" (`DASH_TEXT`) is rewritten so
+ * `parseArgs` never sees it as an option. Walking left to right, up to the first `--`:
+ *  - a `type: 'string'` option (its long name, or its declared `short` alias) followed by a dash
+ *    text becomes the one token `--name=<text>` (long name even for the alias), text skipped;
+ *  - any other dash text becomes a sentinel `\u0000<n>` (argv cannot hold a NUL), and `restore`
+ *    maps the sentinels in the parsed positionals back to their text, order kept.
+ * Every other argument is left as it is, so `--bogus`, `-5 degrees` and `--up --pane` refuse
+ * exactly as before.
+ */
+export function shieldDashText(
+  args: readonly string[],
+  options: Options,
+): { args: string[]; restore: (positionals: string[]) => string[] } {
+  /** The long name `arg` stands for when it is a bare `--name` or a short alias of a string option. */
+  const stringOption = (arg: string): string | undefined => {
+    if (arg.startsWith('--')) {
+      const name = arg.slice(2);
+      return !name.includes('=') && options[name]?.type === 'string' ? name : undefined;
+    }
+    if (arg.length !== 2 || !arg.startsWith('-')) return undefined;
+    return Object.entries(options).find(([, o]) => o.type === 'string' && o.short === arg[1])?.[0];
+  };
+  const out: string[] = [];
+  const texts = new Map<string, string>();
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i] as string;
+    if (arg === '--') {
+      out.push(...args.slice(i));
+      break;
+    }
+    const next = args[i + 1];
+    const name = stringOption(arg);
+    if (name !== undefined && next !== undefined && DASH_TEXT.test(next)) {
+      out.push(`--${name}=${next}`);
+      i++;
+    } else if (DASH_TEXT.test(arg)) {
+      const sentinel = `\u0000${texts.size}`;
+      texts.set(sentinel, arg);
+      out.push(sentinel);
+    } else {
+      out.push(arg);
+    }
+  }
+  return { args: out, restore: (positionals) => positionals.map((p) => texts.get(p) ?? p) };
+}
+
 function parse<T extends Options>(cmd: string, args: string[], options: T) {
+  const shield = shieldDashText(args, options);
   try {
-    return parseArgs({ args, options, allowPositionals: true, strict: true });
+    const parsed = parseArgs({
+      args: shield.args,
+      options,
+      allowPositionals: true,
+      strict: true,
+    });
+    return { ...parsed, positionals: shield.restore(parsed.positionals) };
   } catch (e) {
     throw new ParseError(`repoboard ${cmd}: ${firstSentence((e as Error).message)}`);
   }

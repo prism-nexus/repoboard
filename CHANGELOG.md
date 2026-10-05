@@ -7,7 +7,7 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Added
 
-- **A member board reads its home board's seats, read-only (RCB-184, slice 1).** A new optional
+- **A member board reads its home board's seats, read-only (RCB-184).** A new optional
   `board.yml` key, `workspace: <home root>`, names the board a shared seat lives on (a workspace's
   coordinator). `seat list` then shows the home's own seats after this board's, named
   `[<home>] <seat>` and read live from the home's STATE.md and `seats.yml`; nothing is written there.
@@ -15,7 +15,10 @@ All notable changes to this project are documented in this file. The format is b
   leaves it out and `check` warns `seat-copy`. `check` also warns `seat-home-unreadable` and
   `seat-home-not-member` (the home's `repos:` does not list this repo), and `stale-state` no longer
   goes red over a block the home's seat wrote in this board's log. Without the key nothing changes.
-  The Board's Seats panel does not show home seats yet (slice 2).
+  The Board's Seats panel and status line show the home's seats too, after this board's own and
+  marked "home · read-only", with no working-on cards, seat events or takeover hint (those live on
+  the home board); the home is re-read on every seats send, so a change there arrives within the
+  30 s poll. Each seat on the wire carries `home`: the home's name, or `null` for an own seat.
 - **Seat rows, landings and seat events on the wire (RCB-217).** The WebSocket snapshot gains
   `seats` (each seat's status, stamp, holder pane, holder liveness, in-flight and owes, from the
   same parser `seat list` uses) and `landings` (commits whose subject starts with a card id, read

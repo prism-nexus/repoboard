@@ -16,6 +16,7 @@ import {
   lastSeatEvents,
   SEAT_SYMBOL,
   type SeatKind,
+  seatKey,
   seatKind,
   whenLabel,
 } from './status-model.js';
@@ -65,8 +66,12 @@ function SeatBlock({
   register: (name: string, el: HTMLElement | null) => void;
 }) {
   const kind = seatKind(row);
-  const working = row.status === 'UP' ? cardsOfSeat(doing, row) : [];
-  const seen = lastSeatEvents(events, row.name);
+  // RCB-184: a home row is read-only here — its working-on cards, seat events and takeover live
+  // on the home board, so none of the three is drawn (and none is looked up by a colliding name).
+  const isHome = row.home !== null;
+  const key = seatKey(row);
+  const working = row.status === 'UP' && !isHome ? cardsOfSeat(doing, row) : [];
+  const seen = isHome ? [] : lastSeatEvents(events, row.name);
   const word = row.status === 'UP' ? 'up' : 'down';
   const since = row.at
     ? `${word} since ${whenLabel(row.at, now)} (${relTime(row.at, now)})`
@@ -74,9 +79,10 @@ function SeatBlock({
   return (
     <div
       className={`seat seat--${kind}${flash ? ' seat--flash' : ''}`}
-      data-testid={`seat-block-${row.name}`}
+      data-testid={`seat-block-${key}`}
       data-kind={kind}
-      ref={(el) => register(row.name, el)}
+      data-home={isHome ? 'true' : undefined}
+      ref={(el) => register(key, el)}
     >
       <span className="sym" role="img" aria-label={KIND_LABEL[kind]}>
         {SEAT_SYMBOL[kind]}
@@ -86,9 +92,14 @@ function SeatBlock({
           <span className="seat__name">{row.name}</span>
           {row.tag ? <span className="mono muted">{row.tag}</span> : null}
           <span className="muted">{since}</span>
+          {isHome ? (
+            <span className="muted" data-testid={`seat-home-${key}`}>
+              home · read-only
+            </span>
+          ) : null}
         </div>
-        {kind === 'dead' ? (
-          <div className="seat__warn" data-testid={`seat-takeover-${row.name}`}>
+        {kind === 'dead' && !isHome ? (
+          <div className="seat__warn" data-testid={`seat-takeover-${key}`}>
             Says UP, but its terminal process is gone. Take it over with{' '}
             <span className="mono">seat {row.name} --up</span>.
           </div>
@@ -101,10 +112,10 @@ function SeatBlock({
           </div>
         ) : null}
         <dl className="seat__kv">
-          {row.status === 'UP' ? (
+          {row.status === 'UP' && !isHome ? (
             <>
               <dt>working on</dt>
-              <dd data-testid={`seat-working-${row.name}`}>
+              <dd data-testid={`seat-working-${key}`}>
                 {working.length === 0 ? (
                   <span className="muted">no Doing card is assigned to it</span>
                 ) : (
@@ -127,7 +138,7 @@ function SeatBlock({
           </dd>
         </dl>
         {seen.length > 0 ? (
-          <div className="seat__events" data-testid={`seat-events-${row.name}`}>
+          <div className="seat__events" data-testid={`seat-events-${key}`}>
             {seen.map((e) => `${tickerVerb(e)} ${whenLabel(e.ts, now)}`).join(' · ')}
           </div>
         ) : null}
@@ -184,12 +195,12 @@ export function SeatsPanel({ seats, doing, unclaimed, events, now, stateMissing,
       ) : null}
       {seats.map((row) => (
         <SeatBlock
-          key={row.name}
+          key={seatKey(row)}
           row={row}
           doing={doing}
           events={events}
           now={now}
-          flash={flashName === row.name}
+          flash={flashName === seatKey(row)}
           register={register}
         />
       ))}

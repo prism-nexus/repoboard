@@ -57,6 +57,9 @@ export interface LogPayload {
  */
 export interface SeatRowPayload {
   name: string;
+  /** RCB-184: the home board's display name on a row read from the home (`name` is then
+   * `[<home>] <seat>`), `null` on this board's own rows. */
+  home: string | null;
   status: 'UP' | 'DOWN';
   /** ISO time of the stamp, `null` when it does not parse. */
   at: string | null;

@@ -12,6 +12,7 @@ import {
   describeSeatUpConflict,
   findSeatLine,
   formatSeatBullet,
+  homeSeatRowPayloads,
   homeSeatRows,
   keySeatBullets,
   listSeats,
@@ -31,6 +32,7 @@ import {
   seatListRows,
   seatListRowsWithoutHomeCopies,
   seatRowPayloads,
+  seatRowPayloadsWithoutHomeCopies,
   seatSightings,
   seatUpConflict,
 } from '../src/seat.js';
@@ -2820,6 +2822,7 @@ describe('seatRowPayloads (RCB-217)', () => {
     expect(seatRowPayloads(section, holders)).toEqual([
       {
         name: 'coordinator',
+        home: null,
         status: 'UP',
         at: '2026-09-18T21:00:00Z',
         tag: '1D3F',
@@ -2830,6 +2833,7 @@ describe('seatRowPayloads (RCB-217)', () => {
       },
       {
         name: 'builder',
+        home: null,
         status: 'UP',
         at: '2026-09-18T21:00:00Z',
         tag: 'A7B2',
@@ -2840,6 +2844,7 @@ describe('seatRowPayloads (RCB-217)', () => {
       },
       {
         name: 'ops',
+        home: null,
         status: 'DOWN',
         at: '2026-09-18T21:00:00Z',
         tag: null,
@@ -2850,6 +2855,7 @@ describe('seatRowPayloads (RCB-217)', () => {
       },
       {
         name: 'reviewer',
+        home: null,
         status: 'UP',
         at: null,
         tag: null,
@@ -2882,6 +2888,7 @@ describe('seatRowPayloads (RCB-217)', () => {
     expect(seatRowPayloads(bad)).toEqual([
       {
         name: 'reviewer',
+        home: null,
         status: 'DOWN',
         at: null,
         tag: null,
@@ -2990,5 +2997,79 @@ describe('homeSeatRows / seatListRowsWithoutHomeCopies (RCB-184)', () => {
   it('a home with no seat bullet at all has no rows — an empty array is a readable, empty SEATS', () => {
     expect(homeSeatRows('(none)', [], 'acme')).toEqual([]);
     expect(homeSeatRows('', [], 'acme')).toEqual([]);
+  });
+});
+
+// ---- RCB-184 slice 2: the payload twins ------------------------------------------------------------
+//
+// CONTROLS (run by the seat, not part of the suite), applied to `packages/core/src/seat.ts`:
+//  - `homeSeatRowPayloads`: `entryPayload(entry, homeName, ...)` -> `entryPayload(entry, null, ...)`:
+//    "home rows carry home" fails (and "own rows carry null" still passes — the other direction is
+//    `seatRowPayloadsWithoutHomeCopies` passing `homeName`, which fails the same test).
+//  - `seatRowPayloadsWithoutHomeCopies`: drop the `.filter(...)`: "the home's copy is hidden" fails.
+//  - `seatRowPayloadsWithoutHomeCopies`: filter `entry.board !== null` instead: "a third board's
+//    bullet is kept" fails.
+//  - `entryPayload`: `owes: null`: "owes is parsed off the bullet" fails.
+describe('home payload twins (RCB-184 slice 2)', () => {
+  const bullet = (
+    board: string | null,
+    name: string,
+    status: 'UP' | 'DOWN' = 'UP',
+    owes?: string,
+  ): string =>
+    `- **${board === null ? '' : `[${board}] `}${name}: ${status} 2026-10-05 09:00Z.** working${
+      owes === undefined ? '' : `\n  owes: ${owes}`
+    }`;
+
+  const home = [
+    bullet('acme', 'coordinator', 'UP', 'RCB-9'),
+    bullet(null, 'ops', 'DOWN'),
+    bullet('demo', 'builder'),
+  ].join('\n');
+  const member = [
+    bullet('demo', 'builder'),
+    bullet('acme', 'coordinator', 'DOWN'),
+    bullet('other', 'scout', 'UP', 'a review'),
+  ].join('\n');
+
+  it("the home's copy is hidden: seatRowPayloadsWithoutHomeCopies has no [acme] row", () => {
+    const rows = seatRowPayloadsWithoutHomeCopies(member, [], 'acme');
+    expect(rows.map((r) => r.name)).toEqual(['builder', 'scout']);
+  });
+
+  it("a third board's bullet is kept, and the rows are seatRowPayloads' own with a home of null", () => {
+    const rows = seatRowPayloadsWithoutHomeCopies(member, [], 'acme');
+    const scout = rows.find((r) => r.name === 'scout');
+    expect(scout?.status).toBe('UP');
+    // a home name that matches nothing hides nothing: exactly seatRowPayloads
+    expect(seatRowPayloadsWithoutHomeCopies(member, [], 'nobody')).toEqual(
+      seatRowPayloads(member, []),
+    );
+  });
+
+  it('own rows carry home: null; home rows carry home and are named [<home>] <seat>', () => {
+    expect(seatRowPayloadsWithoutHomeCopies(member, [], 'acme').map((r) => r.home)).toEqual([
+      null,
+      null,
+    ]);
+    const rows = homeSeatRowPayloads(home, [], 'acme');
+    expect(rows.map((r) => [r.name, r.home, r.status])).toEqual([
+      ['[acme] coordinator', 'acme', 'UP'],
+      ['[acme] ops', 'acme', 'DOWN'],
+    ]);
+  });
+
+  it('owes is parsed off the bullet, on a home row and on a kept third-board row', () => {
+    expect(homeSeatRowPayloads(home, [], 'acme').map((r) => r.owes)).toEqual(['RCB-9', null]);
+    expect(
+      seatRowPayloadsWithoutHomeCopies(member, [], 'acme').map((r) => [r.name, r.owes]),
+    ).toEqual([
+      ['builder', null],
+      ['scout', 'a review'],
+    ]);
+  });
+
+  it('a home with no seat bullet has no payload rows', () => {
+    expect(homeSeatRowPayloads('(none)', [], 'acme')).toEqual([]);
   });
 });

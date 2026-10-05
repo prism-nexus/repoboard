@@ -23,6 +23,7 @@ import {
   type CreateCardInput,
   type DecisionOption,
   type GateMemberFacts,
+  homeSeatRowPayloads,
   isOwnerTask,
   type LandingsPayload,
   landingsFromCommits,
@@ -37,6 +38,7 @@ import {
   type Size,
   type StateSectionName,
   seatRowPayloads,
+  seatRowPayloadsWithoutHomeCopies,
   staleLeases,
   toIso,
 } from '@repoboard/core';
@@ -859,7 +861,16 @@ export async function openRepoContext(key: string, opts: RepoContextOptions): Pr
     const held = await store
       .seatHolders()
       .catch(() => ({ holders: [], error: 'seat holders unreadable' }));
-    return seatRowPayloads(store.state()?.sections.seats ?? '', held.holders);
+    const own = store.state()?.sections.seats ?? '';
+    // RCB-184 slice 2: a board with a readable HOME shows its own rows (minus the home's stale
+    // copies) then the home's rows, read again on every call — the liveness poll carries a home
+    // change. A home that cannot be read (or no `workspace:`) is today's rows, never an error.
+    const home = await store.readHome().catch(() => null);
+    if (home === null || !home.ok) return seatRowPayloads(own, held.holders);
+    return [
+      ...seatRowPayloadsWithoutHomeCopies(own, held.holders, home.name),
+      ...homeSeatRowPayloads(home.seatsText, home.holders, home.name),
+    ];
   };
 
   // RCB-217: the `landings` half — from git, by the store's own clock (`store.clock`, like the log's).

@@ -58,6 +58,12 @@ export function seatRowsFor(
   return state?.sections ? seatRowPayloads(state.sections.seats) : [];
 }
 
+/** A seat's identity: home + name, so own `coordinator` and the home's `[acme] coordinator` never
+ * share a React key, a `data-testid` or a focus target. Own rows are keyed by their bare name. */
+export function seatKey(row: SeatRowPayload): string {
+  return row.home === null ? row.name : `home:${row.home}:${row.name}`;
+}
+
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 
 /** `09:58Z` for a time on `now`'s UTC day, `Oct 4 23:39Z` for an earlier one; `''` when `iso` does
@@ -94,6 +100,7 @@ export function assigneeKey(card: Card): string | null {
 
 /** The Doing cards assigned to `seat` (by name, case-insensitive). */
 export function cardsOfSeat(doing: readonly Card[], seat: SeatRowPayload): Card[] {
+  if (seat.home !== null) return []; // a home seat's cards live on the home board
   const key = seatNameKey(seat.name);
   return doing.filter((c) => assigneeKey(c) === key);
 }
@@ -105,7 +112,9 @@ export function cardsOfSeat(doing: readonly Card[], seat: SeatRowPayload): Card[
  */
 export function unclaimedDoing(doing: readonly Card[], seats: readonly SeatRowPayload[]): Card[] {
   if (seats.length === 0) return [];
-  const holders = new Set(seats.filter((s) => s.status === 'UP').map((s) => seatNameKey(s.name)));
+  const own = seats.filter((s) => s.home === null);
+  if (own.length === 0) return [];
+  const holders = new Set(own.filter((s) => s.status === 'UP').map((s) => seatNameKey(s.name)));
   return doing.filter((c) => {
     const key = assigneeKey(c);
     return key === null || !holders.has(key);

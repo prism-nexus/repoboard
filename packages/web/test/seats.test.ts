@@ -7,6 +7,7 @@
  */
 import { act, fireEvent, screen, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { cardsOfSeat } from '../src/components/status-model.js';
 import type { SeatRowPayload } from '../src/wire.js';
 import { card, mockState, renderApp, testStore } from './helpers.jsx';
 import { NOW_ISO, seatEvent, seatRow, sendSnapshot } from './status-fixtures.js';
@@ -331,5 +332,103 @@ describe('a seat pill goes to its block', () => {
       restore();
       vi.unstubAllGlobals();
     }
+  });
+});
+
+// ---- RCB-184 slice 2: the home board's seats, read-only ------------------------------------------
+//
+// CONTROLS (run by the seat, not part of the suite):
+//  - SeatsPanel.tsx `SeatBlock`: drop `&& !isHome` on `working` — "no working-on" fails (the Doing
+//    card assigned to `coordinator` shows under the home's row).
+//  - status-model.ts `cardsOfSeat`: delete the `seat.home !== null` guard — only the direct
+//    `cardsOfSeat` test fails (measured: no rendering test sees it, the panel hides working-on).
+//  - SeatsPanel.tsx / StatusLine.tsx: key by `row.name` instead of `seatKey(row)` — harmless while
+//    the two names differ, so the collision test also pins `seatKey` itself: make `seatKey` return
+//    `row.name` for a home row and "both render" fails on the testids.
+//  - SeatsPanel.tsx: drop the `home · read-only` span — "shows the marker" fails.
+//  - status-model.ts `unclaimedDoing`: use `seats` instead of `own` — the home's UP `coordinator`
+//    then claims RB-1 and the unclaimed test fails.
+describe('home rows (RCB-184)', () => {
+  const homeRow = (over: Partial<SeatRowPayload> = {}) =>
+    seatRow({
+      name: '[acme] coordinator',
+      home: 'acme',
+      tag: '1D3F',
+      owes: 'RCB-9',
+      inFlight: 'a brief',
+      ...over,
+    });
+
+  // CONTROL: delete `cardsOfSeat`'s `seat.home !== null` guard — this test fails. The panel hides
+  // working-on for a home row on its own, so no rendering test can see that guard.
+  it('cardsOfSeat gives a home row no cards, even one assigned to its exact name', () => {
+    const doing = [card('RB-1', 'doing', { assignee: 'claude/[acme] coordinator' })];
+    expect(cardsOfSeat(doing, seatRow({ name: '[acme] coordinator' }))).toHaveLength(1);
+    expect(cardsOfSeat(doing, homeRow())).toEqual([]);
+  });
+
+  it('a home row shows the home · read-only marker; an own row does not', () => {
+    const store = testStore();
+    sendSnapshot(store, { seats: [seatRow(), homeRow()] });
+    renderApp(store);
+    const home = screen.getByTestId('seat-block-home:acme:[acme] coordinator');
+    expect(home).toHaveTextContent('home · read-only');
+    expect(home).toHaveTextContent('RCB-9');
+    expect(screen.getByTestId('seat-block-builder')).not.toHaveTextContent('read-only');
+  });
+
+  it('a home row has no working-on, no seat events and no takeover hint, even with a Doing card assigned to that seat name', () => {
+    const store = testStore();
+    sendSnapshot(store, {
+      seats: [homeRow({ live: 'dead' })],
+      cards: [card('RB-1', 'doing', { assignee: 'claude/[acme] coordinator' })],
+    });
+    store.dispatch({
+      type: 'event',
+      event: seatEvent('[acme] coordinator', 'UP', '2026-09-02T22:00:00Z'),
+    });
+    renderApp(store);
+    const key = 'home:acme:[acme] coordinator';
+    expect(screen.getByTestId(`seat-block-${key}`)).toBeInTheDocument();
+    expect(screen.queryByTestId(`seat-working-${key}`)).toBeNull();
+    expect(screen.queryByTestId(`seat-events-${key}`)).toBeNull();
+    expect(screen.queryByTestId(`seat-takeover-${key}`)).toBeNull();
+    expect(screen.getByTestId(`seat-block-${key}`)).not.toHaveTextContent('RB-1');
+  });
+
+  it('a Doing card assigned to the bare name of a home seat is still unclaimed: only own seats hold cards', () => {
+    const store = testStore();
+    sendSnapshot(store, {
+      seats: [seatRow(), homeRow({ name: 'coordinator' })],
+      cards: [card('RB-1', 'doing', { assignee: 'coordinator' })],
+    });
+    renderApp(store);
+    expect(screen.getByTestId('seats-unclaimed')).toHaveTextContent('RB-1');
+    expect(screen.queryByTestId('seat-working-home:acme:coordinator')).toBeNull();
+  });
+
+  it('own coordinator and the home [acme] coordinator both render, with distinct blocks and pills', () => {
+    const store = testStore();
+    sendSnapshot(store, {
+      seats: [seatRow({ name: 'coordinator' }), homeRow()],
+      cards: [card('RB-1', 'doing', { assignee: 'coordinator' })],
+    });
+    renderApp(store);
+    expect(screen.getByTestId('seat-block-coordinator')).toBeInTheDocument();
+    expect(screen.getByTestId('seat-block-home:acme:[acme] coordinator')).toBeInTheDocument();
+    expect(screen.getByTestId('seat-pill-coordinator')).toBeInTheDocument();
+    expect(screen.getByTestId('seat-pill-home:acme:[acme] coordinator')).toBeInTheDocument();
+    // The own seat still lists its card; the home's does not.
+    expect(screen.getByTestId('seat-working-coordinator')).toHaveTextContent('RB-1');
+  });
+
+  it('a home row after own rows, in the order sent', () => {
+    const store = testStore();
+    sendSnapshot(store, { seats: [seatRow(), homeRow()] });
+    renderApp(store);
+    const blocks = [
+      ...screen.getByTestId('seats-panel').querySelectorAll('[data-testid^="seat-block-"]'),
+    ];
+    expect(blocks.map((b) => b.getAttribute('data-home'))).toEqual([null, 'true']);
   });
 });

@@ -21,6 +21,7 @@ export const NOW_ISO = '2026-09-02T22:41:10Z';
 export function seatRow(over: Partial<SeatRowPayload> = {}): SeatRowPayload {
   return {
     name: 'builder',
+    home: null,
     status: 'UP',
     at: '2026-09-02T22:29:00Z',
     tag: 'A7B2',

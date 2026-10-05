@@ -986,6 +986,11 @@ export function homeSeatRows(
  */
 export interface SeatRowPayload {
   name: string;
+  /**
+   * RCB-184: the HOME board's display name on a row read from the home (`name` is then
+   * `[<home>] <seat>`); `null` on this board's own rows.
+   */
+  home: string | null;
   status: 'UP' | 'DOWN';
   at: string | null;
   tag: string | null;
@@ -1006,19 +1011,57 @@ export function seatRowPayloads(
   seatsSection: string,
   holders: readonly SeatHolderInfo[] = [],
 ): SeatRowPayload[] {
-  return seatListEntries(seatsSection, holders).map(({ row, bullet }) => {
-    const at = parseSeatStamp(bullet)?.at ?? null;
-    return {
-      name: row.name,
-      status: row.status,
-      at: at === null ? null : toIso(at),
-      tag: row.tag,
-      label: row.label,
-      live: row.live?.state ?? null,
-      inFlight: row.inFlight,
-      owes: parseSeatFields(bullet).owes,
-    };
-  });
+  return seatListEntries(seatsSection, holders).map((entry) => entryPayload(entry, null));
+}
+
+/** One `seatListEntries` entry as a `SeatRowPayload` — the ONE place a payload is built. */
+function entryPayload(
+  { row, bullet }: { row: SeatListRow; bullet: string },
+  home: string | null,
+  name: string = row.name,
+): SeatRowPayload {
+  const at = parseSeatStamp(bullet)?.at ?? null;
+  return {
+    name,
+    home,
+    status: row.status,
+    at: at === null ? null : toIso(at),
+    tag: row.tag,
+    label: row.label,
+    live: row.live?.state ?? null,
+    inFlight: row.inFlight,
+    owes: parseSeatFields(bullet).owes,
+  };
+}
+
+/**
+ * RCB-184: `seatRowPayloads` for a board whose HOME is `homeName` — `seatListRowsWithoutHomeCopies`'
+ * twin: this board's OWN rows (`home: null`), a bullet prefixed with the home's name (a stale copy
+ * of a seat the home speaks for) left out, a third board's bullet kept. `owes` is read off the
+ * bullet, as in `seatRowPayloads`.
+ */
+export function seatRowPayloadsWithoutHomeCopies(
+  seatsSection: string,
+  holders: readonly SeatHolderInfo[],
+  homeName: string,
+): SeatRowPayload[] {
+  return seatListEntries(seatsSection, holders)
+    .filter((entry) => !prefixedWith(entry.board, homeName))
+    .map((entry) => entryPayload(entry, null));
+}
+
+/**
+ * RCB-184: `homeSeatRows`' payload twin — the HOME's own rows (unprefixed, or prefixed with
+ * `homeName`), each named `[<homeName>] <seat>` with `home: homeName`.
+ */
+export function homeSeatRowPayloads(
+  homeSeatsSection: string,
+  homeHolders: readonly SeatHolderInfo[],
+  homeName: string,
+): SeatRowPayload[] {
+  return seatListEntries(homeSeatsSection, homeHolders)
+    .filter((entry) => entry.board === null || prefixedWith(entry.board, homeName))
+    .map((entry) => entryPayload(entry, homeName, seatLabel(entry.row.name, homeName)));
 }
 
 export interface SeatBulletText {

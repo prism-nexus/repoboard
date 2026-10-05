@@ -59,6 +59,7 @@ import {
   type GateMemberFacts,
   holderLabel,
   holderLiveness,
+  homeSeatRows,
   initialStateText,
   type LeaseMutationResult,
   type LeasesDoc,
@@ -83,10 +84,12 @@ import {
   replaceSeatBullet,
   rewriteSeatBulletBody,
   type SeatBundle,
+  type SeatCheckHome,
   type SeatClaimInput,
   type SeatHolder,
   type SeatHolderInfo,
   type SeatLeaseView,
+  type SeatListRow,
   type SeatNameResult,
   type SeatSighting,
   type SeatWriteDecision,
@@ -123,6 +126,7 @@ import { probeHolder, writeSeatsFile } from './holder.js';
 import { excludeSeatsFromLocalGit, localDir, localStatus } from './local.js';
 import { detectSystems } from './systems-detect.js';
 import { getWatchDiag } from './watch-diag.js';
+import { resolveMemberRoot } from './workspace.js';
 
 /** One line of `.repoboard/events.jsonl`: core's `Event` (K2). Kept as a name for the package index. */
 export type StoreEvent = Event;
@@ -149,6 +153,27 @@ export interface StoreEvents {
   /** RCB-97: `.repoboard/systems.yml` changed — an external edit or its creation/removal. */
   systems: [payload: { doc: SystemsDoc | null; errors: string[]; exists: boolean }];
 }
+
+/**
+ * RCB-184: this board's HOME (`board.yml`'s `workspace:`), read READ-ONLY by `CardStore.readHome`.
+ * `ok: true` — `name` is the home's `boardDisplayName`, `rows` are its OWN seats (`homeSeatRows`,
+ * named `[<name>] <seat>`; `[]` only when its SEATS section has no seat bullet), `holderError` is
+ * its `seats.yml`'s read error (`null` when read: the rows' holder columns are then `null`, like
+ * `seat list`'s own), `listsMember` whether its `repos:` has a root resolving to THIS repo.
+ * `ok: false` — the home could not be read, `error` says why (no `.repoboard/`, no STATE.md,
+ * a board.yml or STATE.md that does not parse); never an empty `rows` standing for that.
+ * `configured` is the `workspace:` text as written — what a message names, never a resolved path.
+ */
+export type HomeRead =
+  | {
+      ok: true;
+      configured: string;
+      name: string;
+      rows: SeatListRow[];
+      holderError: string | null;
+      listsMember: boolean;
+    }
+  | { ok: false; configured: string; error: string };
 
 export interface OpenStoreOptions {
   /** Start the chokidar watcher. CLI one-shots pass false so the process can exit. */
@@ -2253,6 +2278,57 @@ export class CardStore extends EventEmitter<StoreEvents> {
     };
   }
 
+  /**
+   * RCB-184: the board named by `workspace:` — its display name, its OWN seats and whether it
+   * lists this repo as a member — or `null` when the key is absent (every caller then does exactly
+   * what it did before). STRICTLY READ-ONLY and never watching: the home is opened with
+   * `load(false)`, which only reads (`board.yml`, `leases.yml`, `systems.yml`, STATE.md, the card
+   * files, `events.jsonl`; no mkdir, no write, no watcher, no sweep timer — the same open
+   * `Workspace.open` gives a member), then `seatHolders()` reads its `seats.yml` lock-free. Never
+   * throws: whatever cannot be read is `{ok:false, error}`. Reads ONE hop — the home's own
+   * `workspace:` is not followed.
+   */
+  async readHome(): Promise<HomeRead | null> {
+    const configured = this.cfg.workspace;
+    if (configured === undefined) return null;
+    const fail = (error: string): HomeRead => ({ ok: false, configured, error });
+    const homeRoot = resolveMemberRoot(this.root, configured);
+    const home = new CardStore(homeRoot, { now: this.now });
+    // `load()` keeps the last good config/state when a file does not parse and only EMITS a
+    // warning (`<path>: <error>`, relative to the home) — listen BEFORE it runs, so a home whose
+    // board.yml or STATE.md is broken is `unreadable`, not a folder-named board with no seats.
+    const warnings: string[] = [];
+    home.on('warning', (w: string) => warnings.push(w));
+    try {
+      await home.load(false);
+      if (!home.hasBoard) return fail('no .repoboard/ there');
+      const own = [home.boardPath, home.statePath].map((p) => relative(home.root, p));
+      const broken = warnings.find((w) => own.some((p) => w.startsWith(`${p}:`)));
+      if (broken !== undefined) return fail(broken);
+      const state = home.state();
+      if (state === null) return fail(`${relative(home.root, home.statePath)}: not found`);
+      const name = boardDisplayName(home.config, home.root);
+      const held = await home.seatHolders();
+      const listed = await Promise.all(
+        (home.config.repos ?? []).map((r) =>
+          sameDirectory(resolveMemberRoot(home.root, r.root), this.root),
+        ),
+      );
+      return {
+        ok: true,
+        configured,
+        name,
+        rows: homeSeatRows(state.sections.seats, held.holders, name),
+        holderError: held.error,
+        listsMember: listed.some(Boolean),
+      };
+    } catch (e) {
+      return fail(`cannot be read: ${(e as NodeJS.ErrnoException).code ?? (e as Error).message}`);
+    } finally {
+      await home.close();
+    }
+  }
+
   /** RCB-83: `.repoboard/local/RIG.md`'s text, `null` when there is no local layer or no RIG.md. */
   private async readRigText(): Promise<string | null> {
     try {
@@ -2290,6 +2366,20 @@ export class CardStore extends EventEmitter<StoreEvents> {
     // file that does not parse is unknown, never an empty list); same "gather never fails" rule as
     // `cost`/`local` above, so a read error here is `null` too and `check` still answers.
     const held = this.hasLocalLayer ? await this.seatHolders().catch(() => null) : null;
+    // RCB-184: `workspace:` — the home read once (read-only), shared by the SEATS findings and
+    // `stale-state` (which ignores the home's own log blocks). `null` without the key.
+    const home = await this.readHome();
+    const homeFacts: SeatCheckHome | null =
+      home === null
+        ? null
+        : home.ok
+          ? {
+              ok: true,
+              configured: home.configured,
+              name: home.name,
+              listsMember: home.listsMember,
+            }
+          : home;
     const findings = checkFindings({
       state: this.stateDoc,
       logs,
@@ -2314,8 +2404,10 @@ export class CardStore extends EventEmitter<StoreEvents> {
         holders: held === null || held.error !== null ? null : held.holders,
         logs,
         now,
+        home: homeFacts,
       }),
       members,
+      homeBoard: home?.ok === true ? home.name : null,
     });
     return { findings, exitCode: exitCodeForFindings(findings, strict) };
   }
@@ -3749,6 +3841,16 @@ async function exists(path: string): Promise<boolean> {
   } catch {
     return false;
   }
+}
+
+/** RCB-184: do two paths name one directory? Symlinks resolved when they can be (`realpath`), the
+ * resolved path itself when one does not exist — so a missing path equals only the same spelling. */
+async function sameDirectory(a: string, b: string): Promise<boolean> {
+  const [ra, rb] = await Promise.all([
+    realpath(a).catch(() => resolve(a)),
+    realpath(b).catch(() => resolve(b)),
+  ]);
+  return ra === rb;
 }
 
 async function isDirectory(path: string): Promise<boolean> {

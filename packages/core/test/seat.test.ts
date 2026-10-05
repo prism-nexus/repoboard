@@ -12,6 +12,7 @@ import {
   describeSeatUpConflict,
   findSeatLine,
   formatSeatBullet,
+  homeSeatRows,
   keySeatBullets,
   listSeats,
   normalizeSeatName,
@@ -28,6 +29,7 @@ import {
   seatBundle,
   seatLabel,
   seatListRows,
+  seatListRowsWithoutHomeCopies,
   seatRowPayloads,
   seatSightings,
   seatUpConflict,
@@ -2920,5 +2922,73 @@ describe('seatRowPayloads (RCB-217)', () => {
     expect(seatRowPayloads(section, stray).map((r) => r.tag)).toEqual([null, null, null, null]);
     expect(seatRowPayloads('- Owner tasks elsewhere: whatever', holders)).toEqual([]);
     expect(seatRowPayloads('', holders)).toEqual([]);
+  });
+});
+
+describe('homeSeatRows / seatListRowsWithoutHomeCopies (RCB-184)', () => {
+  const STARTED = 'Tue Sep 29 12:34:56 2026';
+  const bullet = (board: string | null, name: string, status: 'UP' | 'DOWN' = 'UP'): string =>
+    `- **${board === null ? '' : `[${board}] `}${name}: ${status} 2026-10-05 09:00Z.** working`;
+
+  // The HOME's section: its own seat prefixed, its own seat bare, a seat of a third board.
+  const home = [
+    bullet('acme', 'coordinator'),
+    bullet(null, 'ops', 'DOWN'),
+    bullet('demo', 'builder'),
+    '- Owner tasks elsewhere: whatever',
+  ].join('\n');
+  // The MEMBER's section: its own seat, a stale copy of the home's seat, a third board's seat.
+  const member = [
+    bullet('demo', 'builder'),
+    bullet('acme', 'coordinator', 'DOWN'),
+    bullet('other', 'scout'),
+    bullet(null, 'ops'),
+  ].join('\n');
+
+  const holders = seatHolderInfos(
+    [
+      {
+        seat: 'coordinator',
+        holder: { pane: 'A7B2A3F2', session: null, start: STARTED, host: 'mac-mini', pid: 4242 },
+        since: '2026-10-05T08:00:00Z',
+        liveness: { state: 'alive' },
+      },
+    ],
+    'acme',
+  );
+
+  it("keeps the home's OWN bullets (bare, or prefixed with its name) and names each [<home>] <seat>", () => {
+    const rows = homeSeatRows(home, holders, 'acme');
+    expect(rows.map((r) => [r.name, r.status])).toEqual([
+      ['[acme] coordinator', 'UP'],
+      ['[acme] ops', 'DOWN'],
+    ]);
+  });
+
+  it("joins the HOME's holders: the coordinator's pane and liveness ride on its row", () => {
+    const [first, second] = homeSeatRows(home, holders, 'acme');
+    expect(first?.tag).toBe('A7B2');
+    expect(first?.live).toEqual({ state: 'alive' });
+    expect(second?.tag).toBeNull();
+    expect(second?.live).toBeNull();
+  });
+
+  it('the prefix match folds case, like every seat-name compare', () => {
+    expect(homeSeatRows(bullet('ACME', 'coordinator'), [], 'acme').map((r) => r.name)).toEqual([
+      '[acme] coordinator',
+    ]);
+    expect(seatListRowsWithoutHomeCopies(bullet('ACME', 'coordinator'), [], 'acme')).toEqual([]);
+  });
+
+  it("drops the member's copies of the home's seat and keeps everything else, rows as seatListRows'", () => {
+    const rows = seatListRowsWithoutHomeCopies(member, [], 'acme');
+    expect(rows.map((r) => r.name)).toEqual(['builder', 'scout', 'ops']);
+    // a home name that matches nothing hides nothing: exactly seatListRows
+    expect(seatListRowsWithoutHomeCopies(member, [], 'nobody')).toEqual(seatListRows(member, []));
+  });
+
+  it('a home with no seat bullet at all has no rows — an empty array is a readable, empty SEATS', () => {
+    expect(homeSeatRows('(none)', [], 'acme')).toEqual([]);
+    expect(homeSeatRows('', [], 'acme')).toEqual([]);
   });
 });

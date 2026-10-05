@@ -633,3 +633,97 @@ describe('checkFindings: CheckInput.seatFindings (RCB-200)', () => {
     expect(exitCodeForFindings(checkFindings({ ...base, seatFindings: warnings }), true)).toBe(1);
   });
 });
+
+describe('seatCheckFindings: the workspace: link (RCB-184)', () => {
+  const copy = '- **[acme] coordinator: DOWN 2026-10-04 09:00Z.** stale copy';
+  const own = '- **[repoboard] builder: UP 2026-10-05 09:00Z.** building';
+  const section = [own, copy].join('\n');
+  const readable = { ok: true, configured: '../acme', name: 'acme', listsMember: true } as const;
+  const unreadable = {
+    ok: false,
+    configured: '../acme',
+    error: '.repoboard/STATE.md: not found',
+  } as const;
+
+  it('no home (absent or null): exactly the findings there were — a copy-shaped bullet is silent', () => {
+    const before = run({ seatsSection: section });
+    expect(run({ seatsSection: section, home: null })).toEqual(before);
+    expect(before.map((f) => f.kind)).toEqual([]);
+  });
+
+  it('seat-copy: one warning per own stamped bullet prefixed with the home name, naming the bullet', () => {
+    const findings = run({
+      seatsSection: [own, copy, '- **[ACME] ops: UP 2026-10-05 09:00Z.** copy too'].join('\n'),
+      home: readable,
+    });
+    expect(findings).toEqual([
+      {
+        kind: 'seat-copy',
+        level: 'warning',
+        message:
+          "seat-copy: SEATS bullet 2 ([acme] coordinator) is a copy of home board acme's seat — " +
+          "delete it; the home's bullet is read live",
+      },
+      {
+        kind: 'seat-copy',
+        level: 'warning',
+        message:
+          "seat-copy: SEATS bullet 3 ([ACME] ops) is a copy of home board acme's seat — " +
+          "delete it; the home's bullet is read live",
+      },
+    ]);
+  });
+
+  it("a bullet for a third board, and this board's own, are not copies", () => {
+    const findings = run({
+      seatsSection: [own, '- **[other] scout: UP 2026-10-05 09:00Z.** x'].join('\n'),
+      home: readable,
+    });
+    expect(findings.map((f) => f.kind)).toEqual([]);
+  });
+
+  it('seat-home-not-member: one warning when the home lists no root resolving to this repo', () => {
+    const findings = run({ seatsSection: own, home: { ...readable, listsMember: false } });
+    expect(findings).toEqual([
+      {
+        kind: 'seat-home-not-member',
+        level: 'warning',
+        message:
+          'seat-home-not-member: home board acme (workspace: ../acme) lists no repos: root that ' +
+          'resolves to this repo — add this repo to its board.yml, or drop workspace:',
+      },
+    ]);
+  });
+
+  it('seat-home-unreadable: names the path as written and why; copies cannot be judged, so none', () => {
+    const findings = run({ seatsSection: section, home: unreadable });
+    expect(findings).toEqual([
+      {
+        kind: 'seat-home-unreadable',
+        level: 'warning',
+        message:
+          'seat-home-unreadable: workspace: ../acme cannot be read (.repoboard/STATE.md: not ' +
+          'found) — its seats are not listed here; fix the path, or drop workspace:',
+      },
+    ]);
+  });
+
+  it('the home findings need no SEATS section: unreadable and not-member still fire, copy cannot', () => {
+    expect(run({ seatsSection: null, home: unreadable }).map((f) => f.kind)).toEqual([
+      'seat-home-unreadable',
+    ]);
+    expect(
+      run({ seatsSection: null, home: { ...readable, listsMember: false } }).map((f) => f.kind),
+    ).toEqual(['seat-home-not-member']);
+    expect(run({ seatsSection: null, home: readable })).toEqual([]);
+  });
+
+  it('all three are warnings: they block only with --strict', () => {
+    const findings = run({
+      seatsSection: section,
+      home: { ...readable, listsMember: false },
+    });
+    expect(findings.map((f) => f.kind)).toEqual(['seat-copy', 'seat-home-not-member']);
+    expect(findings.every((f) => f.level === 'warning')).toBe(true);
+  });
+});

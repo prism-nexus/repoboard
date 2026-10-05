@@ -19,6 +19,17 @@ import {
 import { type Finding, FUTURE_STAMP_TOLERANCE_MS, type LogFileInfo } from './state.js';
 import { toIso } from './time.js';
 
+/**
+ * RCB-184: what the caller measured about this board's HOME (`board.yml`'s `workspace:`), read
+ * read-only — `null`/absent when the key is absent (every finding below is then silent, byte-
+ * identical to before). `configured` is the key's text as written, what a finding names.
+ * `ok: false` means the home could not be read (`error` says why); `ok: true` carries the home's
+ * display `name` and whether its own `repos:` lists a root that resolves to THIS repo.
+ */
+export type SeatCheckHome =
+  | { ok: true; configured: string; name: string; listsMember: boolean }
+  | { ok: false; configured: string; error: string };
+
 export interface SeatCheckInput {
   /** `StateDoc.sections.seats`; `null` when there is no STATE.md — then there is nothing to judge. */
   seatsSection: string | null;
@@ -29,6 +40,8 @@ export interface SeatCheckInput {
   holders: readonly SeatHolderInfo[] | null;
   logs: readonly LogFileInfo[];
   now: Date;
+  /** RCB-184: this board's home, as read — `null`/absent = no `workspace:` key, inert. */
+  home?: SeatCheckHome | null;
 }
 
 /** A board name as it is COMPARED — trimmed, case-insensitive (`normalizeSeatName`'s rule). */
@@ -304,10 +317,61 @@ function leaseDriftFindings(
 }
 
 /**
+ * RCB-184: the three findings about a `workspace:` link, all warnings (hygiene, not a broken rig).
+ *
+ * - `seat-copy`: an own STAMPED bullet prefixed with the home's name — a copy of a seat the home's
+ *   own STATE.md speaks for. The copy goes stale and `seat list` no longer shows it, so it is only
+ *   noise; one per bullet, never raised when the home could not be read (its name is then unknown).
+ * - `seat-home-unreadable`: the home's `.repoboard/`, STATE.md or board.yml could not be read; names
+ *   the key's text and says why. The member's own rows still list — unreadable is never "no seats".
+ * - `seat-home-not-member`: the home's `repos:` lists no root that resolves to this repo, so the
+ *   home does not coordinate it — the link is one-sided.
+ */
+function homeFindings(
+  facts: readonly SeatBulletFact[],
+  home: SeatCheckHome | null | undefined,
+): Finding[] {
+  if (home === null || home === undefined) return [];
+  if (!home.ok) {
+    return [
+      {
+        kind: 'seat-home-unreadable',
+        level: 'warning',
+        message:
+          `seat-home-unreadable: workspace: ${home.configured} cannot be read (${home.error}) — ` +
+          'its seats are not listed here; fix the path, or drop workspace:',
+      },
+    ];
+  }
+  const findings: Finding[] = [];
+  for (const f of facts) {
+    if (f.board === null || foldBoard(f.board) !== foldBoard(home.name)) continue;
+    findings.push({
+      kind: 'seat-copy',
+      level: 'warning',
+      message:
+        `seat-copy: SEATS bullet ${f.position} (${boardLabel(f, home.name)} ${f.name.trim()}) is a ` +
+        `copy of home board ${home.name}'s seat — delete it; the home's bullet is read live`,
+    });
+  }
+  if (!home.listsMember) {
+    findings.push({
+      kind: 'seat-home-not-member',
+      level: 'warning',
+      message:
+        `seat-home-not-member: home board ${home.name} (workspace: ${home.configured}) lists no ` +
+        'repos: root that resolves to this repo — add this repo to its board.yml, or drop workspace:',
+    });
+  }
+  return findings;
+}
+
+/**
  * RCB-200: `check`'s SEATS findings, in the order the kinds are declared — duplicate bullet,
  * ambiguous name, log while DOWN, then (only when `holders` is non-null) UP with a dead holder, a
- * pane holding two seats, lease/bullet drift. `null` `seatsSection` -> `[]`. One finding per seat
- * (or per group of bullets / holders), each message beginning `<kind>: `.
+ * pane holding two seats, lease/bullet drift, then (only with `home`) the `workspace:` link's
+ * findings. `null` `seatsSection` -> `[]`, or just the home's unreadable / not-member findings.
+ * One finding per seat (or per group of bullets / holders), each message beginning `<kind>: `.
  *
  * Only STAMPED bullets are facts (`stampedSeatBullets`); a fact is THIS board's when its `[repo]`
  * prefix is absent or equals `boardName` (case-insensitive). The checks that ask what THIS board's
@@ -317,7 +381,7 @@ function leaseDriftFindings(
  * empty lease file; `[]` is a readable file with no leases.
  */
 export function seatCheckFindings(input: SeatCheckInput): Finding[] {
-  if (input.seatsSection === null) return [];
+  if (input.seatsSection === null) return homeFindings([], input.home);
   const { boardName, holders } = input;
   const facts = stampedSeatBullets(input.seatsSection).filter((f) => f.key !== '');
   const mine = groupBy(
@@ -336,5 +400,7 @@ export function seatCheckFindings(input: SeatCheckInput): Finding[] {
       ...leaseDriftFindings(mine, holders),
     );
   }
+  // RCB-184: last, so a board with no `workspace:` key gets exactly the findings it got before.
+  findings.push(...homeFindings(facts, input.home));
   return findings;
 }

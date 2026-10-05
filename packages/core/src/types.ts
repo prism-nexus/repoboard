@@ -190,6 +190,11 @@ export interface BoardConfig {
   /** RCB-153 W1: member boards this one coordinates. Absent means "not a workspace" — exactly
    * today's board, byte-identical (the slice's own regression control). */
   repos?: WorkspaceRepo[];
+  /** RCB-184: the HOME board of this member — the workspace root whose seats (a coordinator) work
+   * across several repos, not in this one. Relative to THIS repo's root (or absolute, `~`
+   * expanded: `resolveMemberRoot`). `seat list` shows the home's own seats, read live and never
+   * written; `check` judges the link. Absent means today's board, byte-identical. */
+  workspace?: string;
   columns: Column[];
   [key: string]: unknown;
 }

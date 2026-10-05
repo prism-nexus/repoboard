@@ -235,6 +235,7 @@ export {
   describeSeatUpConflict,
   findSeatLine,
   formatSeatBullet,
+  homeSeatRows,
   keySeatBullets,
   listSeats,
   normalizeSeatName,
@@ -249,6 +250,7 @@ export {
   seatBundle,
   seatLabel,
   seatListRows,
+  seatListRowsWithoutHomeCopies,
   seatNameKey,
   seatRowPayloads,
   seatSightings,
@@ -256,7 +258,7 @@ export {
   stampedSeatBullets,
   zonedLogMs,
 } from './seat.js';
-export type { SeatCheckInput } from './seat-check.js';
+export type { SeatCheckHome, SeatCheckInput } from './seat-check.js';
 export { seatCheckFindings } from './seat-check.js';
 export type {
   CheckInput,

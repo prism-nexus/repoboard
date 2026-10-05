@@ -16,8 +16,31 @@ All notable changes to this project are documented in this file. The format is b
   `seat-home-not-member` (the home's `repos:` does not list this repo), and `stale-state` no longer
   goes red over a block the home's seat wrote in this board's log. Without the key nothing changes.
   The Board's Seats panel does not show home seats yet (slice 2).
+- **Seat rows, landings and seat events on the wire (RCB-217).** The WebSocket snapshot gains
+  `seats` (each seat's status, stamp, holder pane, holder liveness, in-flight and owes, from the
+  same parser `seat list` uses) and `landings` (commits whose subject starts with a card id, read
+  from the last 14 days of git, grouped by card). A seat write that changes a status appends a
+  `seat` event. `{type:"seats"}` is sent after every STATE.md change and seat event, and a 30 s
+  poll re-sends seats and landings only when they changed, and only while a client is connected.
+  The snapshot's log is today's when it has a block, else the newest earlier day within 14 days.
 
 ### Changed
+
+- **The top of the Board is a status line and three panels (RCB-216, RCB-218).** The Board
+  view's status line has one pill per seat (● UP, ○ DOWN, ⚠ UP with a dead holder, ? liveness
+  unknown), an Owner queue count that opens the first queued card, one pill per held lease, and
+  the newest event. Below it: Seats (per seat: since when, the Doing cards assigned to it, in
+  flight, owes, its last two seat events, and how to take over a seat whose holder is dead;
+  Doing cards no UP seat holds are listed as unclaimed), Landed (from git, with a warning when a
+  landed card is not in a done column) and Owner queue (a click opens the card). The LIVE and
+  LAST LANDINGS rows are gone from the Board; they stay in STATE.md. The LOG row names the day
+  when it is not today. The other views keep the Now strip and the Ticker.
+- **`scripts/publish.sh` moves chosen card commits to `main` by pull request (RCB-222).** Work
+  lands on a development branch first. `scripts/publish.sh <card-id|sha>...` picks the chosen
+  commits that are not yet on `main` onto a temporary copy of it, runs the public check (the
+  private denylist over the tree, the commit messages and the added lines) and lists what would go
+  out, pushing nothing. `--apply` pushes a `publish/<ids>` branch and opens the pull request,
+  which merges after green CI; with no denylist it refuses.
 
 - **Releases publish from CI with npm trusted publishing and provenance (RCB-214).** Pushing a
   `v*` tag runs `.github/workflows/release.yml`: it fails unless the tag is `v` plus the

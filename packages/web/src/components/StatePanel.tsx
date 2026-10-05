@@ -1,34 +1,48 @@
 /**
- * P8.3, locked decision 7: STATE.md as a panel at the top of the Board view. OWNER ISSUES is NOT
- * read from the wire payload's own (possibly stale-by-now) `ownerQueue` field: it is recomputed
- * here from the live `cards` the board already has, via the same `needsDecision`/`ownerQueueLine`
- * core functions the server uses, so a card's decision changing updates this panel the instant
- * the `card` message arrives — no dependency on a fresh `state` broadcast. O11 retired the
- * TopBar's `needs decision` filter, so a queue line SCROLLS to the `decide` column instead of
- * toggling anything (orchestrator note 2).
+ * The top of the Board (RCB-218; before it, P8.3 + RCB-66's five collapsible STATE.md rows).
  *
- * RCB-66: the owner asked for "state, live, owner issues, seats" — STATE.md's four sections
- * under one umbrella — as collapsible rows that default to closed, plus today's log (previously a
- * strip beside the Ticker, `LogTimeline`) as a fifth row rather than dropped. All five rows are
- * independent, closed-by-default, and fit the window: one open row scrolls inside itself
- * (`.panel-row__body`), it does not grow the panel.
+ * One status line (`StatusLine`) that replaces the Now strip and the Ticker on the Board view, a
+ * deck of three panels under it — SEATS (the live view), LANDED (from git) and OWNER QUEUE — and the
+ * LOG row. The panels show or hide together behind the status line's Hide/Show details toggle,
+ * remembered in `localStorage` (`repoboard.panelRows`) like the five rows were.
+ *
+ * Nothing here is parsed from STATE.md's prose any more: seats come from the server's `seats`
+ * payload (or core's parse of the same SEATS section when a server predates it), landings from git,
+ * and the Owner queue is recomputed from the live `cards`. LIVE and LAST LANDINGS — slow-changing
+ * hand-typed prose that was 12 days stale — are gone from the Board; they stay in STATE.md.
  */
-import { type Card, needsDecision, ownerQueueLine, parseLogBlocks } from '@repoboard/core';
+import { type BoardConfig, type Card, type Event, parseLogBlocks } from '@repoboard/core';
 import type { ReactNode } from 'react';
-import { useState } from 'react';
-import { renderMarkdown } from '../markdown.js';
-import { parseSeats, type Seat } from '../seats.js';
-import { relTime, shortTime } from '../time.js';
-import type { LogPayload, StatePayload } from '../wire.js';
-import { LogTimeline, logBlockWhen } from './LogTimeline.jsx';
+import { useMemo, useState } from 'react';
+import type {
+  LandingsPayload,
+  LeasesPayload,
+  LogPayload,
+  SeatRowPayload,
+  StatePayload,
+} from '../wire.js';
+import { LandedPanel } from './LandedPanel.jsx';
+import { LogTimeline, logBlockWhen, logDayLabel } from './LogTimeline.jsx';
+import { OwnerQueuePanel } from './OwnerQueuePanel.jsx';
+import { SeatsPanel } from './SeatsPanel.jsx';
+import { StatusLine } from './StatusLine.jsx';
+import {
+  doingCards,
+  newestEvent,
+  ownerQueueCards,
+  seatRowsFor,
+  unclaimedDoing,
+} from './status-model.js';
 
 const STORAGE_KEY = 'repoboard.panelRows';
 
+/**
+ * `details`: the deck of three panels is shown (the default — only an explicit `false` hides it, so
+ * an absent or old-shaped value reads as "shown"). `log`: the LOG row is open (default closed).
+ * Keys left over from the five-row panel (`live`, `ownerIssues`, …) are ignored.
+ */
 interface PanelRowsOpen {
-  live?: boolean;
-  lastLandings?: boolean;
-  ownerIssues?: boolean;
-  seats?: boolean;
+  details?: boolean;
   log?: boolean;
 }
 
@@ -36,8 +50,8 @@ interface PanelRowsOpen {
  * Every read and write wraps its OWN try/catch — not just the existence check — because
  * `localStorage` can exist as a reference yet still throw (or, as measured in this suite, expose
  * a `getItem` that is not a function) in a private window, under a restrictive environment, or a
- * broken shim. A per-viewer convenience like which rows are open must never crash the panel.
- * Missing, unparseable, or throwing all read back as "no rows open" — every row starts closed.
+ * broken shim. A per-viewer convenience like whether the details are open must never crash the
+ * panel. Missing, unparseable, or throwing all read back as `{}` — the defaults.
  */
 function readPanelRows(): PanelRowsOpen {
   try {
@@ -63,10 +77,16 @@ function writePanelRows(rows: PanelRowsOpen): void {
 
 interface Props {
   state: StatePayload | null;
+  /** The server's seat rows; `null` when it predates them (STATE.md's SEATS section is read instead). */
+  seats: SeatRowPayload[] | null;
+  /** The server's landings; `null` when it predates them. */
+  landings: LandingsPayload | null;
+  leases: LeasesPayload | null;
+  events: Event[];
   cards: Card[];
-  /** The first `decision: true` column's id, or null when the board has none. */
-  decideColumnId: string | null;
-  onGoToDecide: (columnId: string) => void;
+  config: BoardConfig;
+  /** Opens a card's drawer — an Owner queue item, and the status line's Owner queue pill. */
+  onOpenCard: (id: string) => void;
   log: LogPayload | null;
   now: number;
 }
@@ -75,7 +95,7 @@ interface Props {
  * One collapsible row: a button head (title, optional meta/badge, chevron) and a body rendered
  * ONLY when open — not hidden by CSS, so a closed row's text is genuinely absent from the DOM.
  * The accessible name of the head is the title followed by any meta, so a test can match it with
- * e.g. `/^LIVE/`.
+ * e.g. `/^LOG/`.
  */
 function PanelRow({
   title,
@@ -104,157 +124,99 @@ function PanelRow({
   );
 }
 
-/**
- * RCB-45: LIVE is window-locked — a fixed height (not max-height) that scrolls inside, pinned
- * width, no reflow as it grows, so it reads like a status board. `testId` is put on the window
- * div (the element the test — and the fixed height — actually applies to).
- */
-function StateSection({
-  body,
-  locked,
-  testId,
-}: {
-  body: string;
-  locked?: boolean;
-  testId?: string;
-}) {
-  const prose = (
-    <div
-      className="state-panel__prose"
-      // biome-ignore lint/security/noDangerouslySetInnerHtml: sanitized by renderMarkdown (DOMPurify)
-      dangerouslySetInnerHTML={{ __html: renderMarkdown(body) }}
-    />
-  );
-  return (
-    <div className="state-panel__section">
-      {locked ? (
-        <div className="state-panel__window" data-testid={testId}>
-          {prose}
-        </div>
-      ) : (
-        prose
-      )}
-    </div>
-  );
-}
-
-/**
- * RCB-85: SEATS closed-row preview — who's up/down without opening the row. `seats` comes from
- * `parseSeats` on the STATE.md `## SEATS` section; `now` is the panel's own `now` prop, same
- * value LOG uses for `logBlockWhen`.
- */
-function SeatsStrip({ seats, now }: { seats: Seat[]; now: number }) {
-  if (seats.length === 0) return null;
-  return (
-    <span className="state-panel__seats" data-testid="state-panel-seats">
-      {seats.map((seat) => (
-        <span
-          key={`${seat.name}:${seat.status}:${seat.iso ?? ''}`}
-          className={`chip chip--seat chip--seat-${seat.status.toLowerCase()}`}
-          data-testid="seat-chip"
-        >
-          {seat.name} {seat.status}
-          {seat.iso ? ` ${relTime(seat.iso, now)}` : ''}
-        </span>
-      ))}
-    </span>
-  );
-}
-
-export function StatePanel({ state, cards, decideColumnId, onGoToDecide, log, now }: Props) {
+export function StatePanel({
+  state,
+  seats,
+  landings,
+  leases,
+  events,
+  cards,
+  config,
+  onOpenCard,
+  log,
+  now,
+}: Props) {
   const [rows, setRows] = useState<PanelRowsOpen>(readPanelRows);
-  const toggle = (key: keyof PanelRowsOpen) => {
+  const [focus, setFocus] = useState<{ name: string; tick: number } | null>(null);
+  const toggle = (key: keyof PanelRowsOpen, current: boolean) => {
     setRows((prev) => {
-      const next: PanelRowsOpen = { ...prev, [key]: !prev[key] };
+      const next: PanelRowsOpen = { ...prev, [key]: !current };
       writePanelRows(next);
       return next;
     });
   };
+  const detailsOpen = rows.details !== false;
+  const logOpen = rows.log === true;
 
-  const openCards = cards.filter((c) => needsDecision(c));
-  const sections = state?.sections ?? null;
+  const seatRows = useMemo(() => seatRowsFor(seats, state), [seats, state]);
+  const stateMissing = seats === null && !state?.sections;
+  const queue = useMemo(() => ownerQueueCards(cards), [cards]);
+  const doing = useMemo(() => doingCards(cards, config), [cards, config]);
+  const unclaimed = useMemo(() => unclaimedDoing(doing, seatRows), [doing, seatRows]);
+
+  // A seat pill opens the details when they are hidden, then asks the Seats panel to scroll to and
+  // flash that seat's block (it mounts with the request already set, so the effect still fires).
+  const onSeat = (name: string) => {
+    if (!detailsOpen) {
+      setRows((prev) => {
+        const next: PanelRowsOpen = { ...prev, details: true };
+        writePanelRows(next);
+        return next;
+      });
+    }
+    setFocus((prev) => ({ name, tick: (prev?.tick ?? 0) + 1 }));
+  };
 
   const logBlocks = log ? parseLogBlocks(log.text) : [];
   const newestLogBlock = logBlocks.length > 0 ? logBlocks[logBlocks.length - 1] : null;
+  const day = logDayLabel(log?.date, now);
   const logMeta = newestLogBlock
-    ? `${logBlocks.length} block${logBlocks.length === 1 ? '' : 's'} today · ${logBlockWhen(
-        newestLogBlock.ts,
-        now,
-      )}`
-    : 'no log entries today';
+    ? `${logBlocks.length} block${logBlocks.length === 1 ? '' : 's'} ${
+        day === 'today' || day === 'yesterday' ? day : `on ${day}`
+      } · ${logBlockWhen(newestLogBlock.ts, now)}`
+    : day === 'today'
+      ? 'no log entries today'
+      : `no log entries · ${day}`;
 
   return (
     <div className="state-panel" data-testid="state-panel">
-      <div className="state-panel__caption muted">
-        {state?.stamp ? (
-          <>
-            STATE written {shortTime(state.stamp)} by {state.actor}
-          </>
-        ) : (
-          <>no STATE.md yet — `repoboard init --practices`</>
-        )}
-      </div>
-      {sections && state ? (
-        <>
-          <PanelRow title="LIVE" open={!!rows.live} onToggle={() => toggle('live')}>
-            <StateSection body={sections.live} locked testId="state-panel-live" />
-          </PanelRow>
-          <PanelRow
-            title="LAST LANDINGS"
-            open={!!rows.lastLandings}
-            onToggle={() => toggle('lastLandings')}
-          >
-            <StateSection body={sections.lastLandings} />
-          </PanelRow>
-          <PanelRow
-            title="OWNER ISSUES"
-            meta={
-              openCards.length > 0 ? (
-                <span className="state-panel__badge" data-testid="state-panel-queue-count">
-                  {openCards.length} needs decision
-                </span>
-              ) : null
-            }
-            open={!!rows.ownerIssues}
-            onToggle={() => toggle('ownerIssues')}
-          >
-            <div className="state-panel__section">
-              {openCards.length === 0 ? (
-                <p className="muted">No open decisions.</p>
-              ) : (
-                <ul className="state-panel__queue" data-testid="state-panel-queue">
-                  {openCards.map((c) => (
-                    <li key={c.id}>
-                      <button
-                        type="button"
-                        className="state-panel__queue-item"
-                        disabled={decideColumnId === null}
-                        onClick={() => decideColumnId && onGoToDecide(decideColumnId)}
-                        title={decideColumnId ? `Go to the ${decideColumnId} column` : undefined}
-                      >
-                        {ownerQueueLine(c)}
-                      </button>
-                    </li>
-                  ))}
-                </ul>
-              )}
-            </div>
-          </PanelRow>
-          <PanelRow
-            title="SEATS"
-            meta={<SeatsStrip seats={parseSeats(sections.seats)} now={now} />}
-            open={!!rows.seats}
-            onToggle={() => toggle('seats')}
-          >
-            <StateSection body={sections.seats} />
-          </PanelRow>
-        </>
+      <StatusLine
+        seats={seatRows}
+        stateMissing={stateMissing}
+        queue={queue}
+        leases={leases}
+        latest={newestEvent(events)}
+        now={now}
+        detailsOpen={detailsOpen}
+        onToggleDetails={() => {
+          // A request to scroll to a seat is spent once the deck goes away; a re-shown deck must not
+          // replay it.
+          if (detailsOpen) setFocus(null);
+          toggle('details', detailsOpen);
+        }}
+        onSeat={onSeat}
+        onOpenCard={onOpenCard}
+      />
+      {detailsOpen ? (
+        <div className="deck" data-testid="state-deck">
+          <SeatsPanel
+            seats={seatRows}
+            doing={doing}
+            unclaimed={unclaimed}
+            events={events}
+            now={now}
+            stateMissing={stateMissing}
+            focus={focus}
+          />
+          <LandedPanel landings={landings} cards={cards} config={config} now={now} />
+          <OwnerQueuePanel queue={queue} config={config} onOpenCard={onOpenCard} />
+        </div>
       ) : null}
       <PanelRow
         title="LOG"
         meta={<span className="muted">{logMeta}</span>}
-        open={!!rows.log}
-        onToggle={() => toggle('log')}
+        open={logOpen}
+        onToggle={() => toggle('log', logOpen)}
       >
         <LogTimeline log={log} now={now} />
       </PanelRow>

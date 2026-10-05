@@ -338,6 +338,24 @@ button {
 .log-timeline__summary::-webkit-details-marker {
   display: none;
 }
+/* RCB-218: ▲ took a seat, ▼ stood down, ✓ landed, • anything else. */
+.log-timeline__mark {
+  width: 1em;
+  text-align: center;
+  flex: 0 0 auto;
+}
+.log-timeline__mark--up {
+  color: var(--ok);
+}
+.log-timeline__mark--down {
+  color: var(--muted);
+}
+.log-timeline__mark--landed {
+  color: var(--accent);
+}
+.log-timeline__mark--other {
+  color: var(--line-strong);
+}
 .log-timeline__seat {
   font-weight: 600;
   white-space: nowrap;
@@ -366,19 +384,17 @@ button {
   margin: 0 0 6px;
 }
 
-/* ---- state panel: five collapsible rows (P8.3; RCB-66) ---- */
+/* ---- state panel: status line, three detail panels, LOG row (P8.3; RCB-66; RCB-218) ---- */
 .board-view {
   display: flex;
   flex-direction: column;
   min-height: 0;
   height: 100%;
 }
-/* RCB-66: two open rows (e.g. LIVE + LOG) could together exceed the viewport even though each
-   row body caps itself — measured `.state-panel` 707px / `.board` clientHeight 20px in an
-   844px-tall viewport (the columns pushed below the fold). `max-height: 55vh` + `overflow-y:
-   auto` cap the PANEL as a whole so rows scroll inside it and the board keeps at least ~45vh.
-   The two caps work together: `.panel-row__body`'s `max-height: min(45vh, 360px)` keeps a single
-   open row reading as a row; this cap keeps the whole panel from pushing the board off-screen. */
+/* RCB-66: the panel as a whole is capped so the board keeps at least ~45vh however much is open —
+   measured then `.state-panel` 707px / `.board` clientHeight 20px in an 844px-tall viewport (the
+   columns pushed below the fold). `max-height: 55vh` + `overflow-y: auto` make the panel scroll
+   inside itself. RCB-218: still the safety net; each detail panel below also caps itself. */
 .state-panel {
   flex: 0 0 auto;
   max-height: 55vh;
@@ -386,11 +402,335 @@ button {
   border-bottom: 1px solid var(--line);
   background: var(--surface);
 }
-/* The "STATE written HH:MMZ by <actor>" line (or "no STATE.md yet…") — a caption, not a button. */
-.state-panel__caption {
+
+/* RCB-218: the status line — pills, then "last:" and the details toggle pushed to the right. */
+.status {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 8px;
   padding: 6px 12px;
+  min-width: 0;
+  background: var(--surface);
+}
+.pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 2px 9px;
+  border: 1px solid var(--line-strong);
+  border-radius: 999px;
+  font-size: 12px;
+  white-space: nowrap;
+  background: var(--bg);
+}
+button.pill:hover:not(:disabled) {
+  border-color: var(--accent);
+}
+.pill__icon {
+  width: 11px;
+  height: 11px;
+}
+.sym {
+  font-size: 11px;
+  line-height: 1;
+  width: 1em;
+  text-align: center;
+}
+.pill--up {
+  border-color: color-mix(in srgb, var(--ok) 55%, var(--line-strong));
+}
+.pill--up .sym {
+  color: var(--ok);
+}
+.pill--dead {
+  border-color: var(--amber);
+  background: var(--amber-bg);
+}
+.pill--dead .sym {
+  color: var(--amber);
+}
+.pill--down,
+.pill--down .sym {
+  color: var(--muted);
+}
+.pill--unknown .sym {
+  color: var(--accent);
+}
+.pill--owner {
+  border-color: var(--amber);
+  color: var(--amber);
+  font-weight: 600;
+}
+.pill--owner:disabled {
+  border-color: var(--line-strong);
+  color: var(--muted);
+  font-weight: 400;
+  cursor: default;
+}
+.pill--stale {
+  border-color: var(--amber);
+  background: var(--amber-bg);
+  color: var(--amber);
+}
+.status__last {
+  margin-left: auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+  color: var(--muted);
+}
+.status__last b {
+  color: var(--ink);
+  font-weight: 600;
+}
+.fold {
+  font-size: 12px;
+  color: var(--muted);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 1px 8px;
+}
+
+/* RCB-218: the deck — Seats wider than Landed and Owner queue; one column when narrow. */
+.deck {
+  display: grid;
+  grid-template-columns: minmax(0, 1.35fr) minmax(0, 1fr) minmax(0, 1fr);
+  gap: 10px;
+  padding: 10px 12px;
+  border-top: 1px solid var(--line);
+}
+.panel {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  max-height: 300px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+}
+.panel__head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 7px 10px 5px;
+  border-bottom: 1px solid var(--line);
+}
+.panel__title {
+  font-family: var(--font-mono);
+  font-weight: 700;
+  font-size: 11px;
+  letter-spacing: 0.06em;
+}
+.panel__meta {
+  margin-left: auto;
+  text-align: right;
+  font-size: 11px;
+  color: var(--muted);
+}
+.panel__body {
+  min-height: 0;
+  overflow-y: auto;
+  padding: 4px 0;
+}
+.panel__foot {
+  padding: 5px 10px 7px;
+  border-top: 1px solid var(--line);
+  font-size: 11px;
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+.empty-note {
+  padding: 8px 10px;
+  font-size: 12px;
+  color: var(--muted);
+}
+.cardref {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--accent);
+}
+
+/* Seats panel */
+.seat {
+  display: grid;
+  grid-template-columns: 16px minmax(0, 1fr);
+  gap: 0 6px;
+  padding: 7px 10px;
+  border-left: 3px solid transparent;
+}
+.seat + .seat {
+  border-top: 1px solid var(--line);
+}
+.seat--up {
+  border-left-color: var(--ok);
+}
+.seat--dead {
+  border-left-color: var(--amber);
+  background: color-mix(in srgb, var(--amber-bg) 60%, transparent);
+}
+.seat--down {
+  border-left-color: var(--line-strong);
+}
+.seat .sym {
+  padding-top: 3px;
+}
+.seat--up .sym {
+  color: var(--ok);
+}
+.seat--dead .sym {
+  color: var(--amber);
+}
+.seat--down .sym {
+  color: var(--muted);
+}
+.seat--unknown .sym {
+  color: var(--accent);
+}
+.seat__line {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px 8px;
+  align-items: baseline;
+}
+.seat__name {
+  font-weight: 600;
+}
+.seat__kv {
+  display: grid;
+  grid-template-columns: 74px minmax(0, 1fr);
+  gap: 1px 8px;
+  margin: 3px 0 0;
+  font-size: 12px;
+}
+.seat__kv dt {
+  color: var(--muted);
+}
+.seat__kv dd {
+  margin: 0;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.seat__events {
+  margin-top: 4px;
+  font-size: 11px;
+  color: var(--muted);
+}
+.seat__warn {
+  margin-top: 3px;
+  font-size: 12px;
+  color: var(--amber);
+}
+.seat__note {
+  margin-top: 3px;
   font-size: 11px;
 }
+.seat--flash {
+  animation: seat-flash calc(var(--motion) * 6.4) ease-out;
+}
+@keyframes seat-flash {
+  0%,
+  40% {
+    outline: 2px solid var(--accent);
+    outline-offset: -2px;
+  }
+  100% {
+    outline-color: transparent;
+  }
+}
+.unclaimed {
+  padding: 7px 10px;
+  border-top: 1px dashed var(--line-strong);
+  font-size: 12px;
+}
+
+/* Landed panel */
+.land {
+  display: grid;
+  grid-template-columns: 16px minmax(0, 1fr);
+  gap: 0 6px;
+  padding: 6px 10px;
+}
+.land + .land {
+  border-top: 1px solid var(--line);
+}
+.land .sym {
+  padding-top: 2px;
+  color: var(--ok);
+}
+.land__title {
+  overflow-wrap: anywhere;
+}
+.land__meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px 8px;
+  align-items: center;
+  margin-top: 2px;
+  font-size: 11px;
+  color: var(--muted);
+}
+.sha {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--accent);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.sha--plain {
+  color: var(--muted);
+  text-decoration: none;
+}
+.flag {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--amber);
+}
+
+/* Owner queue panel */
+.oq-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.oq {
+  display: block;
+  width: 100%;
+  padding: 7px 10px;
+  text-align: left;
+}
+.oq:hover {
+  background: var(--surface-2);
+}
+.oq-item + .oq-item {
+  border-top: 1px solid var(--line);
+}
+.oq__top {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+.oq__line {
+  overflow-wrap: anywhere;
+}
+.oq__where {
+  padding: 0 5px;
+  border: 1px solid var(--amber);
+  border-radius: 3px;
+  font-size: 11px;
+  color: var(--amber);
+}
+.oq__go {
+  display: inline-block;
+  margin-top: 5px;
+  font-size: 12px;
+  color: var(--accent);
+}
+
+/* The LOG row (RCB-66 rows, now just this one) */
 .panel-row {
   flex: 0 0 auto;
   border-top: 1px solid var(--line);
@@ -409,93 +749,33 @@ button {
   font-weight: 700;
   letter-spacing: 0.04em;
 }
-.state-panel__badge {
-  color: var(--amber);
-  font-weight: 600;
-}
-.state-panel__seats {
-  display: inline-flex;
-  flex-wrap: wrap;
-  gap: 4px 6px;
-  margin-left: 8px;
-}
-.chip--seat-up {
-  color: var(--accent);
-  border-color: var(--accent);
-}
-.chip--seat-down {
-  color: var(--muted);
-}
 .panel-row__chevron {
   margin-left: auto;
   color: var(--muted);
 }
-/* RCB-66: fits the window — one open row scrolls inside itself rather than growing the panel;
-   five closed rows are ~5×28px regardless of how long any one section's text is. */
+/* RCB-66: fits the window — the open row scrolls inside itself rather than growing the panel. */
 .panel-row__body {
   padding: 0 12px 10px;
   font-size: 12px;
   max-height: min(45vh, 360px);
   overflow-y: auto;
 }
-/* RCB-45 pinned this as a grid item's min-width, back when the four sections shared a grid row
-   (`.state-panel__body`, retired by RCB-66). Since RCB-66, `.state-panel__section` is a plain
-   block inside `.panel-row__body` — not a grid item — so `min-width: 0` here guards nothing on
-   its own; it is kept only as a marker on the section, harmless but not load-bearing. The actual
-   guard against a wide LIVE table widening the board past the viewport is now one level up:
-   `.main`'s `grid-template-columns: minmax(0, 1fr)` below (RCB-66, mirroring RCB-44 on `.app`). */
-.state-panel__section {
-  min-width: 0;
+@media (max-width: 900px) {
+  .deck {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .panel {
+    max-height: none;
+  }
 }
-.state-panel__prose {
-  overflow-wrap: anywhere;
-}
-.state-panel__prose :is(p, ul, ol) {
-  margin: 0 0 6px;
-}
-/* RCB-45: LIVE is window-locked — a fixed height (not max-height) that scrolls inside, pinned
-   width, no reflow as it grows, so it reads like a status board. */
-.state-panel__window {
-  height: 160px;
-  min-width: 0;
-  overflow-y: auto;
-  overflow-x: auto;
-  overflow-wrap: anywhere;
-  border: 1px solid var(--line);
-  border-radius: 4px;
-  padding: 6px 8px;
-  background: var(--surface-2);
-}
-/* RCB-53: prose in the window wraps anywhere; table cells do not — with `anywhere` a cell's
-   min-content is one character and auto table layout starves the narrow column (a member's LIVE
-   table, header "row" rendered as "ro"/"w"). Cells wrap at spaces but never inside a word, so the
-   narrow column gets its longest word and the wide column wraps (nowrap would hide long
-   values behind a sideways scroll — measured on a large member board). */
-.state-panel__window table {
-  border-collapse: collapse;
-}
-.state-panel__window :is(th, td) {
-  overflow-wrap: normal;
-  word-break: keep-all;
-  white-space: normal;
-  padding: 2px 8px 2px 0;
-  text-align: left;
-  vertical-align: top;
-}
-.state-panel__queue {
-  list-style: none;
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
-.state-panel__queue-item {
-  text-align: left;
-  color: var(--accent);
-  overflow-wrap: anywhere;
-}
-.state-panel__queue-item:disabled {
-  color: var(--muted);
-  cursor: default;
+@media (max-width: 520px) {
+  .status__last {
+    margin-left: 0;
+    width: 100%;
+  }
+  .seat__kv {
+    grid-template-columns: 64px minmax(0, 1fr);
+  }
 }
 
 /* ---- board ---- */
@@ -510,7 +790,7 @@ button {
   grid-template-rows: minmax(0, 1fr);
   /* RCB-66: RCB-45's bug species, one level up. With no column definition here, the implicit
      `auto` column sized `.board-view` to its max-content, and the LIVE row's wide table drove it
-     (measured `.board-view` 2235px / `.state-panel__window table` 2193px in a 1316px viewport —
+     (measured `.board-view` 2235px / that row's table 2193px in a 1316px viewport —
      the same thing RCB-44 fixed on `.app`, above). Before RCB-66's rows replaced the 4-track grid
      `.state-panel__body` (each track `min-width: 0`'d), this was hidden. `minmax(0, 1fr)` pins
      the column to the viewport, same fix as `.app`. */

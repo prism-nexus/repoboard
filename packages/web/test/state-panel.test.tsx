@@ -1,258 +1,165 @@
 /**
- * P8.3, locked decision 7: STATE.md as a panel at the top of the Board view. OWNER ISSUES is
- * recomputed from the live `cards` (not trusted from a possibly-stale wire payload), and a queue
- * line scrolls to the `decide` column rather than toggling a filter (O11 dropped the TopBar
- * filter; orchestrator note 2).
- *
- * RCB-66: five collapsible rows (LIVE, LAST LANDINGS, OWNER ISSUES, SEATS, LOG), all closed by
- * default, independent of one another, remembered per row in one localStorage key
- * (`repoboard.panelRows`).
+ * The top of the Board. P8.3: STATE.md as a panel above the columns, the Owner queue recomputed from
+ * the live `cards`. RCB-66: collapsible rows remembered in `repoboard.panelRows`. RCB-218: a status
+ * line, three detail panels (Seats, Landed, Owner queue) behind one Hide/Show details toggle, and
+ * the LOG row; the LIVE and LAST LANDINGS rows are gone, and an Owner-queue item opens its card
+ * instead of scrolling to a column. Each test names its CONTROL — the perturbation of the source
+ * that makes it fail; none was run (the brief forbids any runner), the gating seat watches each fail.
  */
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { fireEvent, screen } from '@testing-library/react';
+import { act, fireEvent, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { card, emptyState, mockState, renderApp, snapshot, testStore } from './helpers.jsx';
+import { card, emptyState, mockState, renderApp, testStore } from './helpers.jsx';
+import { NOW_ISO, openDecision, sendSnapshot } from './status-fixtures.js';
 
 // Not `fileURLToPath(new URL(…, import.meta.url))`: under the jsdom environment that throws
 // "The URL must be of scheme file". vitest shims `__dirname` for ESM test modules.
 const STYLES_PATH = join(__dirname, '..', 'src', 'styles.css');
 
+const KEY = 'repoboard.panelRows';
+
 beforeEach(() => {
-  vi.useFakeTimers({ now: new Date('2026-09-02T22:41:10Z') });
+  vi.useFakeTimers({ now: new Date(NOW_ISO) });
   // The real ambient `localStorage` (jsdom/Node) is not test-isolated — it can carry a
   // `repoboard.panelRows` value left behind by a previous test or a previous run of this suite,
-  // which would make "all closed by default" tests depend on execution history rather than on
-  // the code under test. Tests that stub `localStorage` (below) are unaffected either way.
+  // which would make the "details shown by default" tests depend on execution history rather than
+  // on the code under test. Tests that stub `localStorage` (below) are unaffected either way.
   try {
-    localStorage.removeItem('repoboard.panelRows');
+    localStorage.removeItem(KEY);
   } catch {
     // No real localStorage in this environment — nothing to clear.
   }
 });
 afterEach(() => vi.useRealTimers());
 
-function openRow(name: RegExp) {
-  fireEvent.click(screen.getByRole('button', { name }));
+/** A `localStorage` stand-in backed by a Map, so a test can read back what the panel wrote. */
+function stubStorage() {
+  const mem = new Map<string, string>();
+  vi.stubGlobal('localStorage', {
+    getItem: (k: string) => mem.get(k) ?? null,
+    setItem: (k: string, v: string) => void mem.set(k, v),
+    removeItem: (k: string) => void mem.delete(k),
+    clear: () => mem.clear(),
+    key: () => null,
+    length: 0,
+  });
+  return mem;
 }
 
 describe('StatePanel', () => {
-  it('before any STATE.md exists: says so, no crash, and the four STATE rows are not rendered', () => {
+  // CONTROL: in StatePanel.tsx `stateMissing`, make it always `false` — the line says "no seats
+  // recorded" and the first assertion fails.
+  it('before any STATE.md exists: says so, no crash, no seat pill — and the LOG row is still there', () => {
     const store = testStore();
-    snapshot(store, [card('RB-1', 'todo')], undefined, undefined, undefined, emptyState());
+    sendSnapshot(store, { state: emptyState() });
     renderApp(store);
-    expect(screen.getByTestId('state-panel')).toHaveTextContent('no STATE.md yet');
-    expect(screen.queryByRole('button', { name: /^LIVE/ })).toBeNull();
-    expect(screen.queryByRole('button', { name: /^LAST LANDINGS/ })).toBeNull();
-    expect(screen.queryByRole('button', { name: /^OWNER ISSUES/ })).toBeNull();
-    expect(screen.queryByRole('button', { name: /^SEATS/ })).toBeNull();
-    // The LOG row still is.
+    expect(screen.getByTestId('status-no-seats')).toHaveTextContent('no STATE.md yet');
+    expect(screen.queryAllByTestId(/^seat-pill-/)).toHaveLength(0);
     expect(screen.getByRole('button', { name: /^LOG/ })).toBeInTheDocument();
   });
 
   it('with no state payload at all (pre-P8.3 server), also reads as "no STATE.md yet"', () => {
     const store = testStore();
-    snapshot(store, [card('RB-1', 'todo')]); // no state arg
+    sendSnapshot(store, { cards: [card('RB-1', 'todo')] });
     renderApp(store);
-    expect(screen.getByTestId('state-panel')).toHaveTextContent('no STATE.md yet');
+    expect(screen.getByTestId('status-no-seats')).toHaveTextContent('no STATE.md yet');
   });
 
-  it('all five rows are closed on first render', () => {
+  // CONTROL: re-add `<PanelRow title="LIVE" …>` (or LAST LANDINGS / OWNER ISSUES) to StatePanel.tsx
+  // and render `sections.live` in it — the row button, the heading text and 'Tree is dev.' all
+  // reappear and this fails. STATE.md still HAS those sections; the Board just no longer shows them.
+  it('no LIVE row, no LAST LANDINGS row, no OWNER ISSUES row — and none of their text in the DOM', () => {
     const store = testStore();
-    snapshot(store, [card('RB-1', 'todo')], undefined, undefined, undefined, mockState());
+    sendSnapshot(store, { cards: [card('RB-1', 'todo')], state: mockState() });
     renderApp(store);
-    expect(screen.getByTestId('state-panel')).not.toHaveTextContent('Tree is dev.');
-    expect(screen.getByTestId('state-panel')).not.toHaveTextContent('K117 landed.');
-    expect(screen.queryByTestId('state-panel-queue')).toBeNull();
-    expect(screen.queryByTestId('log-timeline')).toBeNull();
-    for (const name of [/^LIVE/, /^LAST LANDINGS/, /^OWNER ISSUES/, /^SEATS/, /^LOG/]) {
-      const button = screen.getByRole('button', { name });
-      expect(button).toHaveAttribute('aria-expanded', 'false');
-    }
+    expect(screen.queryByRole('button', { name: /^LIVE/ })).toBeNull();
+    expect(screen.queryByRole('button', { name: /^LAST LANDINGS/ })).toBeNull();
+    expect(screen.queryByRole('button', { name: /^OWNER ISSUES/ })).toBeNull();
+    const text = document.body.textContent ?? '';
+    expect(text).not.toMatch(/\bLIVE\b/);
+    expect(text).not.toContain('LAST LANDINGS');
+    expect(text).not.toContain('OWNER ISSUES');
+    expect(text).not.toContain('Tree is dev.');
+    expect(text).not.toContain('K117 landed.');
+    expect(text).not.toContain('STATE written');
   });
 
-  it('opening LIVE shows its text and the window; the other rows stay closed', () => {
+  it('shows the three detail panels by default: SEATS, LANDED, OWNER QUEUE', () => {
     const store = testStore();
-    snapshot(store, [card('RB-1', 'todo')], undefined, undefined, undefined, mockState());
+    sendSnapshot(store, { state: mockState() });
     renderApp(store);
-    openRow(/^LIVE/);
-    expect(screen.getByTestId('state-panel-live')).toHaveTextContent('Tree is dev.');
-    expect(screen.getByTestId('state-panel')).not.toHaveTextContent('K117 landed.');
-    expect(screen.getByTestId('state-panel')).not.toHaveTextContent('ops watching.');
-    expect(screen.queryByTestId('state-panel-queue')).toBeNull();
-    expect(screen.queryByTestId('log-timeline')).toBeNull();
+    const deck = screen.getByTestId('state-deck');
+    expect(deck).toContainElement(screen.getByTestId('seats-panel'));
+    expect(deck).toContainElement(screen.getByTestId('landed-panel'));
+    expect(deck).toContainElement(screen.getByTestId('owner-panel'));
+    expect(screen.getByTestId('seats-panel')).toHaveTextContent('SEATS');
+    expect(screen.getByTestId('landed-panel')).toHaveTextContent('LANDED');
+    expect(screen.getByTestId('owner-panel')).toHaveTextContent('OWNER QUEUE');
   });
+});
 
-  it('opening LAST LANDINGS shows its text; the other rows stay closed', () => {
+describe('Hide / Show details', () => {
+  // CONTROL: in StatusLine.tsx wire `onClick` to nothing — the deck never goes away; or in
+  // StatePanel.tsx render the deck unconditionally — the first `toBeNull` fails.
+  it('hides and shows the three panels together; the status line stays', () => {
     const store = testStore();
-    snapshot(store, [card('RB-1', 'todo')], undefined, undefined, undefined, mockState());
+    sendSnapshot(store, { state: mockState() });
     renderApp(store);
-    openRow(/^LAST LANDINGS/);
-    expect(screen.getByTestId('state-panel')).toHaveTextContent('K117 landed.');
-    expect(screen.getByTestId('state-panel')).not.toHaveTextContent('Tree is dev.');
-    expect(screen.getByTestId('state-panel')).not.toHaveTextContent('ops watching.');
-    expect(screen.queryByTestId('state-panel-live')).toBeNull();
+    const toggle = screen.getByTestId('status-toggle');
+    expect(toggle).toHaveTextContent('Hide details');
+    expect(toggle).toHaveAttribute('aria-expanded', 'true');
+    fireEvent.click(toggle);
+    expect(screen.queryByTestId('state-deck')).toBeNull();
+    expect(screen.queryByTestId('seats-panel')).toBeNull();
+    expect(screen.getByTestId('status-line')).toBeInTheDocument();
+    expect(screen.getByTestId('status-toggle')).toHaveTextContent('Show details');
+    expect(screen.getByTestId('status-toggle')).toHaveAttribute('aria-expanded', 'false');
+    fireEvent.click(screen.getByTestId('status-toggle'));
+    expect(screen.getByTestId('state-deck')).toBeInTheDocument();
   });
 
-  it('opening SEATS shows its text; the other rows stay closed', () => {
-    const store = testStore();
-    snapshot(store, [card('RB-1', 'todo')], undefined, undefined, undefined, mockState());
-    renderApp(store);
-    openRow(/^SEATS/);
-    expect(screen.getByTestId('state-panel')).toHaveTextContent('ops watching.');
-    expect(screen.getByTestId('state-panel')).not.toHaveTextContent('Tree is dev.');
-    expect(screen.getByTestId('state-panel')).not.toHaveTextContent('K117 landed.');
-    expect(screen.queryByTestId('state-panel-live')).toBeNull();
-  });
-
-  it('renders LIVE, LAST LANDINGS and SEATS from the payload once each is open', () => {
-    const store = testStore();
-    snapshot(store, [card('RB-1', 'todo')], undefined, undefined, undefined, mockState());
-    renderApp(store);
-    openRow(/^LIVE/);
-    openRow(/^LAST LANDINGS/);
-    openRow(/^SEATS/);
-    const panel = screen.getByTestId('state-panel');
-    expect(panel).toHaveTextContent('Tree is dev.');
-    expect(panel).toHaveTextContent('K117 landed.');
-    expect(panel).toHaveTextContent('ops watching.');
-    expect(panel).toHaveTextContent('written');
-    expect(panel).toHaveTextContent('claude/p8-3');
-  });
-
-  it('the OWNER ISSUES badge is visible while the row is closed; opening it shows the queue', () => {
-    const store = testStore();
-    const asked = card('RCB-40', 'decide', {
-      decision: {
-        question: 'sync-issues column?',
-        options: [
-          { letter: 'A', text: 'todo' },
-          { letter: 'B', text: 'backlog' },
-        ],
-        askedBy: 'claude/coordinator',
-        askedAt: '2026-09-02T22:00:00Z',
-        returnTo: 'doing',
-        chosen: null,
-        words: null,
-        decidedBy: null,
-        decidedAt: null,
-      },
-    });
-    snapshot(store, [asked], undefined, undefined, undefined, mockState());
-    renderApp(store);
-    const badge = screen.getByTestId('state-panel-queue-count');
-    expect(badge).toHaveTextContent('1 needs decision');
-    expect(screen.queryByTestId('state-panel-queue')).toBeNull();
-    openRow(/^OWNER ISSUES/);
-    const queue = screen.getByTestId('state-panel-queue');
-    expect(queue).toHaveTextContent('RCB-40 · sync-issues column? · [A B]');
-  });
-
-  it('the OWNER ISSUES line for a task reads owner: <text>, not a question with letters (RCB-52)', () => {
-    const store = testStore();
-    const asked = card('RCB-52', 'decide', {
-      decision: {
-        question: 'buy the domain',
-        kind: 'task',
-        options: [],
-        askedBy: 'claude/coordinator',
-        askedAt: '2026-09-02T22:00:00Z',
-        returnTo: 'doing',
-        chosen: null,
-        words: null,
-        decidedBy: null,
-        decidedAt: null,
-      },
-    });
-    snapshot(store, [asked], undefined, undefined, undefined, mockState());
-    renderApp(store);
-    openRow(/^OWNER ISSUES/);
-    const queue = screen.getByTestId('state-panel-queue');
-    expect(queue).toHaveTextContent('RCB-52 · owner: buy the domain');
-  });
-
-  it('a decided card never appears in the queue; no badge while closed', () => {
-    const store = testStore();
-    const decided = card('RCB-41', 'todo', {
-      decision: {
-        question: 'q',
-        options: [],
-        askedBy: 'a',
-        askedAt: '2026-09-02T22:00:00Z',
-        returnTo: null,
-        chosen: null,
-        words: 'done',
-        decidedBy: 'web',
-        decidedAt: '2026-09-02T22:05:00Z',
-      },
-    });
-    snapshot(store, [decided], undefined, undefined, undefined, mockState());
-    renderApp(store);
-    expect(screen.queryByTestId('state-panel-queue-count')).toBeNull();
-    openRow(/^OWNER ISSUES/);
-    expect(screen.getByTestId('state-panel')).toHaveTextContent('No open decisions.');
-  });
-
-  it('clicking a queue line scrolls the decide column into view (row opened first)', () => {
-    const store = testStore();
-    const asked = card('RCB-40', 'decide', {
-      decision: {
-        question: 'q',
-        options: [{ letter: 'A', text: 'x' }],
-        askedBy: 'a',
-        askedAt: '2026-09-02T22:00:00Z',
-        returnTo: 'doing',
-        chosen: null,
-        words: null,
-        decidedBy: null,
-        decidedAt: null,
-      },
-    });
-    snapshot(store, [asked], undefined, undefined, undefined, mockState());
-    renderApp(store);
-    openRow(/^OWNER ISSUES/);
-    const decideColumn = document.querySelector('[data-column="decide"]');
-    expect(decideColumn).not.toBeNull();
-    const scrollSpy = vi.fn();
-    if (decideColumn) (decideColumn as HTMLElement).scrollIntoView = scrollSpy;
-    fireEvent.click(screen.getByText('RCB-40 · q · [A]'));
-    expect(scrollSpy).toHaveBeenCalled();
-  });
-
-  it('localStorage remembers which rows are open across a re-render, one row at a time', () => {
-    const mem = new Map<string, string>();
-    vi.stubGlobal('localStorage', {
-      getItem: (k: string) => mem.get(k) ?? null,
-      setItem: (k: string, v: string) => void mem.set(k, v),
-      removeItem: (k: string) => void mem.delete(k),
-      clear: () => mem.clear(),
-      key: () => null,
-      length: 0,
-    });
+  // CONTROL: in StatePanel.tsx `toggle`, delete the `writePanelRows(next)` call — nothing is
+  // written and the remount shows the deck again.
+  it('is remembered in repoboard.panelRows across a remount, next to whether LOG is open', () => {
+    const mem = stubStorage();
     try {
       const store = testStore();
-      snapshot(store, [card('RB-1', 'todo')], undefined, undefined, undefined, mockState());
+      sendSnapshot(store, { state: mockState() });
       const { unmount } = renderApp(store);
-      openRow(/^LIVE/);
-      expect(screen.getByTestId('state-panel-live')).toHaveTextContent('Tree is dev.');
+      fireEvent.click(screen.getByTestId('status-toggle'));
+      fireEvent.click(screen.getByRole('button', { name: /^LOG/ }));
+      expect(JSON.parse(mem.get(KEY) ?? 'null')).toEqual({ details: false, log: true });
       unmount();
 
-      // A fresh mount reads the remembered rows back: LIVE open, the other four closed.
       renderApp(store);
-      expect(screen.getByTestId('state-panel-live')).toHaveTextContent('Tree is dev.');
-      expect(screen.getByRole('button', { name: /^LIVE/ })).toHaveAttribute(
-        'aria-expanded',
-        'true',
-      );
-      for (const name of [/^LAST LANDINGS/, /^OWNER ISSUES/, /^SEATS/, /^LOG/]) {
-        expect(screen.getByRole('button', { name })).toHaveAttribute('aria-expanded', 'false');
-      }
+      expect(screen.queryByTestId('state-deck')).toBeNull();
+      expect(screen.getByTestId('status-toggle')).toHaveTextContent('Show details');
+      expect(screen.getByRole('button', { name: /^LOG/ })).toHaveAttribute('aria-expanded', 'true');
     } finally {
       vi.unstubAllGlobals();
     }
   });
 
-  it('a localStorage whose getItem throws: all rows closed, no crash', () => {
+  // CONTROL: in StatePanel.tsx change `rows.details !== false` to `rows.details === true` — a value
+  // with no `details` key (every pre-RCB-218 value) then hides the deck and this fails. Only an
+  // explicit `false` hides: an unconfigured rule is inert, not dangerous.
+  it('a value left by the five-row panel (no `details` key) reads as shown', () => {
+    const mem = stubStorage();
+    mem.set(KEY, JSON.stringify({ live: true, seats: false, ownerIssues: true }));
+    try {
+      const store = testStore();
+      sendSnapshot(store, { state: mockState() });
+      renderApp(store);
+      expect(screen.getByTestId('state-deck')).toBeInTheDocument();
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  // CONTROL: in StatePanel.tsx `readPanelRows`, drop its try/catch — the throwing getItem crashes
+  // the render and this fails.
+  it('a localStorage whose getItem throws: details shown, no crash, and toggling still works', () => {
     vi.stubGlobal('localStorage', {
       getItem: () => {
         throw new Error('nope');
@@ -267,137 +174,199 @@ describe('StatePanel', () => {
     });
     try {
       const store = testStore();
-      snapshot(store, [card('RB-1', 'todo')], undefined, undefined, undefined, mockState());
+      sendSnapshot(store, { state: mockState() });
       renderApp(store);
-      expect(screen.getByTestId('state-panel')).not.toHaveTextContent('Tree is dev.');
-      for (const name of [/^LIVE/, /^LAST LANDINGS/, /^OWNER ISSUES/, /^SEATS/, /^LOG/]) {
-        expect(screen.getByRole('button', { name })).toHaveAttribute('aria-expanded', 'false');
-      }
-      // Toggling still doesn't crash even though the write also throws.
-      openRow(/^LIVE/);
-      expect(screen.getByTestId('state-panel-live')).toHaveTextContent('Tree is dev.');
+      expect(screen.getByTestId('state-deck')).toBeInTheDocument();
+      // The write also throws; the in-memory state still flips.
+      fireEvent.click(screen.getByTestId('status-toggle'));
+      expect(screen.queryByTestId('state-deck')).toBeNull();
     } finally {
       vi.unstubAllGlobals();
     }
   });
+});
 
-  // RCB-45: LIVE is window-locked — fixed height, scrolls inside, pinned width, no reflow.
-  it('the LIVE section renders inside a window-locked box, once open', () => {
+describe('Owner queue', () => {
+  const ask = (id: string, status: string, question = 'sync-issues column?') =>
+    card(id, status, { decision: openDecision(question) });
+
+  // CONTROL: in OwnerQueuePanel.tsx render `c.title` instead of `ownerQueueLine(c)` — the line
+  // text (and its letters) is gone and this fails.
+  it('lists each open decision as core words it: id, question and letters', () => {
     const store = testStore();
-    snapshot(store, [card('RB-1', 'todo')], undefined, undefined, undefined, mockState());
+    sendSnapshot(store, { cards: [ask('RCB-40', 'decide')], state: mockState() });
     renderApp(store);
-    openRow(/^LIVE/);
-    const live = screen.getByTestId('state-panel-live');
-    expect(live).toHaveClass('state-panel__window');
-    expect(live).toHaveTextContent('Tree is dev.');
+    expect(screen.getByTestId('owner-item-RCB-40')).toHaveTextContent(
+      'RCB-40 · sync-issues column? · [A B]',
+    );
+    expect(screen.getByTestId('owner-panel')).toHaveTextContent('1 waiting');
+    expect(screen.getByTestId('owner-pill')).toHaveTextContent('Owner queue 1');
   });
 
-  it('only LIVE is window-locked', () => {
+  it('an owner task reads owner: <text>, not a question with letters (RCB-52)', () => {
     const store = testStore();
-    snapshot(store, [card('RB-1', 'todo')], undefined, undefined, undefined, mockState());
+    const task = card('RCB-52', 'decide', {
+      decision: openDecision('buy the domain', { kind: 'task', options: [] }),
+    });
+    sendSnapshot(store, { cards: [task], state: mockState() });
     renderApp(store);
-    openRow(/^LIVE/);
-    openRow(/^LAST LANDINGS/);
-    openRow(/^SEATS/);
-    const windows = document.querySelectorAll('.state-panel__window');
-    expect(windows.length).toBe(1);
-    expect(windows[0]).not.toHaveTextContent('K117 landed.');
+    expect(screen.getByTestId('owner-item-RCB-52')).toHaveTextContent(
+      'RCB-52 · owner: buy the domain',
+    );
   });
 
-  it('closing LIVE again hides the window', () => {
+  // CONTROL: in status-model.ts `ownerQueueCards` filter on `c.decision !== undefined` instead of
+  // `needsDecision` — the decided card is listed and the count reads 1.
+  it('a decided card is never in the queue: the panel says so and the pill reads 0, disabled', () => {
     const store = testStore();
-    snapshot(store, [card('RB-1', 'todo')], undefined, undefined, undefined, mockState());
+    const decided = card('RCB-41', 'todo', {
+      decision: openDecision('q', {
+        options: [],
+        chosen: null,
+        words: 'done',
+        decidedBy: 'web',
+        decidedAt: '2026-09-02T22:05:00Z',
+      }),
+    });
+    sendSnapshot(store, { cards: [decided], state: mockState() });
     renderApp(store);
-    openRow(/^LIVE/);
-    expect(screen.getByTestId('state-panel-live')).toBeInTheDocument();
-    openRow(/^LIVE/); // toggle closed
-    expect(screen.queryByTestId('state-panel-live')).toBeNull();
+    expect(screen.getByTestId('owner-empty')).toHaveTextContent('No open decisions.');
+    expect(screen.getByTestId('owner-pill')).toHaveTextContent('Owner queue 0');
+    expect(screen.getByTestId('owner-pill')).toBeDisabled();
   });
 
-  // jsdom does not compute layout, so the fixed height is asserted from the CSS source itself.
-  it('the .state-panel__window rule fixes a 160px height with its own scroll', () => {
-    const css = readFileSync(STYLES_PATH, 'utf8');
-    const rule = css.match(/\.state-panel__window\s*\{[^}]*\}/);
-    expect(rule).not.toBeNull();
-    // A bare `height`, not `max-height` (which `toContain` would also match): a max lets the
-    // box shrink and the panel reflow — the thing this card exists to stop.
-    expect(rule?.[0]).toMatch(/[^-]height: 160px;/);
-    expect(rule?.[0]).not.toMatch(/max-height/);
-    expect(rule?.[0]).toContain('overflow-y: auto');
+  // CONTROL: in OwnerQueuePanel.tsx drop the `c.status !== decideColumnId` condition — the
+  // decide-column card gets a badge too and the `toBeNull` fails; make the badge never render —
+  // the Done card has none and `toHaveTextContent('in Done')` fails.
+  it("a badge names the card's column when it is not the decide column — and only then", () => {
+    const store = testStore();
+    sendSnapshot(store, {
+      cards: [ask('RCB-40', 'decide'), ask('RCB-41', 'done', 'which reconcile default?')],
+      state: mockState(),
+    });
+    renderApp(store);
+    expect(screen.queryByTestId('owner-where-RCB-40')).toBeNull();
+    expect(screen.getByTestId('owner-where-RCB-41')).toHaveTextContent('in Done');
   });
 
-  // Pinned width: a grid item's automatic minimum is its min-content width, so a wide table in
-  // LIVE (a member board has one) would widen the section past its track and the window's opaque
-  // background would cover the other three sections. `min-width: 0` on the section is the pin.
-  it('the .state-panel__section rule pins the section to its grid track (min-width: 0)', () => {
-    const css = readFileSync(STYLES_PATH, 'utf8');
-    const rule = css.match(/\.state-panel__section\s*\{[^}]*\}/);
-    expect(rule).not.toBeNull();
-    expect(rule?.[0]).toMatch(/min-width:\s*0;/);
+  // CONTROL: in OwnerQueuePanel.tsx replace `onOpenCard(c.id)` with a scroll of
+  // `[data-column="decide"]` (the old behaviour) — `selectedId` stays null, the spy is called, and
+  // the drawer never opens: all three assertions fail.
+  it("clicking an item opens that card's drawer — it does not scroll to a column", () => {
+    const store = testStore();
+    sendSnapshot(store, { cards: [ask('RCB-40', 'decide')], state: mockState() });
+    renderApp(store);
+    const decideColumn = document.querySelector('[data-column="decide"]');
+    expect(decideColumn).not.toBeNull();
+    const scrollSpy = vi.fn();
+    if (decideColumn) (decideColumn as HTMLElement).scrollIntoView = scrollSpy;
+    fireEvent.click(screen.getByTestId('owner-item-RCB-40'));
+    expect(store.getState().selectedId).toBe('RCB-40');
+    expect(screen.getByTestId('drawer')).toBeInTheDocument();
+    expect(scrollSpy).not.toHaveBeenCalled();
   });
 
-  // RCB-53: `.state-panel__window { overflow-wrap: anywhere }` (RCB-45, for prose) starves a
-  // table's narrow column to one character under auto table layout (a member's LIVE table, header
-  // "row" rendered as "ro"/"w"). Cells must keep whole words yet still wrap at spaces (nowrap hid
-  // the value column behind a sideways scroll on a member board). Sliced from the selector to the
-  // next `}` (not the whole file) so a `keep-all` elsewhere cannot satisfy this vacuously
-  // (RCB-44's `toContain('height: 160px')` matching a `max-height` is exactly that failure mode).
-  it('the .state-panel__window :is(th, td) rule keeps whole words yet wraps: overflow-wrap normal, word-break keep-all, white-space normal', () => {
-    const css = readFileSync(STYLES_PATH, 'utf8');
-    const selector = '.state-panel__window :is(th, td)';
-    const selectorIndex = css.indexOf(selector);
-    expect(selectorIndex).toBeGreaterThan(-1);
-    const braceStart = css.indexOf('{', selectorIndex);
-    const braceEnd = css.indexOf('}', braceStart);
-    const block = css.slice(braceStart, braceEnd + 1);
-    expect(block).toContain('overflow-wrap: normal');
-    expect(block).toContain('word-break: keep-all');
-    expect(block).toContain('white-space: normal');
-    expect(block).not.toContain('nowrap');
+  // The reason for the change: the waiting card can sit in Done, where the old scroll found an
+  // empty Needs-decision column. CONTROL: the same as above.
+  it('an item whose card sits in Done opens it all the same', () => {
+    const store = testStore();
+    sendSnapshot(store, { cards: [ask('RCB-41', 'done')], state: mockState() });
+    renderApp(store);
+    fireEvent.click(screen.getByTestId('owner-item-RCB-41'));
+    expect(store.getState().selectedId).toBe('RCB-41');
+    expect(screen.getByTestId('decision-section')).toBeInTheDocument();
   });
 
-  // RCB-66: five collapsible rows fit the window — one open row scrolls inside itself instead of
-  // growing the panel past the viewport.
+  // CONTROL: in StatusLine.tsx open `queue[queue.length - 1]` instead of `queue[0]` — RCB-41 opens.
+  it("the status line's Owner queue pill opens the first queued card", () => {
+    const store = testStore();
+    sendSnapshot(store, {
+      cards: [ask('RCB-40', 'decide'), ask('RCB-41', 'done', 'second question')],
+      state: mockState(),
+    });
+    renderApp(store);
+    fireEvent.click(screen.getByTestId('owner-pill'));
+    expect(store.getState().selectedId).toBe('RCB-40');
+  });
+
+  // CONTROL: build the list from `state.ownerQueue` (the wire payload) instead of the live `cards`
+  // — the `card` message below changes nothing and the pill still reads 1.
+  it('recomputes from the live cards: an answered decision leaves the queue on the card message alone', () => {
+    const store = testStore();
+    sendSnapshot(store, { cards: [ask('RCB-40', 'decide')], state: mockState() });
+    renderApp(store);
+    expect(screen.getByTestId('owner-pill')).toHaveTextContent('Owner queue 1');
+    act(() =>
+      store.dispatch({
+        type: 'card',
+        card: card('RCB-40', 'todo', {
+          decision: openDecision('sync-issues column?', {
+            chosen: 'A',
+            decidedBy: 'web',
+            decidedAt: '2026-09-02T22:30:00Z',
+          }),
+        }),
+      }),
+    );
+    expect(screen.getByTestId('owner-pill')).toHaveTextContent('Owner queue 0');
+    expect(screen.queryByTestId('owner-item-RCB-40')).toBeNull();
+  });
+});
+
+// jsdom does not compute layout, so the caps are asserted from the CSS source itself. Each rule is
+// sliced from its selector to the next `}`, never the whole file, so a matching declaration
+// elsewhere cannot satisfy it vacuously.
+describe('styles.css: the top of the Board', () => {
+  const css = readFileSync(STYLES_PATH, 'utf8');
+  const rule = (selector: RegExp) => css.match(selector)?.[0];
+
+  // RCB-66: the open LOG row scrolls inside itself instead of growing the panel.
   it('the .panel-row__body rule caps at min(45vh, 360px) with its own scroll', () => {
-    const css = readFileSync(STYLES_PATH, 'utf8');
-    const rule = css.match(/\.panel-row__body\s*\{[^}]*\}/);
-    expect(rule).not.toBeNull();
-    expect(rule?.[0]).toContain('max-height: min(45vh, 360px);');
-    expect(rule?.[0]).toContain('overflow-y: auto');
+    const r = rule(/\.panel-row__body\s*\{[^}]*\}/);
+    expect(r).toBeDefined();
+    expect(r).toContain('max-height: min(45vh, 360px);');
+    expect(r).toContain('overflow-y: auto');
   });
 
-  // RCB-66: the ticker is one full-width line again; the LogTimeline strip beside it is gone.
-  it('.status-row no longer exists in styles.css', () => {
-    const css = readFileSync(STYLES_PATH, 'utf8');
+  // RCB-66: two open parts could together push the board below the fold; capping the panel keeps
+  // the board at >= 45vh.
+  it('the .state-panel rule caps the whole panel at 55vh with its own scroll', () => {
+    const r = rule(/\.state-panel\s*\{[^}]*\}/);
+    expect(r).toBeDefined();
+    expect(r).toContain('max-height: 55vh;');
+    expect(r).toContain('overflow-y: auto');
+  });
+
+  // RCB-218: one long Seats list must not push the columns off the screen — each panel caps itself
+  // and scrolls its own body.
+  it('each detail panel caps its height and its body scrolls', () => {
+    expect(rule(/\.panel\s*\{[^}]*\}/)).toContain('max-height: 300px;');
+    expect(rule(/\.panel__body\s*\{[^}]*\}/)).toContain('overflow-y: auto');
+  });
+
+  it('the deck is three tracks wide, each min-width 0, and one track on a narrow window', () => {
+    expect(rule(/\.deck\s*\{[^}]*\}/)).toContain(
+      'grid-template-columns: minmax(0, 1.35fr) minmax(0, 1fr) minmax(0, 1fr);',
+    );
+    expect(css).toMatch(
+      /@media \(max-width: 900px\) \{\s*\.deck \{\s*grid-template-columns: minmax\(0, 1fr\);/,
+    );
+  });
+
+  // RCB-66 (RCB-45's bug species, one level up): with no column definition, `.main`'s implicit
+  // `auto` column sized the board to its widest child and blew it out past the viewport.
+  it('the .main rule pins its column to the viewport (grid-template-columns: minmax(0, 1fr))', () => {
+    expect(rule(/\.main\s*\{[^}]*\}/)).toContain('grid-template-columns: minmax(0, 1fr);');
+  });
+
+  it("the LIVE row's window rules are gone, and so is .status-row", () => {
+    expect(css).not.toMatch(/\.state-panel__window\b/);
     expect(css).not.toMatch(/\.status-row\b/);
   });
 
-  it('.log-timeline has no width declaration (it scrolls inside the LOG row body now)', () => {
-    const css = readFileSync(STYLES_PATH, 'utf8');
-    const rule = css.match(/\.log-timeline\s*\{[^}]*\}/);
-    expect(rule).not.toBeNull();
-    expect(rule?.[0]).not.toMatch(/width:/);
-  });
-
-  // RCB-66: RCB-45's bug species, one level up. `.main` had no column definition, so its implicit
-  // `auto` column sized `.board-view` (and the wide LIVE table inside it) to max-content, blowing
-  // the board out past the viewport — measured `.board-view` 2235px / `.state-panel__window
-  // table` 2193px in a 1316px viewport. `minmax(0, 1fr)` pins the column, same fix as `.app`.
-  it('the .main rule pins its column to the viewport (grid-template-columns: minmax(0, 1fr))', () => {
-    const css = readFileSync(STYLES_PATH, 'utf8');
-    const rule = css.match(/\.main\s*\{[^}]*\}/);
-    expect(rule).not.toBeNull();
-    expect(rule?.[0]).toContain('grid-template-columns: minmax(0, 1fr);');
-  });
-
-  // RCB-66: two open rows (e.g. LIVE + LOG) could together push the board below the fold even
-  // though each row body caps itself — measured `.state-panel` 707px / `.board` clientHeight 20px
-  // in an 844px-tall viewport. Capping the panel itself keeps the board at ≥45vh.
-  it('the .state-panel rule caps the whole panel at 55vh with its own scroll', () => {
-    const css = readFileSync(STYLES_PATH, 'utf8');
-    const rule = css.match(/\.state-panel\s*\{[^}]*\}/);
-    expect(rule).not.toBeNull();
-    expect(rule?.[0]).toContain('max-height: 55vh;');
-    expect(rule?.[0]).toContain('overflow-y: auto');
+  it('.log-timeline has no width declaration (it scrolls inside the LOG row body)', () => {
+    const r = rule(/\.log-timeline\s*\{[^}]*\}/);
+    expect(r).toBeDefined();
+    expect(r).not.toMatch(/width:/);
   });
 });

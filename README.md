@@ -67,7 +67,7 @@ starting a test run), mirrored as MCP `take_lease`/`release_lease`/`list_leases`
 `until` reads STALE, never silently held. See [`docs/REFERENCE.md`](docs/REFERENCE.md) §2.
 
 Two more plain files round out the practices program (P8.3): `.repoboard/STATE.md` — one page,
-rewritten in place, never appended, with an OWNER QUEUE generated fresh from cards that need a
+rewritten in place, never appended, with an Owner queue generated fresh from cards that need a
 decision every time it's read (never stored) — and `.repoboard/log/YYYY-MM-DD.md`, one file per
 day that every seat appends its own `##### <SEAT> <ts>: <title>` block to. `repoboard state
 --set-section LIVE "Tree is dev."`, `repoboard log --as claude/ops "armed the fires"`, and

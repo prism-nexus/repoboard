@@ -221,14 +221,6 @@ function NoBoard({ onShowMap }: { onShowMap: () => void }) {
   );
 }
 
-/** Scroll a column into view horizontally — StatePanel's owner-queue links use this. */
-function scrollColumnIntoView(columnId: string): void {
-  if (typeof document === 'undefined') return;
-  document
-    .querySelector(`[data-column="${columnId}"]`)
-    ?.scrollIntoView({ behavior: 'smooth', inline: 'center', block: 'nearest' });
-}
-
 export function Board() {
   const store = useStore();
   const {
@@ -240,6 +232,10 @@ export function Board() {
     hasBoard,
     state,
     log,
+    seats,
+    landings,
+    leases,
+    events,
     gateMembers,
     sizeFilter,
     sortBy,
@@ -248,10 +244,6 @@ export function Board() {
     unreachable,
   } = useBoardState();
   const now = useNow();
-  const decideColumnId = useMemo(
-    () => config?.columns.find((c) => c.decision === true)?.id ?? null,
-    [config],
-  );
   // RCB-67: `lanesFor`, `phaseInfoFor`, `rollup`, `useArrivals` and the DragOverlay below all
   // keep receiving the FULL `cards` — a gate or a parent can point at a card hidden by the size
   // filter, and the facts do not change because a card is filtered out of view. Only the columns
@@ -381,9 +373,13 @@ export function Board() {
     <div className="board-view">
       <StatePanel
         state={state}
+        seats={seats}
+        landings={landings}
+        leases={leases}
+        events={events}
         cards={cards}
-        decideColumnId={decideColumnId}
-        onGoToDecide={scrollColumnIntoView}
+        config={config}
+        onOpenCard={open}
         log={log}
         now={now}
       />

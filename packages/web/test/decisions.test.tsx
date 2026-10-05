@@ -232,3 +232,40 @@ describe('Drawer: Decision section', () => {
     expect(await screen.findByTestId('decision-answer')).toHaveTextContent('"go for it"');
   });
 });
+
+// RCB-218: an Owner-queue item (the Board's top panel) opens that card's drawer, where the A/B
+// buttons are — it used to scroll to a column that can be empty while the waiting card sits in Done.
+describe('Owner queue: item -> drawer -> answer', () => {
+  // CONTROL: in OwnerQueuePanel.tsx make the item's `onClick` do nothing — the drawer never opens
+  // and `decision-section` is not found.
+  it('clicking the item opens the card, and the drawer answers it with a POST', async () => {
+    const fetchMock = stubFetch(async () =>
+      card('RB-1', 'todo', {
+        decision: {
+          ...OPEN_DECISION,
+          chosen: 'B',
+          decidedBy: 'web',
+          decidedAt: '2026-09-02T23:00:00Z',
+        },
+      }),
+    );
+    const store = testStore();
+    // The waiting card sits in Done — the Needs-decision column is empty.
+    snapshot(store, [card('RB-1', 'done', { decision: OPEN_DECISION })]);
+    renderApp(store);
+    expect(document.querySelector('[data-column="decide"] [data-testid^="card-"]')).toBeNull();
+    fireEvent.click(screen.getByTestId('owner-item-RB-1'));
+    const section = screen.getByTestId('decision-section');
+    expect(within(section).getByTestId('decision-option-B')).toHaveTextContent('no, wait');
+
+    fireEvent.click(within(section).getByTestId('decision-option-B'));
+    await act(async () => {
+      fireEvent.click(within(section).getByText('Decide'));
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe('/api/cards/RB-1/decide');
+    expect(JSON.parse(String(init.body))).toEqual({ letter: 'B', actor: 'web' });
+  });
+});

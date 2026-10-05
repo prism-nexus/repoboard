@@ -1,10 +1,14 @@
 /**
  * P8.3, locked decision 7: the daily log as a timeline — newest block first, a seat avatar, the
  * title, and an expand-for-text disclosure. RCB-66: it is now the LOG row's body in `StatePanel`
- * (closed by default), so every test opens the row first.
+ * (closed by default), so every test opens the row first. RCB-218: the row's label names the day
+ * when the payload is not today's, and each block carries a ▲ ▼ ✓ • mark (each test below that
+ * is new names its CONTROL — the perturbation of the source that makes it fail; none was run,
+ * the brief forbids any runner, the gating seat watches each fail).
  */
 import { fireEvent, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { logBlockKind, logDayLabel } from '../src/components/LogTimeline.jsx';
 import { card, renderApp, snapshot, testStore } from './helpers.jsx';
 
 beforeEach(() => vi.useFakeTimers({ now: new Date('2026-09-02T22:41:10Z') }));
@@ -211,5 +215,135 @@ describe('LogTimeline', () => {
     renderApp(store);
     const head = screen.getByRole('button', { name: /^LOG/ });
     expect(head).toHaveTextContent('2 blocks today');
+  });
+});
+
+// ---- RCB-218: the day the LOG row is showing, and a mark per block -------------------------------
+
+const MARKS_LOG = [
+  '# Log — 2026-09-02',
+  '',
+  '##### BUILDER 2026-09-02T09:00:00Z: brief dispatched to a subagent',
+  '',
+  'text',
+  '',
+  '##### BUILDER 2026-09-02T09:10:00Z: RB-9 LANDED 7e2c118: the guard scans every commit',
+  '',
+  'text',
+  '',
+  '##### BUILDER 2026-09-02T09:20:00Z: DOWN at the context line: RB-9 landed',
+  '',
+  'text',
+  '',
+  '##### BUILDER 2026-09-02T09:30:00Z: UP (A7B2): RB-10 next',
+  '',
+  'text',
+  '',
+].join('\n');
+
+describe('logBlockKind', () => {
+  // CONTROL: in LogTimeline.tsx change `LOG_KIND_RE.up` to `/UP/` — "BACKUP", "UP-TO-DATE" and
+  // "SETUP" read as a seat coming up and the `other` rows fail; drop the `(?<![\w-])` look-behind on
+  // `down` — "COUNTDOWN" reads as ▼.
+  it.each([
+    ['UP (A7B2): RB-10 next', 'up'],
+    ['DOWN at the context line: RB-9 landed', 'down'],
+    ['RB-9 LANDED 7e2c118: the guard', 'landed'],
+    ['brief dispatched to a subagent', 'other'],
+    ['set up the rig', 'other'], // lower-case: prose, not a seat coming up
+    ['BACKUP finished', 'other'],
+    ['UP-TO-DATE check', 'other'],
+    ['COUNTDOWN started', 'other'],
+    ['', 'other'],
+  ])('%j is %s', (title, kind) => {
+    expect(logBlockKind(title)).toBe(kind);
+  });
+
+  // CONTROL: in LogTimeline.tsx `logBlockKind` check the kinds in a fixed order (up, down, landed
+  // with early returns) instead of by position — the second row reads ▲ and this fails.
+  it('a title naming more than one is the one whose keyword comes first', () => {
+    expect(logBlockKind('DOWN: RB-9 LANDED')).toBe('down');
+    expect(logBlockKind('RB-9 LANDED, builder UP')).toBe('landed');
+    expect(logBlockKind('UP: finishing what LANDED earlier')).toBe('up');
+  });
+});
+
+describe('logDayLabel', () => {
+  const now = Date.parse('2026-09-02T22:41:10Z');
+
+  // CONTROL: in LogTimeline.tsx `logDayLabel` delete the `yesterday` branch — the second row fails;
+  // delete the first `date === …` comparison — the first row fails.
+  it('today, yesterday, or the date itself', () => {
+    expect(logDayLabel('2026-09-02', now)).toBe('today');
+    expect(logDayLabel('2026-09-01', now)).toBe('yesterday');
+    expect(logDayLabel('2026-08-30', now)).toBe('2026-08-30');
+    expect(logDayLabel(undefined, now)).toBe('today');
+  });
+
+  it('a day across a month boundary is still "yesterday"', () => {
+    expect(logDayLabel('2026-08-31', Date.parse('2026-09-01T00:30:00Z'))).toBe('yesterday');
+  });
+});
+
+describe('the LOG row names the day when it is not today', () => {
+  // CONTROL: in StatePanel.tsx replace `${day}` in `logMeta` with the literal `today` — the
+  // "yesterday" and the date rows fail.
+  it('yesterday: "N blocks yesterday · <age>"', () => {
+    const store = testStore();
+    snapshot(store, [card('RB-1', 'todo')], undefined, undefined, undefined, undefined, {
+      date: '2026-09-01',
+      text: LOG_TEXT.replaceAll('2026-09-02', '2026-09-01'),
+    });
+    renderApp(store);
+    const head = screen.getByRole('button', { name: /^LOG/ });
+    expect(head).toHaveTextContent('2 blocks yesterday');
+    expect(head).not.toHaveTextContent('today');
+    // The newest block (18:30 yesterday) is 28h11m before the pinned 22:41 clock.
+    expect(head).toHaveTextContent('28h ago');
+  });
+
+  it('an older day: "N blocks on <date> · <age>"', () => {
+    const store = testStore();
+    snapshot(store, [card('RB-1', 'todo')], undefined, undefined, undefined, undefined, {
+      date: '2026-08-30',
+      text: LOG_TEXT.replaceAll('2026-09-02', '2026-08-30'),
+    });
+    renderApp(store);
+    const head = screen.getByRole('button', { name: /^LOG/ });
+    expect(head).toHaveTextContent('2 blocks on 2026-08-30');
+    // 18:30 on the 30th to 22:41 on the 2nd: 76h11m, which `relTime` rounds to 3 days.
+    expect(head).toHaveTextContent('3d ago');
+  });
+
+  it('today keeps its old wording', () => {
+    const store = testStore();
+    snapshot(store, [card('RB-1', 'todo')], undefined, undefined, undefined, undefined, {
+      date: '2026-09-02',
+      text: LOG_TEXT,
+    });
+    renderApp(store);
+    const head = screen.getByRole('button', { name: /^LOG/ });
+    expect(head).toHaveTextContent('2 blocks today');
+  });
+});
+
+describe('a mark per block', () => {
+  // CONTROL: in LogTimeline.tsx render `LOG_MARK.other` for every block — only • appears.
+  it('▲ for UP, ▼ for DOWN, ✓ for LANDED, • for the rest — newest block first', () => {
+    const store = testStore();
+    snapshot(store, [card('RB-1', 'todo')], undefined, undefined, undefined, undefined, {
+      date: '2026-09-02',
+      text: MARKS_LOG,
+    });
+    renderApp(store);
+    openLog();
+    const marks = [...screen.getByTestId('log-timeline').querySelectorAll('.log-timeline__mark')];
+    expect(marks.map((m) => m.textContent)).toEqual(['▲', '▼', '✓', '•']);
+    expect(marks.map((m) => m.getAttribute('data-kind'))).toEqual([
+      'up',
+      'down',
+      'landed',
+      'other',
+    ]);
   });
 });

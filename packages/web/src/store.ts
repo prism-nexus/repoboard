@@ -21,9 +21,11 @@ import {
 import { apiPath, locationForRepo, wsPath } from './repo-key.js';
 import type {
   ClientMessage,
+  LandingsPayload,
   LeasesPayload,
   LogPayload,
   ReposPayload,
+  SeatRowPayload,
   ServerMessage,
   StatePayload,
   SystemsPayload,
@@ -65,8 +67,17 @@ export interface State {
   leases: LeasesPayload | null;
   /** P8.3: `.repoboard/STATE.md`, or null before the first snapshot / before it exists. */
   state: StatePayload | null;
-  /** P8.3: today's `.repoboard/log/<date>.md`, or null before the first snapshot / before it exists. */
+  /** P8.3: the newest `.repoboard/log/<date>.md` with entries (RCB-217: today's, else the newest
+   * earlier day within 14 days), or null before the first snapshot / before it exists. */
   log: LogPayload | null;
+  /** RCB-217/218: the seat rows the server computed, or `null` before the first snapshot or from a
+   * server that predates them — the Board then reads STATE.md's SEATS section with core's parser.
+   * A snapshot resets it (`msg.seats ?? null`) so a repo switch never carries another repo's seats. */
+  seats: SeatRowPayload[] | null;
+  /** RCB-217/218: commits grouped by card id, from git, or `null` before the first snapshot or from
+   * a server that predates them (the Landed panel then says landings need a newer server). Reset on
+   * a snapshot exactly like `seats`. */
+  landings: LandingsPayload | null;
   /** RCB-98: `.repoboard/systems.yml`, or `null` before the first snapshot (the Flow view's
    * "loading" state — distinct from `exists: false`, which is a real, inert answer). */
   systems: SystemsPayload | null;
@@ -229,6 +240,8 @@ export function createStore(factory: TransportFactory, opts: StoreOptions = {}):
     leases: null,
     state: null,
     log: null,
+    seats: null,
+    landings: null,
     systems: null,
     gateMembers: [],
     flowEnv: 'both',
@@ -350,6 +363,8 @@ export function createStore(factory: TransportFactory, opts: StoreOptions = {}):
             systems: msg.systems ?? null,
             state: msg.state ?? null,
             log: msg.log ?? null,
+            seats: msg.seats ?? null,
+            landings: msg.landings ?? null,
             gateMembers: msg.gateMembers ?? [],
             everConnected: true,
             unreachable: false,
@@ -397,6 +412,12 @@ export function createStore(factory: TransportFactory, opts: StoreOptions = {}):
           break;
         case 'log':
           set({ log: { date: msg.date, text: msg.text } });
+          break;
+        case 'seats':
+          set({ seats: msg.seats });
+          break;
+        case 'landings':
+          set({ landings: msg.landings });
           break;
         case 'gateMembers':
           set({ gateMembers: msg.members });

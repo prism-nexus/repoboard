@@ -49,6 +49,51 @@ export interface LogPayload {
 }
 
 /**
+ * RCB-217/218: one SEATS row as the server computes it (`seatRowPayloads` in core, built on
+ * `seatListRows`): the bullet's status and stamp joined to the recorded holder. Every answer the
+ * server could not give is `null`, never a placeholder: `at` is null when the stamp does not parse,
+ * `tag`/`label` when nobody holds the seat, `live` when there is no holder to probe, `inFlight`/
+ * `owes` when the bullet carries no such line. Same shape as core's export of the same name.
+ */
+export interface SeatRowPayload {
+  name: string;
+  status: 'UP' | 'DOWN';
+  /** ISO time of the stamp, `null` when it does not parse. */
+  at: string | null;
+  tag: string | null;
+  label: string | null;
+  live: 'alive' | 'dead' | 'unknown' | null;
+  inFlight: string | null;
+  owes: string | null;
+}
+
+/** RCB-217/218: one commit of a landing — `sha` is the short form. */
+export interface LandingCommit {
+  sha: string;
+  at: string;
+  author: string;
+  subject: string;
+}
+
+/** RCB-217/218: every commit whose subject starts with a card id, grouped under that card, newest
+ * first. The web joins title and column from the live cards — the payload carries neither. */
+export interface LandingRow {
+  cardId: string;
+  commits: LandingCommit[];
+}
+
+/**
+ * RCB-217/218: the `landings` half of the WS snapshot and message. `web` is the same GitHub https
+ * base `RepoGitPayload.web` carries (`null` when unknown — then a sha is text, not a link);
+ * `source` says where the rows came from, shown verbatim.
+ */
+export interface LandingsPayload {
+  rows: LandingRow[];
+  web: string | null;
+  source: string;
+}
+
+/**
  * RCB-97/98: `GET /api/systems`'s whole payload, and the `systems` half of the WS snapshot/message.
  * `exists: false` means no `systems.yml` at all (`doc: null`, `errors: []`, inert per plan §3.1);
  * `exists: true` with `doc: null` means the file is there but failed to parse (`errors` non-empty).
@@ -127,6 +172,11 @@ export type ServerMessage =
       systems?: SystemsPayload;
       state?: StatePayload;
       log?: LogPayload;
+      /** RCB-217/218: optional the same way `state`/`log` are — absent means a server that
+       * predates it, and the web falls back to parsing STATE.md's SEATS section with core's
+       * `seatListRows` (`seats`), or says landings need a newer server (`landings`). */
+      seats?: SeatRowPayload[];
+      landings?: LandingsPayload;
       /** RCB-154: a WORKSPACE's opened member boards, gathered server-side — see the header note. */
       gateMembers?: GateMemberFacts[];
     }
@@ -149,6 +199,11 @@ export type ServerMessage =
   | ({ type: 'systems' } & SystemsPayload)
   | { type: 'state'; state: StatePayload }
   | { type: 'log'; date: string; text: string }
+  /** RCB-217/218: the seat rows, re-sent after every STATE.md change and when a holder's liveness
+   * changes — the store replaces `state.seats` wholesale, same as `leases`. */
+  | { type: 'seats'; seats: SeatRowPayload[] }
+  /** RCB-217/218: re-sent when HEAD changes — the store replaces `state.landings` wholesale. */
+  | { type: 'landings'; landings: LandingsPayload }
   /**
    * RCB-69: the server already sends these for a refused (`error`) or warned (`warning`)
    * `card:move`/`card:update` (`repo-context.ts`'s `onClientMessage`) — declaring them here is

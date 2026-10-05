@@ -1,11 +1,17 @@
 /**
  * P8.2, locked decision 9: the Now strip under the TopBar — held/stale/next-window, and the
  * quiet line when there is nothing to say.
+ *
+ * RCB-218: on the BOARD view the Now strip and the Ticker are replaced by the status line (a lease
+ * pill per held lease, the newest event on the right); every other view keeps both. So the strip's
+ * own tests render the Map view, and the Board tests below pin the replacement.
  */
-import { screen } from '@testing-library/react';
+import { act, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import type { Store } from '../src/store.js';
 import type { LeasesPayload } from '../src/wire.js';
 import { card, emptyLeases, renderApp, snapshot, testStore } from './helpers.jsx';
+import { sendSnapshot } from './status-fixtures.js';
 
 const NOW_ISO = '2026-09-02T22:41:10Z';
 
@@ -15,11 +21,17 @@ const NOW_ISO = '2026-09-02T22:41:10Z';
 beforeEach(() => vi.useFakeTimers({ now: new Date(NOW_ISO) }));
 afterEach(() => vi.useRealTimers());
 
+/** The Now strip lives on every view but the Board, so its own tests render the Map. */
+function renderOnMap(store: Store) {
+  store.setView('map');
+  return renderApp(store);
+}
+
 describe('NowStrip', () => {
   it('collapses to the quiet line when there is nothing held or scheduled', () => {
     const store = testStore();
     snapshot(store, [card('RB-1', 'todo')], undefined, undefined, emptyLeases());
-    renderApp(store);
+    renderOnMap(store);
     const strip = screen.getByTestId('now-strip');
     expect(strip).toHaveTextContent('no leases, no windows');
   });
@@ -27,7 +39,7 @@ describe('NowStrip', () => {
   it('with no leases payload at all (pre-P8.2 server), also reads as the quiet line', () => {
     const store = testStore();
     snapshot(store, [card('RB-1', 'todo')]); // no leases arg
-    renderApp(store);
+    renderOnMap(store);
     expect(screen.getByTestId('now-strip')).toHaveTextContent('no leases, no windows');
   });
 
@@ -47,7 +59,7 @@ describe('NowStrip', () => {
     };
     const store = testStore();
     snapshot(store, [card('RB-1', 'todo')], undefined, undefined, leases);
-    renderApp(store);
+    renderOnMap(store);
     const item = screen.getByTestId('now-strip-holding-vitest-lock');
     expect(item).toHaveTextContent('holding:');
     expect(item).toHaveTextContent('vitest-lock');
@@ -65,7 +77,7 @@ describe('NowStrip', () => {
     };
     const store = testStore();
     snapshot(store, [card('RB-1', 'todo')], undefined, undefined, leases);
-    renderApp(store);
+    renderOnMap(store);
     expect(screen.getByTestId('now-strip-holding-r')).toHaveTextContent('until —');
   });
 
@@ -85,7 +97,7 @@ describe('NowStrip', () => {
     };
     const store = testStore();
     snapshot(store, [card('RB-1', 'todo')], undefined, undefined, leases);
-    renderApp(store);
+    renderOnMap(store);
     expect(screen.queryByTestId('now-strip-holding-r')).toBeNull();
     const stale = screen.getByTestId('now-strip-stale');
     expect(stale).toHaveTextContent('stale ×1');
@@ -108,7 +120,7 @@ describe('NowStrip', () => {
     };
     const store = testStore();
     snapshot(store, [card('RB-1', 'todo')], undefined, undefined, leases);
-    renderApp(store);
+    renderOnMap(store);
     const item = screen.getByTestId('now-strip-window');
     expect(item).toHaveTextContent('next window: cold4 gate');
     expect(item).toHaveTextContent('22:50Z');
@@ -139,11 +151,11 @@ describe('NowStrip', () => {
     };
     const store = testStore();
     snapshot(store, [card('RB-1', 'todo')], undefined, undefined, leases);
-    renderApp(store);
+    renderOnMap(store);
     expect(screen.getByTestId('now-strip-window')).toHaveTextContent('soon');
   });
 
-  it('renders on every view (also present on the Map tab)', () => {
+  it('renders on the Map tab (every view but the Board keeps it)', () => {
     const leases: LeasesPayload = {
       leases: [{ resource: 'r', holder: 'claude/ops', since: NOW_ISO }],
       windows: [],
@@ -152,8 +164,108 @@ describe('NowStrip', () => {
     };
     const store = testStore();
     snapshot(store, [card('RB-1', 'todo')], undefined, undefined, leases);
-    renderApp(store);
-    store.setView('map');
+    renderOnMap(store);
     expect(screen.getByTestId('now-strip-holding-r')).toBeInTheDocument();
+  });
+});
+
+describe('the Board: the status line replaces the Now strip and the Ticker (RCB-218)', () => {
+  const held: LeasesPayload = {
+    leases: [
+      {
+        resource: 'vitest-lock',
+        holder: 'claude/ops',
+        since: NOW_ISO,
+        until: '2026-09-02T23:30:00Z',
+      },
+    ],
+    windows: [],
+    stale: [],
+    now: NOW_ISO,
+  };
+
+  // CONTROL: in App.tsx render `<NowStrip>` and `<Ticker>` unconditionally (drop the
+  // `state.view === 'board' ? null : …` wrapper) — both reappear on the Board and this fails.
+  it('the Board has neither the strip nor the ticker; the Map has both', () => {
+    const store = testStore();
+    sendSnapshot(store, { cards: [card('RB-1', 'todo')], leases: held });
+    renderApp(store);
+    expect(screen.queryByTestId('now-strip')).toBeNull();
+    expect(document.querySelector('.ticker')).toBeNull();
+    act(() => store.setView('map'));
+    expect(screen.getByTestId('now-strip')).toBeInTheDocument();
+    expect(document.querySelector('.ticker')).not.toBeNull();
+  });
+
+  // CONTROL: in StatusLine.tsx delete the `leases.leases.map(…)` pills — the pill is gone.
+  it('a held lease is a pill: resource, holder, until — and no "holding:" strip text', () => {
+    const store = testStore();
+    sendSnapshot(store, { cards: [card('RB-1', 'todo')], leases: held });
+    renderApp(store);
+    const pill = screen.getByTestId('lease-pill-vitest-lock');
+    expect(pill).toHaveTextContent('vitest-lock');
+    expect(pill).toHaveTextContent('ops'); // shortActor drops the claude/ prefix
+    expect(pill).toHaveTextContent('until 23:30Z');
+    expect(pill).toHaveAttribute('data-stale', 'false');
+    expect(pill).not.toHaveClass('pill--stale');
+    expect(screen.getByTestId('status-line')).not.toHaveTextContent('holding:');
+  });
+
+  // CONTROL: in StatusLine.tsx compute `isStale` as `false` — the pill is not amber and this fails.
+  it('a stale lease is the same pill in the warning style, and says so', () => {
+    const store = testStore();
+    sendSnapshot(store, {
+      cards: [card('RB-1', 'todo')],
+      leases: { ...held, stale: ['vitest-lock'] },
+    });
+    renderApp(store);
+    const pill = screen.getByTestId('lease-pill-vitest-lock');
+    expect(pill).toHaveAttribute('data-stale', 'true');
+    expect(pill).toHaveClass('pill--stale');
+    expect(pill).toHaveTextContent('stale');
+  });
+
+  // CONTROL: in StatusLine.tsx render one placeholder pill when `leases` is empty — the quiet case
+  // grows a pill nobody holds.
+  it('with no lease held there is no lease pill at all (the old quiet line is not carried over)', () => {
+    const store = testStore();
+    sendSnapshot(store, { cards: [card('RB-1', 'todo')], leases: emptyLeases() });
+    renderApp(store);
+    expect(screen.queryAllByTestId(/^lease-pill-/)).toHaveLength(0);
+    expect(screen.getByTestId('status-line')).not.toHaveTextContent('no leases, no windows');
+  });
+
+  // CONTROL: in status-model.ts `newestEvent` return `events[0]` — the older event shows.
+  it('"last:" is the newest event, worded with the ticker\'s verb, and says so when there is none', () => {
+    const store = testStore();
+    sendSnapshot(store, { cards: [card('RB-9', 'todo')] });
+    renderApp(store);
+    expect(screen.getByTestId('status-last')).toHaveTextContent('last: no activity yet');
+    act(() => {
+      store.dispatch({
+        type: 'event',
+        event: {
+          ts: '2026-09-02T21:00:00Z',
+          actor: 'claude/builder',
+          type: 'create',
+          cardId: 'RB-8',
+          from: null,
+          to: 'todo',
+        },
+      });
+      store.dispatch({
+        type: 'event',
+        event: {
+          ts: '2026-09-02T22:29:10Z',
+          actor: 'claude/builder',
+          type: 'move',
+          cardId: 'RB-9',
+          from: 'todo',
+          to: 'doing',
+        },
+      });
+    });
+    const last = screen.getByTestId('status-last');
+    expect(last.textContent).toBe('last: builder moved RB-9 → doing · 12m ago');
   });
 });

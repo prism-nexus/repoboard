@@ -4,7 +4,7 @@
  * into someone else's repo — read-only is the feature (plan §5 P7.2, O7).
  */
 import { defaultBoardConfig } from '@repoboard/core';
-import { screen } from '@testing-library/react';
+import { screen, within } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
 import { card, renderApp, snapshot, testStore } from './helpers.jsx';
 
@@ -58,7 +58,10 @@ describe('map-only mode (hasBoard: false)', () => {
     renderApp(store);
 
     expect(screen.queryByTestId('no-board')).toBeNull();
-    expect(screen.getAllByRole('region')).toHaveLength(config.columns.length);
+    // RCB-218: the deck above the columns is three named regions of its own; count the board's.
+    expect(within(screen.getByTestId('board')).getAllByRole('region')).toHaveLength(
+      config.columns.length,
+    );
     expect(store.getState().view).toBe('board');
   });
 

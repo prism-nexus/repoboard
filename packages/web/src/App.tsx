@@ -65,8 +65,14 @@ function Shell() {
         onFun={store.setFun}
         onTheme={store.setTheme}
       />
-      <NowStrip leases={state.leases} now={now} />
-      <Ticker events={state.events} cards={state.cards} fun={state.fun} now={now} />
+      {/* RCB-218: on the Board both are replaced by its status line (`StatePanel`), which shows
+          the seats, the held leases and the newest event itself. Every other view keeps them. */}
+      {state.view === 'board' ? null : (
+        <>
+          <NowStrip leases={state.leases} now={now} />
+          <Ticker events={state.events} cards={state.cards} fun={state.fun} now={now} />
+        </>
+      )}
       {state.everConnected && !state.connected ? (
         <div className="banner" role="alert">
           Disconnected from the server. Reconnecting… the board shows the last state it saw.

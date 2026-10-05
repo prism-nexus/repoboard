@@ -5,6 +5,8 @@ All notable changes to this project are documented in this file. The format is b
 
 ## [Unreleased]
 
+## [0.3.2] — 2026-10-05
+
 ### Added
 
 - **A member board reads its home board's seats, read-only (RCB-184).** A new optional

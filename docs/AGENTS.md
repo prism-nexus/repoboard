@@ -24,10 +24,10 @@ docs/REFERENCE.md §7, §8.
 
 Use the surfaces in the order below. Per-operation costs measured 2026-09-03, standing costs
 re-measured 2026-09-22 (bytes on the wire, ≈4 bytes per token): the CLI costs ~40 B in and 33 B
-out per move with no standing cost beyond reading this page once (26.2 KB, measured 2026-10-01); MCP
+out per move with no standing cost beyond reading this page once (26.3 KB, measured 2026-10-05); MCP
 costs 27.9 KB (30 tools, measured 2026-09-30) of tool schema per turn where the harness loads it, ~80 B per call and
-~200 B per result; a direct `sed` is ~60 B but a correct move also bumps `updated` and appends a
-log line. The CLI is cheapest per operation; MCP pays off when you have no shell or your harness
+~200 B per result; a direct `sed` is 70 B of command (counted 2026-10-05) but a correct move also bumps `updated`
+and appends a log line. The CLI is cheapest per operation; MCP pays off when you have no shell or your harness
 loads schemas on demand; the file edit always works.
 
 This page is for a seat working the maintainers' own board. An outside contributor to this repo
@@ -166,7 +166,7 @@ are cheap and return the column ids. `list_cards` takes optional `status`, `assi
 filters (exact match, AND) and `full: true` to include bodies; without it, rows are the same
 compact shape as the CLI's `--json` — byte-for-byte the same formatter: on this repo's 31 cards
 the `list_cards` content is 7,638 B against the CLI's 7,639 B, and 20,757 B with `full: true`
-(measured 2026-09-07). A
+against 20,758 B (measured 2026-09-07); the 1 B is the trailing newline the CLI prints. A
 tool-level mistake (unknown card, unknown column, empty patch) comes back as an error result
 naming the field; a WIP breach comes back as a warning with the moved card. The tool actor
 defaults to `$REPOBOARD_ACTOR`, then `mcp`.

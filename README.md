@@ -295,10 +295,10 @@ value is inert.
 
 ## Status
 
-Pre-1.0, at 0.3.2. On npm as `repoboard` since 2026-09-25 (`npx repoboard` or `npm install -g
+Pre-1.0, at 0.3.3. On npm as `repoboard` since 2026-09-25 (`npx repoboard` or `npm install -g
 repoboard`). It needs Node 20.19 or newer: its dependencies `chokidar` 5.0.0 and `readdirp` 5.1.1
 each declare `node >= 20.19.0` in their own `package.json`, and `engines.node` in this tree is
-`>=20.19.0`. `repoboard@0.3.2` packs to a 463.8 kB tarball of 8 files (measured 2026-10-05 with
+`>=20.19.0`. `repoboard@0.3.3` packs to a 463.9 kB tarball of 8 files (measured 2026-10-06 with
 `npm pack` in `packages/server` after `pnpm build`). `@repoboard/core` is internal: not
 published, bundled into the CLI (`packages/server/tsup.config.ts`'s `noExternal`) — depend on
 `repoboard`.

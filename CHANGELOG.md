@@ -5,8 +5,13 @@ All notable changes to this project are documented in this file. The format is b
 
 ## [Unreleased]
 
+## [0.3.3] — 2026-10-06
+
 ### Fixed
 
+- **The dashboard has a favicon (RCB-210).** `packages/web/index.html` carries one inline SVG
+  `<link rel="icon">` (a data URI, 230 B href), so browsers stop requesting `/favicon.ico` and
+  getting a 404.
 - **The published `package.json` has no `workspace:` range (RCB-212).** `@repoboard/core` (private,
   bundled by tsup) moved from the server's devDependencies to the monorepo root's, so `npm pack`
   no longer copies `"@repoboard/core": "workspace:*"` into the tarball; `npm install` inside the

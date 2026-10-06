@@ -5,6 +5,15 @@ All notable changes to this project are documented in this file. The format is b
 
 ## [Unreleased]
 
+### Fixed
+
+- **The published `package.json` has no `workspace:` range (RCB-212).** `@repoboard/core` (private,
+  bundled by tsup) moved from the server's devDependencies to the monorepo root's, so `npm pack`
+  no longer copies `"@repoboard/core": "workspace:*"` into the tarball; `npm install` inside the
+  unpacked 0.3.2 package failed with EUNSUPPORTEDPROTOCOL. `scripts/pack-smoke.sh` gains two steps
+  (now 11): the packed manifest carries no `workspace:` range, and `npm install --ignore-scripts
+  --dry-run` succeeds inside the unpacked package.
+
 ## [0.3.2] — 2026-10-05
 
 ### Added

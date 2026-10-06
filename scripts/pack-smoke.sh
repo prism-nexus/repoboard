@@ -34,13 +34,36 @@ trap cleanup EXIT
 echo "pack-smoke: workdir $WORKDIR"
 cd "$WORKDIR"
 
+# --- packed manifest checks (RCB-212) --------------------------------------------------------
+# The tarball's own package.json is what npm and the registry read. `@repoboard/core` is private
+# and bundled, so a `workspace:` range left in it (devDependencies included) makes `npm install`
+# inside the unpacked package die with EUNSUPPORTEDPROTOCOL.
+PACKED_MANIFEST="$(tar -xOzf "$TARBALL" package/package.json)"
+if echo "$PACKED_MANIFEST" | grep -q 'workspace:'; then
+  echo "pack-smoke: FAIL the packed package.json carries a workspace: range:" >&2
+  echo "$PACKED_MANIFEST" | grep 'workspace:' >&2
+  exit 1
+fi
+echo "pack-smoke: step 1/11 packed package.json has no workspace: range OK"
+
+mkdir unpacked
+tar -xzf "$TARBALL" -C unpacked
+if ! (cd unpacked/package && npm install --ignore-scripts --dry-run >../install-dry-run.log 2>&1); then
+  echo "pack-smoke: FAIL npm install --ignore-scripts --dry-run failed inside the unpacked package:" >&2
+  cat unpacked/install-dry-run.log >&2 || true
+  exit 1
+fi
+echo "pack-smoke: step 2/11 npm install --ignore-scripts --dry-run in the unpacked package OK"
+rm -rf unpacked
+# --- end packed manifest checks ---------------------------------------------------------------
+
 git init -q
 git config user.name 'pack-smoke'
 git config user.email 'pack-smoke@example.com'
-echo "pack-smoke: step 1/9 git init OK"
+echo "pack-smoke: step 3/11 git init OK"
 
 npm install --silent "$TARBALL" >/dev/null
-echo "pack-smoke: step 2/9 npm install tarball OK"
+echo "pack-smoke: step 4/11 npm install tarball OK"
 
 EXPECTED_VERSION="$(node -e "
 const { execFileSync } = require('node:child_process');
@@ -52,13 +75,13 @@ if [ "$ACTUAL_VERSION" != "$EXPECTED_VERSION" ]; then
   echo "pack-smoke: FAIL --version printed '$ACTUAL_VERSION', expected '$EXPECTED_VERSION'" >&2
   exit 1
 fi
-echo "pack-smoke: step 3/9 --version == $EXPECTED_VERSION OK"
+echo "pack-smoke: step 5/11 --version == $EXPECTED_VERSION OK"
 
 npx --no-install repoboard init >/dev/null
-echo "pack-smoke: step 4/9 init OK"
+echo "pack-smoke: step 6/11 init OK"
 
 npx --no-install repoboard card add "Hello: world" >/dev/null
-echo "pack-smoke: step 5/9 card add OK"
+echo "pack-smoke: step 7/11 card add OK"
 
 CARD_LIST="$(npx --no-install repoboard card list)"
 if ! echo "$CARD_LIST" | grep -q 'RB-2'; then
@@ -66,13 +89,13 @@ if ! echo "$CARD_LIST" | grep -q 'RB-2'; then
   echo "$CARD_LIST" >&2
   exit 1
 fi
-echo "pack-smoke: step 6/9 card list contains RB-2 OK"
+echo "pack-smoke: step 8/11 card list contains RB-2 OK"
 
 if ! npx --no-install repoboard check >/dev/null; then
   echo "pack-smoke: FAIL check exited non-zero" >&2
   exit 1
 fi
-echo "pack-smoke: step 7/9 check exits 0 OK"
+echo "pack-smoke: step 9/11 check exits 0 OK"
 
 PORT="$(node -e "
 const net = require('node:net');
@@ -111,7 +134,7 @@ if ! echo "$BODY" | grep -q '<title>repoboard</title>'; then
   echo "$BODY" >&2
   exit 1
 fi
-echo "pack-smoke: step 8/9 serve: GET / -> 200 with <title>repoboard</title> OK"
+echo "pack-smoke: step 10/11 serve: GET / -> 200 with <title>repoboard</title> OK"
 
 kill "$SERVER_PID" 2>/dev/null || true
 wait "$SERVER_PID" 2>/dev/null || true
@@ -125,6 +148,6 @@ if ! echo "$MCP_RESPONSE" | grep -q '"name":"repoboard"'; then
   cat mcp.log >&2 || true
   exit 1
 fi
-echo "pack-smoke: step 9/9 mcp initialize -> serverInfo.name repoboard OK"
+echo "pack-smoke: step 11/11 mcp initialize -> serverInfo.name repoboard OK"
 
 echo "pack-smoke: all steps passed"

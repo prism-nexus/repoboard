@@ -10,13 +10,14 @@
 #   <sha>             selects that one commit; it must be a candidate (unlike remote main by
 #                     patch), or the run exits 1
 #
-# Candidates are the `+` lines of `git cherry <remote>/main <from>`: commits whose patch is not
-# already on the remote's main. They are picked oldest first onto a detached worktree of
-# <remote>/main under a temp dir; the caller's HEAD, index and working tree are never touched, and
-# the worktree is removed on exit. Then the public check (public-guard.sh push) runs over exactly
-# what would go out. Without --apply that is all: the outgoing commits and a diff stat are printed
-# and nothing is pushed. With --apply and a clean check the picked tip is pushed as
-# `publish/<ids joined by ->` and `gh pr create --base main` opens the pull request.
+# Candidates are the non-merge commits in `<remote>/main..<from>` whose patch-id matches no
+# non-merge commit anywhere in the remote's main history. They are picked oldest first onto a
+# detached worktree of <remote>/main under a temp dir; the caller's HEAD, index and working tree
+# are never touched, and the worktree is removed on exit. Then the public check
+# (public-guard.sh push) runs over exactly what would go out. Without --apply that is all: the
+# outgoing commits and a diff stat are printed and nothing is pushed. With --apply and a clean
+# check the picked tip is pushed as `publish/<ids joined by ->` and `gh pr create --base main`
+# opens the pull request.
 #
 # No denylist (or no patterns in it) prints `public check: NO DENYLIST`: a dry run still shows what
 # would go out, but --apply refuses — an unconfigured check must not wave a publish through. A hit
@@ -88,17 +89,39 @@ git -C "$root" rev-parse --verify --quiet "$base^{commit}" > /dev/null \
   || die "$base_name is not a commit here"
 git -C "$root" rev-parse --verify --quiet "$from^{commit}" > /dev/null \
   || die "--from $from is not a commit here"
-git -C "$root" cherry "$base_name" "$from" > "$tmp/cherry" 2> "$tmp/out" || {
+# Not `git cherry`: it compares patch-ids only against main's commits since the merge-base, and
+# after a merge-back (origin/main merged into dev) that is nothing, so every rebase-merged copy of a
+# dev commit would be a candidate again. Compare against every non-merge commit in <base>'s history.
+# patch-id lines are `<patch-id> <commit>`; an empty commit has none and stays a candidate.
+git -C "$root" log -p --no-merges --no-color --no-ext-diff "$base_name" > "$tmp/base.diff" \
+  2> "$tmp/out" || {
   cat "$tmp/out" >&2
-  die "git cherry $base_name $from failed"
+  die "git log $base_name failed"
+}
+git patch-id --stable < "$tmp/base.diff" > "$tmp/base.pids" 2> "$tmp/out" \
+  || { cat "$tmp/out" >&2; die "git patch-id of $base_name failed"; }
+cut -d ' ' -f 1 "$tmp/base.pids" | sort -u > "$tmp/base.ids"
+git -C "$root" log -p --no-merges --no-color --no-ext-diff "$base_name..$from" > "$tmp/from.diff" \
+  2> "$tmp/out" || {
+  cat "$tmp/out" >&2
+  die "git log $base_name..$from failed"
+}
+git patch-id --stable < "$tmp/from.diff" > "$tmp/from.ids" 2> "$tmp/out" \
+  || { cat "$tmp/out" >&2; die "git patch-id of $base_name..$from failed"; }
+git -C "$root" rev-list --reverse --no-merges "$base_name..$from" > "$tmp/revs" 2> "$tmp/out" || {
+  cat "$tmp/out" >&2
+  die "git rev-list $base_name..$from failed"
 }
 
-# cand: `<full sha> TAB <subject>`, oldest first (git cherry prints oldest first).
+# cand: `<full sha> TAB <subject>`, oldest first (rev-list --reverse).
 : > "$tmp/cand"
-while read -r mark sha; do
-  [ "$mark" = '+' ] || continue
+while read -r sha; do
+  pid="$(awk -v s="$sha" '$2 == s { print $1; exit }' "$tmp/from.ids")"
+  if [ -n "$pid" ] && grep -q -x -F "$pid" "$tmp/base.ids"; then
+    continue
+  fi
   printf '%s\t%s\n' "$sha" "$(git -C "$root" log -1 --format=%s "$sha")" >> "$tmp/cand"
-done < "$tmp/cherry"
+done < "$tmp/revs"
 
 : > "$tmp/want"
 ids=''   # one label per argument, in argument order, without repeats

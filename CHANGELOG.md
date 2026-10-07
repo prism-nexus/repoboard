@@ -7,6 +7,13 @@ All notable changes to this project are documented in this file. The format is b
 
 ## [0.3.3] — 2026-10-06
 
+### Changed
+
+- **Published from CI with provenance (RCB-225).** 0.3.3 is the first release that
+  `.github/workflows/release.yml` published over npm trusted publishing (run 37518506773); the npm
+  tarball's shasum is the one that run packed and smoke-tested, and it carries an SLSA v1
+  provenance statement. 0.3.0 to 0.3.2 were published with a token and carry none.
+
 ### Fixed
 
 - **The dashboard has a favicon (RCB-210).** `packages/web/index.html` carries one inline SVG

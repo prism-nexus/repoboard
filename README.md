@@ -303,6 +303,12 @@ each declare `node >= 20.19.0` in their own `package.json`, and `engines.node` i
 published, bundled into the CLI (`packages/server/tsup.config.ts`'s `noExternal`) — depend on
 `repoboard`.
 
+Releases publish from CI. A `v*` tag runs `.github/workflows/release.yml`, which publishes the
+tarball it smoke-tested over npm trusted publishing (OIDC, no stored token), with provenance.
+0.3.3 is the first release published this way (run 37518506773, 2026-10-06; `npm view
+repoboard@0.3.3 dist.attestations` shows an SLSA v1 provenance statement). 0.3.0 to 0.3.2 were
+published with a token and carry no provenance (measured 2026-10-06).
+
 Install-time weight, not tarball weight: installing `repoboard` resolves 5 production transitive packages for
 `packages/server` (chokidar, readdirp, ws, yaml, zod; `pnpm-lock.yaml`, measured 2026-09-25). It was 98 until
 RCB-152 replaced `@modelcontextprotocol/sdk` (93 of the 98, about 23.8 MB of `node_modules/.pnpm`) with a

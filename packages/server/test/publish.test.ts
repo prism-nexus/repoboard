@@ -8,7 +8,7 @@
  */
 import { spawn } from 'node:child_process';
 import { chmod, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it } from 'vitest';
 import { makeTempDir } from './helpers.js';
@@ -199,6 +199,62 @@ describe('publish.sh', () => {
       const both = await fx.publish('ABC-2', fx.onMain);
       expect(both.code).toBe(1);
       expect(await fx.remoteRefs()).toBe(before);
+    },
+    SLOW,
+  );
+
+  /**
+   * RCB-224's shape: dev has `RCB-1: a` (on top of the fixture's ABC commits); main moves by an
+   * unrelated commit and then gets a copy of `a` with a different sha (a rebase merge); dev merges
+   * origin/main back; dev then has `RCB-1: b`.
+   */
+  async function makeMergedBack(): Promise<{ fx: Fixture; aSha: string }> {
+    const fx = await makeFixture(DENY);
+    const root = dirname(fx.work);
+    const other = join(root, 'other-224');
+    await writeFile(join(fx.work, 'rcb1a.txt'), 'a\n');
+    await git(fx.work, 'add', '-A');
+    await git(fx.work, 'commit', '-q', '-m', 'RCB-1: a');
+    const aSha = await git(fx.work, 'rev-parse', 'HEAD');
+    // Main moves by one unrelated commit, then takes a copy of `a` on top (a new sha).
+    await git(root, 'clone', '-q', fx.origin, other);
+    await writeFile(join(other, 'unrelated.txt'), 'u\n');
+    await git(other, 'add', '-A');
+    await git(other, 'commit', '-q', '-m', 'unrelated');
+    await git(other, 'fetch', '-q', fx.work, 'dev');
+    await git(other, 'cherry-pick', aSha);
+    expect(await git(other, 'rev-parse', 'HEAD')).not.toBe(aSha);
+    await git(other, 'push', '-q', 'origin', 'main');
+    // The merge-back, then a new dev commit.
+    await git(fx.work, 'fetch', '-q', 'origin');
+    await git(fx.work, 'merge', '-q', '--no-edit', 'origin/main');
+    await writeFile(join(fx.work, 'rcb1b.txt'), 'b\n');
+    await git(fx.work, 'add', '-A');
+    await git(fx.work, 'commit', '-q', '-m', 'RCB-1: b');
+    return { fx, aSha };
+  }
+
+  it(
+    'after a merge-back, a dev commit already on main as a copy is not re-picked; the new one is',
+    async () => {
+      const { fx } = await makeMergedBack();
+      const r = await fx.publish('RCB-1');
+      expect(r.code, r.stderr).toBe(0);
+      expect(r.stdout).toContain('RCB-1: b');
+      expect(r.stdout).not.toContain('RCB-1: a');
+      expect(r.stdout).toContain('dry run: nothing pushed');
+    },
+    SLOW,
+  );
+
+  it(
+    'after a merge-back, the sha of the commit already on main as a copy is not a candidate',
+    async () => {
+      const { fx, aSha } = await makeMergedBack();
+      const r = await fx.publish(aSha);
+      expect(r.code).toBe(1);
+      expect(r.stderr).toContain('is not a candidate');
+      expect(r.stdout).not.toContain('dry run');
     },
     SLOW,
   );

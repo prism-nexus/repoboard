@@ -48,6 +48,7 @@ import {
   decideSeatClaim,
   decideSeatWrite,
   defaultBoardConfig,
+  downSeatAddresses,
   type Event,
   exitCodeForFindings,
   type Finding,
@@ -60,12 +61,14 @@ import {
   holderLabel,
   holderLiveness,
   homeSeatRows,
+  type InboxItem,
   initialStateText,
   type LeaseMutationResult,
   type LeasesDoc,
   type LogBlock,
   type LogFileInfo,
   lastBlockFor,
+  listSeats,
   moveCard,
   NO_PANE_TAG,
   normalizeSeatName,
@@ -115,6 +118,7 @@ import {
   type TakeLeaseInput,
   takeLease,
   toIso,
+  unackedAddresses,
   updateCard,
   wipCountsForMove,
 } from '@repoboard/core';
@@ -2195,6 +2199,28 @@ export class CardStore extends EventEmitter<StoreEvents> {
   }
 
   /**
+   * RCB-230: `repoboard inbox` — the addresses to `seat` (as `seatName` returned it) that it has not
+   * ACKed, from `sinceMs` on, over the same merged log set `lastRepoLogBlock` reads. `knownSeats` is
+   * the SEATS rows plus the authors of every block on or after the since date, so a token such as
+   * `COORD` resolves against the seats that actually exist. Fresh from disk, read-only.
+   */
+  async inboxFor(seat: string, sinceMs: number): Promise<InboxItem[]> {
+    const days = await this.loadAllLogInfo();
+    const sinceDate = new Date(sinceMs).toISOString().slice(0, 10);
+    const known = [
+      ...listSeats(this.stateDoc?.sections.seats ?? '').map((r) => r.name),
+      ...days.filter((d) => d.date >= sinceDate).flatMap((d) => d.blocks.map((b) => b.seat)),
+    ];
+    return unackedAddresses({
+      seat,
+      days,
+      knownSeats: known,
+      cardPrefix: this.cfg.prefix,
+      sinceMs,
+    });
+  }
+
+  /**
    * RCB-169: every moment OTHER than the bullet's own UP stamp at which `seat` was seen alive —
    * this seat's newest log block on this board (`lastRepoLogBlock`, the same read `seat`/`log
    * --last` use) and STATE.md's `Written <iso> by <actor>` stamp when `<actor>` is this seat —
@@ -2414,6 +2440,14 @@ export class CardStore extends EventEmitter<StoreEvents> {
       }),
       members,
       homeBoard: home?.ok === true ? home.name : null,
+      // RCB-230: DOWN seats with unacked addresses — gathered here (`listSeats` lives in
+      // `seat.ts`, which `state.ts` may not import), worded in core.
+      downSeatAddresses: downSeatAddresses({
+        seatsSection: this.stateDoc?.sections.seats ?? null,
+        days: logs,
+        cardPrefix: this.cfg.prefix,
+        now,
+      }),
     });
     return { findings, exitCode: exitCodeForFindings(findings, strict) };
   }

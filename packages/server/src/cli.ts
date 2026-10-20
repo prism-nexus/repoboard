@@ -40,6 +40,8 @@ import {
   type GateCheckResult,
   type GateMemberFacts,
   type GateRecord,
+  INBOX_DEFAULT_WINDOW_MS,
+  type InboxItem,
   initialStateText,
   isOwnerTask,
   isSiblingUrl,
@@ -289,6 +291,13 @@ Usage:
                                         blocks: []} exit 0
   repoboard log --last <seat>           print that seat's newest block, searching back across days
                                         (cold-start: your own seat's last block, then the coordinator's)
+  repoboard inbox <seat> [--since <ISO|HH:MMZ>] [--json]
+                                        what other seats addressed to <seat> in the log ("TO
+                                        BUILDER ACME-12: …") and it has not ACKed — a later block
+                                        of <seat> with ACK and the card ids (or the HH:MMZ). One
+                                        line per address: TS FROM -> TO  IDS  LINE. Default window:
+                                        the last 48 h. Exit 0 nothing pending, 3 something
+                                        pending, 1 usage error — a watcher can loop on it
   repoboard seat <name> | list [--json]  the cold-start bundle for one seat: its SEATS line, its
                                         live leases (RCB-131: "## Leases", right after the SEATS
                                         line — one lease per line, "(yours)" suffixed when this
@@ -428,7 +437,10 @@ Usage:
                                         seat on one board; seat verbs rewrite only the first),
                                         seat-name-ambiguous (warning; blocks only with --strict —
                                         one seat name stamped for two boards; a seat verb matches
-                                        the name alone), seat-log-while-down (warning; blocks only
+                                        the name alone), address-to-down-seat (warning; blocks
+                                        only with --strict — a DOWN seat has unacked addresses in
+                                        the log from the last 48 h; \`repoboard inbox <seat>\`
+                                        lists them), seat-log-while-down (warning; blocks only
                                         with --strict — a seat whose bullet says DOWN logged after
                                         that minute: stale DOWN, or a session working without the
                                         seat), seat-up-dead-holder (warning; blocks only with
@@ -2287,6 +2299,53 @@ async function cmdLogLast(args: string[], io: CliIO): Promise<number> {
   return 0;
 }
 
+/** RCB-230: one `inbox` line: `<ts> <FROM> -> <TO>  <ids or "ACK HH:MMZ">  <line, max 160 chars>`. */
+function formatInboxItem(item: InboxItem): string {
+  const hm = /(\d{2}:\d{2})/.exec(item.ts)?.[1];
+  const what =
+    item.cardIds.length > 0
+      ? item.cardIds.join(',')
+      : `ACK ${hm !== undefined ? `${hm}Z` : item.ts}`;
+  const line = item.line.length > 160 ? `${item.line.slice(0, 159)}…` : item.line;
+  return `${item.ts} ${item.from} -> ${item.to}  ${what}  ${line}`;
+}
+
+/**
+ * RCB-230: `repoboard inbox <seat> [--since ISO|HH:MMZ] [--json]` — the addresses to a seat it has
+ * not ACKed (`unackedAddresses`). Exit 0 when nothing is pending, 3 when something is, 1 on a usage
+ * error, so a watcher can loop on it. Default window: 48 h back, so an address at 23:50Z still
+ * shows at 00:10Z. `--since` goes through `resolveSince`, as `decisions --since` does.
+ */
+async function cmdInbox(args: string[], io: CliIO): Promise<number> {
+  const { values, positionals } = parse('inbox', args, {
+    since: { type: 'string' },
+    json: { type: 'boolean', default: false },
+  });
+  const typed = positionals[0];
+  if (typed === undefined || typed.trim().length === 0 || positionals.length > 1) {
+    throw new UserError('usage: repoboard inbox <seat> [--since <ISO|HH:MMZ>] [--json]');
+  }
+  const now = io.now?.() ?? new Date();
+  let sinceIso = toIso(new Date(now.getTime() - INBOX_DEFAULT_WINDOW_MS));
+  if (values.since !== undefined) {
+    const r = resolveSince(values.since, now);
+    if (!r.ok) throw new UserError(`--since ${r.error}`);
+    sinceIso = r.iso;
+  }
+  const root = await requireRoot(io);
+  const store = await openStore(root, { watch: false, now: io.now });
+  const { name } = seatNameFor(store, typed);
+  const items = await store.inboxFor(name, Date.parse(sinceIso));
+  if (values.json) {
+    io.stdout.write(`${JSON.stringify({ seat: name, since: sinceIso, items }, null, 2)}\n`);
+  } else if (items.length === 0) {
+    io.stdout.write(`(no unacked addresses to ${name} since ${sinceIso})\n`);
+  } else {
+    io.stdout.write(`${items.map(formatInboxItem).join('\n')}\n`);
+  }
+  return items.length === 0 ? 0 : 3;
+}
+
 /**
  * RCB-48: `repoboard seat <name>` — the cold-start bundle, one command in place of the
  * three-file ritual (STATE.md → your own last block → the coordinator's → todo cards → open
@@ -3478,6 +3537,7 @@ export async function run(argv: string[], io: CliIO): Promise<number> {
     }
     if (cmd === 'seat') return await cmdSeat(argv.slice(1), io);
     if (cmd === 'decisions') return await cmdDecisions(argv.slice(1), io);
+    if (cmd === 'inbox') return await cmdInbox(argv.slice(1), io);
     if (cmd === 'check') return await cmdCheck(argv.slice(1), io);
     if (cmd === 'gate') return await cmdGate(sub, rest, io);
     if (cmd === 'local') return await cmdLocal(sub, rest, io);

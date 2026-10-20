@@ -88,7 +88,7 @@ them into the exit code, for the CLI, HTTP and MCP alike:
 - **Exits 1 only with `--strict` (warning):** `active-without-lease` (a card working with no
   lease held), `needs-ask`, `future-stamp`, `local-unsynced`, `systems-stale`,
   `systems-unblocker-unknown`, `systems-planned-without-unblocker`, `untracked-cards`,
-  `seat-owner-queue-drift`, `seat-name-ambiguous`, `seat-log-while-down`, `seat-up-dead-holder`,
+  `seat-owner-queue-drift`, `seat-name-ambiguous`, `seat-log-while-down`, `address-to-down-seat`, `seat-up-dead-holder`,
   `seat-lease-bullet-drift`, `workspace-key-name-mismatch`, and with board.yml's `workspace:`
   `seat-copy`, `seat-home-unreadable`, `seat-home-not-member`. Without `--strict` they print and
   the exit code stays 0 — a fresh repo's first `check` prints `untracked-cards` (the cards are

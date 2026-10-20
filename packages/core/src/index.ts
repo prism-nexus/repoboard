@@ -99,6 +99,8 @@ export {
   seatMovedText,
   seatWhoami,
 } from './holder.js';
+export type { DownSeatAddresses, InboxInput, InboxItem } from './inbox.js';
+export { downSeatAddresses, INBOX_DEFAULT_WINDOW_MS, unackedAddresses } from './inbox.js';
 export type {
   CloseSyncedCardOptions,
   CloseSyncedCardResult,

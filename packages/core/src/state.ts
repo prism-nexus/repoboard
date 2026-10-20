@@ -311,6 +311,7 @@ export const FINDING_KINDS = [
   'seat-duplicate-bullet',
   'seat-name-ambiguous',
   'seat-log-while-down',
+  'address-to-down-seat',
   'seat-up-dead-holder',
   'pane-holds-two-seats',
   'seat-lease-bullet-drift',
@@ -417,6 +418,17 @@ export interface CheckInput {
    *  `stale-state` ignores it. `null`/absent (no key, or a home that could not be read — its name
    *  is then unknown) ignores nothing: today's rule, unchanged. */
   homeBoard?: string | null;
+  /** RCB-230: per DOWN seat, its unacked addresses in the last 48 h (`downSeatAddresses`,
+   *  `inbox.ts`), gathered by the caller — `state.ts` never imports `seat.ts`, which
+   *  `downSeatAddresses` needs (`listSeats`). `null`/absent is inert: nothing gathered, nothing said. */
+  downSeatAddresses?:
+    | readonly {
+        seat: string;
+        count: number;
+        oldestTs: string;
+        oldestFrom: string;
+      }[]
+    | null;
 }
 
 /**
@@ -750,6 +762,19 @@ export function checkFindings(input: CheckInput): Finding[] {
 
   // RCB-200: the caller's `seatCheckFindings`, verbatim — this file judges none of them.
   findings.push(...(input.seatFindings ?? []));
+
+  // RCB-230: a finding addressed to a seat that is DOWN hangs until someone stands it up — warning,
+  // one per seat, naming the count and the oldest address so the human knows how long it has hung.
+  for (const d of input.downSeatAddresses ?? []) {
+    findings.push({
+      kind: 'address-to-down-seat',
+      level: 'warning',
+      message:
+        `address-to-down-seat: seat "${d.seat}" is DOWN with ${d.count} unacked address` +
+        `${d.count === 1 ? '' : 'es'} in the last 48 h, oldest ${d.oldestTs} from ${d.oldestFrom} ` +
+        `(repoboard inbox ${d.seat})`,
+    });
+  }
 
   // RCB-68: info-grade like `needs-decision` — a blocked step is expected, ordinary board state,
   // not a rig problem; `check` never fails on it (`exitCodeForFindings` untouched).

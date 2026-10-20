@@ -4769,3 +4769,144 @@ describe('dash text (RCB-220)', () => {
     });
   });
 });
+
+describe('repoboard inbox (RCB-230)', () => {
+  /** `repoboard` with an explicit clock, for the cross-midnight case. */
+  async function repoboardAt(cwd: string, now: Date, ...argv: string[]) {
+    const stdout = new Sink();
+    const stderr = new Sink();
+    const code = await run(argv, {
+      cwd,
+      stdout,
+      stderr,
+      env: { REPOBOARD_ACTOR: 'test-actor' },
+      now: () => now,
+    });
+    return { code, out: stdout.text, err: stderr.text };
+  }
+
+  /** One daily log file, in the shape a hand-written log has: `blocks` are `[heading, text]`. */
+  async function writeLog(root: string, date: string, ...blocks: [string, string][]) {
+    await mkdir(join(root, '.repoboard', 'log'), { recursive: true });
+    const text = [`# Log — ${date}`, ...blocks.map(([h, t]) => `\n##### ${h}\n\n${t}`), ''].join(
+      '\n',
+    );
+    await writeFile(join(root, '.repoboard', 'log', `${date}.md`), text, 'utf8');
+  }
+
+  const ADDRESS: [string, string] = [
+    'BUILDER 2026-09-02T10:00:00Z: handing over',
+    'Done.\nTO COORDINATOR RB-12, RB-13: please look',
+  ];
+
+  it('exit 3 and one line per open address: ts FROM -> TO  ids  line', async () => {
+    const root = await freshRepo({});
+    await writeLog(root, '2026-09-02', ADDRESS);
+    const res = await repoboard(root, 'inbox', 'coordinator');
+    expect(res.code).toBe(3);
+    expect(res.out).toBe(
+      '2026-09-02T10:00:00Z BUILDER -> COORDINATOR  RB-12,RB-13  TO COORDINATOR RB-12, RB-13: please look\n',
+    );
+  });
+
+  it('exit 0 and the empty line when nothing is pending, naming the window start', async () => {
+    const root = await freshRepo({});
+    const res = await repoboard(root, 'inbox', 'coordinator');
+    expect(res.code).toBe(0);
+    expect(res.out).toBe('(no unacked addresses to coordinator since 2026-08-31T22:41:10Z)\n');
+  });
+
+  it("a later ACK by the addressee clears it: exit 0; another seat's ACK does not", async () => {
+    const root = await freshRepo({});
+    await writeLog(root, '2026-09-02', ADDRESS, [
+      'OPS 2026-09-02T11:00:00Z: noted',
+      'ACK RB-12, RB-13',
+    ]);
+    expect((await repoboard(root, 'inbox', 'coordinator')).code).toBe(3);
+    await writeLog(root, '2026-09-02', ADDRESS, [
+      'COORDINATOR 2026-09-02T11:00:00Z: noted',
+      'ACK RB-12, RB-13',
+    ]);
+    expect((await repoboard(root, 'inbox', 'coordinator')).code).toBe(0);
+  });
+
+  it('the default window is 48 h: 23:50Z still shows at 00:10Z the next day', async () => {
+    const root = await freshRepo({});
+    await writeLog(root, '2026-09-02', [
+      'BUILDER 2026-09-02T23:50:00Z: late',
+      'TO COORDINATOR RB-7: late',
+    ]);
+    const res = await repoboardAt(root, new Date('2026-09-03T00:10:00Z'), 'inbox', 'coordinator');
+    expect(res.code).toBe(3);
+    expect(res.out).toContain('RB-7');
+  });
+
+  it('--since HH:MMZ narrows the window (resolveSince): an older address drops out', async () => {
+    const root = await freshRepo({});
+    await writeLog(root, '2026-09-02', ADDRESS);
+    const res = await repoboard(root, 'inbox', 'coordinator', '--since', '22:00Z');
+    expect(res.code).toBe(0);
+    expect(res.out).toBe('(no unacked addresses to coordinator since 2026-09-02T22:00:00Z)\n');
+    const wide = await repoboard(root, 'inbox', 'coordinator', '--since', '2026-09-02T09:00:00Z');
+    expect(wide.code).toBe(3);
+  });
+
+  it('--json prints {seat, since, items} and keeps the exit code', async () => {
+    const root = await freshRepo({});
+    await writeLog(root, '2026-09-02', ADDRESS);
+    const res = await repoboard(root, 'inbox', 'coordinator', '--json');
+    expect(res.code).toBe(3);
+    const parsed = JSON.parse(res.out) as {
+      seat: string;
+      since: string;
+      items: { cardIds: string[] }[];
+    };
+    expect(parsed.seat).toBe('coordinator');
+    expect(parsed.since).toBe('2026-08-31T22:41:10Z');
+    expect(parsed.items.map((i) => i.cardIds)).toEqual([['RB-12', 'RB-13']]);
+  });
+
+  it('a line longer than 160 characters is trimmed to 160', async () => {
+    const root = await freshRepo({});
+    await writeLog(root, '2026-09-02', [
+      'BUILDER 2026-09-02T10:00:00Z: long',
+      `TO COORDINATOR RB-1: ${'x'.repeat(300)}`,
+    ]);
+    const res = await repoboard(root, 'inbox', 'coordinator');
+    const line = res.out.trimEnd().split('  ').slice(2).join('  ');
+    expect(line).toHaveLength(160);
+  });
+
+  it('exit 1: no seat, a second positional, a bad --since, another board prefix', async () => {
+    const root = await freshRepo({});
+    const none = await repoboard(root, 'inbox');
+    expect(none.code).toBe(1);
+    expect(none.err).toMatch(/usage: repoboard inbox/);
+    expect((await repoboard(root, 'inbox', 'a', 'b')).code).toBe(1);
+    const bad = await repoboard(root, 'inbox', 'coordinator', '--since', 'yesterday');
+    expect(bad.code).toBe(1);
+    expect(bad.err).toMatch(/--since/);
+    expect((await repoboard(root, 'inbox', '[other] coordinator')).code).toBe(1);
+  });
+
+  it('`check` warns address-to-down-seat for a DOWN seat with an open address', async () => {
+    const root = await freshRepo({});
+    expect((await repoboard(root, 'seat', 'coordinator', '--up', 'working')).code).toBe(0);
+    const down = await repoboard(
+      root,
+      'seat',
+      'coordinator',
+      '--down',
+      'stood down\nin-flight: none\nowes: none',
+    );
+    expect(down.code).toBe(0);
+    await writeLog(root, '2026-09-01', [
+      'BUILDER 2026-09-01T23:50:00Z: late',
+      'TO COORDINATOR RB-7: late',
+    ]);
+    const res = await repoboard(root, 'check');
+    expect(res.out).toMatch(
+      /address-to-down-seat: seat "coordinator" is DOWN with 1 unacked address in the last 48 h, oldest 2026-09-01T23:50:00Z from BUILDER/,
+    );
+  });
+});

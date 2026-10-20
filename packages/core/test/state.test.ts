@@ -1806,3 +1806,48 @@ describe('checkFindings: stale-state and the home board (RCB-184)', () => {
     );
   });
 });
+
+describe('checkFindings: address-to-down-seat (RCB-230)', () => {
+  const base = {
+    state: stateAt('2026-09-17T21:00:00Z'),
+    logs: [],
+    cards: [],
+    config: defaultBoardConfig(),
+    leases: emptyLeases(),
+    now: NOW,
+  };
+  const down = {
+    seat: 'coordinator',
+    count: 2,
+    oldestTs: '2026-09-17T09:50:00Z',
+    oldestFrom: 'BUILDER',
+  };
+
+  it('one warning per DOWN seat, naming the count, the oldest ts and the sender', () => {
+    const findings = checkFindings({ ...base, downSeatAddresses: [down] });
+    expect(findings).toEqual([
+      {
+        kind: 'address-to-down-seat',
+        level: 'warning',
+        message:
+          'address-to-down-seat: seat "coordinator" is DOWN with 2 unacked addresses in the last 48 h, ' +
+          'oldest 2026-09-17T09:50:00Z from BUILDER (repoboard inbox coordinator)',
+      },
+    ]);
+    // a warning: blocks only with --strict
+    expect(exitCodeForFindings(findings, false)).toBe(0);
+    expect(exitCodeForFindings(findings, true)).toBe(1);
+  });
+
+  it('a single address reads "1 unacked address", not "1 unacked addresses"', () => {
+    const [f] = checkFindings({ ...base, downSeatAddresses: [{ ...down, count: 1 }] });
+    expect(f?.message).toContain('1 unacked address in');
+  });
+
+  it('absent, null or empty is inert, and the kind is listed', () => {
+    expect(checkFindings(base)).toEqual([]);
+    expect(checkFindings({ ...base, downSeatAddresses: null })).toEqual([]);
+    expect(checkFindings({ ...base, downSeatAddresses: [] })).toEqual([]);
+    expect(FINDING_KINDS).toContain('address-to-down-seat');
+  });
+});

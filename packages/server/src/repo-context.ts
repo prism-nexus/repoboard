@@ -30,6 +30,7 @@ import {
   mergeSiblings,
   needsDecision,
   type Priority,
+  PrioritySchema,
   planSystemsMap,
   renderState,
   resolveOlderThan,
@@ -85,7 +86,7 @@ const CREATE_FIELDS: ReadonlySet<string> = new Set([
   'body',
   'actor',
 ]);
-const PRIORITIES: ReadonlySet<string> = new Set(['high', 'medium', 'low']);
+const PRIORITIES: ReadonlySet<string> = new Set<string>(PrioritySchema.options);
 const SIZES: ReadonlySet<string> = new Set(['S', 'M', 'L', 'XL']);
 const ASK_FIELDS: ReadonlySet<string> = new Set([
   'question',
@@ -191,7 +192,8 @@ function toCreateInput(body: Json): CreateCardInput {
   const bodyText = optString(body, 'body');
   if (bodyText !== undefined) input.body = bodyText;
   if (body.priority !== undefined) {
-    if (!isPriority(body.priority)) throw new HttpError(400, 'priority must be high|medium|low');
+    if (!isPriority(body.priority))
+      throw new HttpError(400, `priority must be ${PrioritySchema.options.join('|')}`);
     input.priority = body.priority;
   }
   if (body.size !== undefined) {
@@ -227,7 +229,7 @@ function toPatch(body: Json): CardPatch {
   if (bodyText !== undefined) patch.body = bodyText;
   const assignee = nullable(body, 'assignee', isString, 'a string');
   if (assignee !== undefined) patch.assignee = assignee;
-  const priority = nullable(body, 'priority', isPriority, 'high|medium|low');
+  const priority = nullable(body, 'priority', isPriority, PrioritySchema.options.join('|'));
   if (priority !== undefined) patch.priority = priority;
   const size = nullable(body, 'size', isSize, 'S|M|L|XL');
   if (size !== undefined) patch.size = size;

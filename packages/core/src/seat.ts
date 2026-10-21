@@ -5,6 +5,7 @@
  * `SeatBundleInput`, this file turns it into a `SeatBundle` and renders it.
  */
 import { defaultBoardConfig, findColumn } from './board.js';
+import { priorityRank, prodFirst } from './card.js';
 import {
   type AnsweredDecisionRow,
   answeredDecisions,
@@ -68,18 +69,6 @@ export interface SeatBundleInput {
 
 /** Which rule picked `nextCard`, so the render (and a reader) can say so instead of guessing. */
 export type NextCardReason = 'parent-step' | 'assigned' | 'priority' | 'first-todo' | null;
-
-/**
- * RCB-57 (B1): rank for the priority fallback — high wins, unset loses. A plain object (not a
- * `Map`) so `card.priority` (possibly absent) indexes it directly; `?? 3` covers the absent case
- * without a branch. The ONLY place this order is encoded — `pickNextCard` never re-sorts by id,
- * date, or anything else, so this map is the one thing a control has to break to change the rule.
- */
-const PRIORITY_RANK: Record<Card['priority'] & string, number> = { high: 0, medium: 1, low: 2 };
-
-function priorityRank(c: Card): number {
-  return c.priority !== undefined ? PRIORITY_RANK[c.priority] : 3;
-}
 
 export interface SeatBundle {
   name: string;
@@ -1217,12 +1206,14 @@ export function seatBundle(input: SeatBundleInput): SeatBundle {
   const assigned = todoCards.find((c) => (c.assignee ?? '').toLowerCase() === wantedAssignee);
   /**
    * RCB-57 (B1): among todo cards assigned to NO ONE (a card assigned to another seat is never
-   * this seat's fallback), rank by priority — high, medium, low, unset, in that order — with a
+   * this seat's fallback), rank by priority — prod, high, medium, low, unset, in that order — with a
    * stable sort so list order breaks every tie, including the all-unset case (which makes this
    * subsume the old "first todo in list order" rule exactly).
    */
   const unassignedTodo = todoCards.filter((c) => (c.assignee ?? '').trim() === '');
-  const byPriority = [...unassignedTodo].sort((a, b) => priorityRank(a) - priorityRank(b));
+  const byPriority = [...unassignedTodo].sort(
+    (a, b) => priorityRank(a.priority) - priorityRank(b.priority),
+  );
   const anyPrioritised = unassignedTodo.some((c) => c.priority !== undefined);
   const picked = byPriority[0] ?? null;
 
@@ -1419,7 +1410,9 @@ export function renderSeatBundle(b: SeatBundle, now: Date): string {
 
   lines.push('## Open decisions');
   lines.push(
-    b.openDecisions.length > 0 ? b.openDecisions.map(ownerQueueLine).join('\n') : '(none)',
+    b.openDecisions.length > 0
+      ? prodFirst(b.openDecisions).map(ownerQueueLine).join('\n')
+      : '(none)',
   );
   lines.push('');
 

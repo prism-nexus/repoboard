@@ -1,12 +1,26 @@
 import * as YAML from 'yaml';
 import { z } from 'zod';
-import type { Card } from './types.js';
+import type { Card, Priority } from './types.js';
 
 const isoDatetime = z.string().refine((s) => !Number.isNaN(Date.parse(s)), {
   message: 'must be an ISO-8601 datetime',
 });
 
-export const PrioritySchema = z.enum(['high', 'medium', 'low']);
+/** RCB-229: the ONE list of priorities, highest first. Every other surface derives from `.options`. */
+export const PrioritySchema = z.enum(['prod', 'high', 'medium', 'low']);
+
+/** RCB-229: sort rank — prod 0, high 1, medium 2, low 3, unset 4. The only place this order is encoded. */
+export function priorityRank(p: Priority | undefined): number {
+  return p === undefined ? PrioritySchema.options.length : PrioritySchema.options.indexOf(p);
+}
+
+/** RCB-229: STABLE partition — `prod` cards first, everything else in its incoming order. */
+export function prodFirst<T extends { priority?: Priority | undefined }>(cards: readonly T[]): T[] {
+  return [
+    ...cards.filter((c) => c.priority === 'prod'),
+    ...cards.filter((c) => c.priority !== 'prod'),
+  ];
+}
 
 /** RCB-67: the four sizes — no others, and no case-folding (a lower-case `xl` is refused). */
 export const SizeSchema = z.enum(['S', 'M', 'L', 'XL']);

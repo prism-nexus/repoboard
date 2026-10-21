@@ -1967,3 +1967,11 @@ describe('repoboard mcp: get_seat/check/list_cards resolve a step gated on a MEM
     expect(bundle.nextCardStep).toBeNull();
   });
 });
+
+describe('repoboard mcp: priority prod (RCB-229)', () => {
+  it('create_card accepts priority prod', async () => {
+    const r = await rig({ 'RB-1.md': cardText('RB-1', 'todo') });
+    const created = await r.json<Card>('create_card', { title: 'Prod is down', priority: 'prod' });
+    expect(created.priority).toBe('prod');
+  });
+});

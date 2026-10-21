@@ -966,6 +966,9 @@ button.pill:hover:not(:disabled) {
   border-radius: var(--radius);
   touch-action: none;
 }
+.card--prod {
+  border-left-color: var(--danger);
+}
 .card--high {
   border-left-color: var(--coral);
 }
@@ -989,6 +992,9 @@ button.pill:hover:not(:disabled) {
 .card:hover {
   border-color: var(--line-strong);
   border-left-color: inherit;
+}
+.card--prod:hover {
+  border-left-color: var(--danger);
 }
 .card--high:hover {
   border-left-color: var(--coral);
@@ -1051,6 +1057,11 @@ button.pill:hover:not(:disabled) {
   background: var(--surface-2);
   color: var(--muted);
   border: 1px solid var(--line);
+}
+.chip--prod {
+  color: var(--surface);
+  background: var(--danger);
+  border-color: var(--danger);
 }
 .chip--high {
   color: var(--coral);
@@ -1183,6 +1194,9 @@ button.pill:hover:not(:disabled) {
 }
 .drawer__id {
   font-weight: 700;
+}
+.pri-prod {
+  color: var(--danger);
 }
 .pri-high {
   color: var(--coral);

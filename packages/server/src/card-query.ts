@@ -12,6 +12,7 @@ import {
   findColumn,
   type GateMemberFacts,
   needsDecision,
+  prodFirst,
   type Size,
   stepsOf,
 } from '@repoboard/core';
@@ -26,13 +27,11 @@ export interface OwnerQueueRow {
 /** Cards with an OPEN decision, in board order — the owner's queue. Takes the WHOLE board (not
  * a pre-filtered list): filtering by `needsDecision` is this function's job, not its caller's. */
 export function ownerQueue(cards: readonly Card[]): OwnerQueueRow[] {
-  return cards
-    .filter((c) => needsDecision(c))
-    .map((c) => ({
-      id: c.id,
-      question: c.decision?.question ?? '',
-      options: c.decision?.options ?? [],
-    }));
+  return prodFirst(cards.filter((c) => needsDecision(c))).map((c) => ({
+    id: c.id,
+    question: c.decision?.question ?? '',
+    options: c.decision?.options ?? [],
+  }));
 }
 
 export interface CardFilterInput {
@@ -100,7 +99,9 @@ export function filterCards(
     );
   }
   if (parent === undefined) {
-    cards = cards.slice().sort((a, b) => idNumber(a.id) - idNumber(b.id) || (a.id < b.id ? -1 : 1));
+    cards = prodFirst(
+      cards.slice().sort((a, b) => idNumber(a.id) - idNumber(b.id) || (a.id < b.id ? -1 : 1)),
+    );
   }
   return cards;
 }

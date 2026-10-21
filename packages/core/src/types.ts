@@ -3,7 +3,11 @@
  * File formats: BUILD-PLAN §2. Wire contract: §3. Repo snapshot: §4.
  */
 
-export type Priority = 'high' | 'medium' | 'low';
+import type { z } from 'zod';
+import type { PrioritySchema } from './card.js';
+
+/** RCB-229: derived from `PrioritySchema` (card.ts), the one list. */
+export type Priority = z.infer<typeof PrioritySchema>;
 
 /**
  * RCB-67: how much work a card is. **S** = one builder turn (≤ 2 h) · **M** = half a day, brief +

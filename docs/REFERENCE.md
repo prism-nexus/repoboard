@@ -767,6 +767,14 @@ loads `.repoboard/archive/` — an archived card simply stops existing as far as
 are concerned; `card show <id>` on an archived id prints `archived: .repoboard/archive/<id>.md`
 instead of the file.
 
+RCB-231: a run that moves at least one card also appends ONE log block to today's log, attributed
+to the actor (`--as`, `$REPOBOARD_ACTOR`, `$USER`, else `cli`), naming the count, the cutoff and
+every id inline, and saying the moves are staged (`git mv`) or renamed, never committed. It is
+written inside the same store turn, not through the seat-guarded `log` path. If the block cannot
+be written the moves stand: the CLI prints `warning: archive log not written: <error>` to stderr
+(exit 0, stdout unchanged), MCP/HTTP return `log: {date}` or `log: {error}` (`null` when nothing
+moved). `--dry-run` and an empty run write no log.
+
 | Surface | Example |
 |---|---|
 | CLI | `repoboard archive [--older-than 14d] [--dry-run] [--as actor]` |

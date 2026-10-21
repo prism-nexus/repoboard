@@ -268,7 +268,16 @@ export type CloseSyncedOutcome =
 
 /** P8.5: `store.archiveCards` outcome. `method` is which OS-level move each archived id used. */
 export type ArchiveOutcome =
-  | { ok: true; archived: string[]; method: Record<string, ArchiveMoveMethod> }
+  | {
+      ok: true;
+      archived: string[];
+      method: Record<string, ArchiveMoveMethod>;
+      /**
+       * RCB-231: the attribution block. `{ date }` = written to that day's log; `{ error }` = the
+       * moves STAND but the block was refused or failed; `null` = nothing archived, no log call.
+       */
+      log: { date: string } | { error: string } | null;
+    }
   | { ok: false; error: string; readOnly?: boolean };
 
 /** P8.2: `takeLease`/`releaseLease`/`addWindow` outcomes. `readOnly` is the map-only refusal (K10). */
@@ -2701,8 +2710,12 @@ export class CardStore extends EventEmitter<StoreEvents> {
    * unlike every other mutation here (C3's own control: doing so is exactly what must make the
    * hash test fail). One `type: 'archive'` event per card actually moved; an id already gone from
    * the in-memory map (unknown, or archived by a concurrent call) is skipped, not an error.
+   *
+   * RCB-231: when at least one card moved, ONE attributed log block (count, `cutoff`, every id) is
+   * appended inside this same `mutate` turn via `doAppendRepoLog` (never `appendRepoLog`: nesting
+   * `mutate` deadlocks). A failed log write does not undo the moves; it is returned as `log.error`.
    */
-  archiveCards(ids: readonly string[], actor: string): Promise<ArchiveOutcome> {
+  archiveCards(ids: readonly string[], actor: string, cutoff: Date): Promise<ArchiveOutcome> {
     return this.mutate(async () => {
       this.refuseWriteWithoutBoard();
       const archiveDir = join(this.repoboardDir, 'archive');
@@ -2731,7 +2744,21 @@ export class CardStore extends EventEmitter<StoreEvents> {
         await this.appendEvent(event);
         archived.push(id);
       }
-      return { ok: true as const, archived, method };
+      if (archived.length === 0) return { ok: true as const, archived, method, log: null };
+      const n = archived.length;
+      const tail = Object.values(method).includes('git')
+        ? '; git mv, staged, not committed'
+        : '; renamed (not git-tracked)';
+      const text = `${n} done cards older than ${toIso(cutoff)} archived by ${actor}: ${archived.join(', ')}${tail}`;
+      const title = `archive: ${n} done card(s) moved to .repoboard/archive/`;
+      let log: { date: string } | { error: string };
+      try {
+        const res = await this.doAppendRepoLog(actor, text, title);
+        log = res.ok ? { date: res.date } : { error: res.error };
+      } catch (e) {
+        log = { error: e instanceof Error ? e.message : String(e) };
+      }
+      return { ok: true as const, archived, method, log };
     });
   }
 

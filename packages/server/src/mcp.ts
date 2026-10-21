@@ -1510,7 +1510,9 @@ export function createMcpServer(opts: McpServerOptions): McpServer {
       description:
         'Move every card in a done column whose `updated` is older than olderThan (default ' +
         '14d; also accepts 2h/90m or an ISO-8601 datetime) to .repoboard/archive/ — git mv when ' +
-        'tracked, else a rename; the file is never rewritten. dryRun:true (default false) lists ' +
+        'tracked, else a rename; the file is never rewritten. Appends one log block attributed to ' +
+        'the actor (count, cutoff, ids); `log` in the result is {date} or {error}. dryRun:true ' +
+        '(default false) lists ' +
         'the ids and writes nothing. Archived cards no longer appear in list_cards; get_card on ' +
         'an archived id fails, naming the archive path.',
       inputSchema: {
@@ -1528,9 +1530,9 @@ export function createMcpServer(opts: McpServerOptions): McpServer {
       const ids = store.selectArchivable(older.cutoff);
       if (dryRun) return ok({ dryRun: true, ids });
       if (ids.length === 0) return ok({ dryRun: false, archived: [] });
-      const res = await store.archiveCards(ids, actor ?? defaultActor);
+      const res = await store.archiveCards(ids, actor ?? defaultActor, older.cutoff);
       if (!res.ok) return fail(res.error);
-      return ok({ dryRun: false, archived: res.archived });
+      return ok({ dryRun: false, archived: res.archived, log: res.log });
     },
   );
 

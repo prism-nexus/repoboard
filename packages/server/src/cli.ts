@@ -526,8 +526,10 @@ Usage:
                                         move every \`done\` card whose \`updated\` is older than the
                                         cutoff (duration 14d/2h/90m, or an ISO-8601 datetime) to
                                         .repoboard/archive/ — git mv when tracked, else a rename;
-                                        never rewrites the file. --dry-run lists the ids and moves
-                                        nothing.
+                                        never rewrites the file. Stages, never commits. RCB-231:
+                                        appends one log block attributed to the actor, naming the
+                                        count, the cutoff and every id. --dry-run lists the ids and
+                                        moves nothing.
   repoboard sync-issues <path>#<heading> [--status todo] [--label issue] [--dry-run] [--as a]
                                         [--root <dir>]
                                         read a markdown file's section under the first heading
@@ -3213,8 +3215,11 @@ async function cmdArchive(args: string[], io: CliIO): Promise<number> {
     io.stdout.write('archived 0\n');
     return 0;
   }
-  const res = await store.archiveCards(ids, actorFrom(values.as, io));
+  const res = await store.archiveCards(ids, actorFrom(values.as, io), older.cutoff);
   if (!res.ok) throw new UserError(res.error);
+  if (res.log !== null && 'error' in res.log) {
+    (io.stderr ?? io.stdout).write(`warning: archive log not written: ${res.log.error}\n`);
+  }
   io.stdout.write(`archived ${res.archived.length}: ${res.archived.join(', ')}\n`);
   return 0;
 }

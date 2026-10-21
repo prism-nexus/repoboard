@@ -1975,3 +1975,23 @@ describe('repoboard mcp: priority prod (RCB-229)', () => {
     expect(created.priority).toBe('prod');
   });
 });
+
+describe('repoboard mcp: archive_cards log block (RCB-231)', () => {
+  it('writes one log block attributed to the actor it was given and returns log.date', async () => {
+    const old = cardText('RB-1', 'done').replace(
+      'updated: 2026-09-02T22:00:00Z',
+      'updated: 2026-08-01T00:00:00Z',
+    );
+    const r = await rig({ 'RB-1.md': old });
+    const out = await r.json<{ archived: string[]; log: { date: string } }>('archive_cards', {
+      actor: 'acme/owner',
+    });
+    expect(out.archived).toEqual(['RB-1']);
+    expect(out.log).toEqual({ date: '2026-09-02' });
+    const log = await readFile(join(r.repo.root, '.repoboard', 'log', '2026-09-02.md'), 'utf8');
+    const heads = log.split('\n').filter((l) => l.startsWith('##### '));
+    expect(heads).toHaveLength(1);
+    expect(heads[0]).toContain('ACME/OWNER');
+    expect(log).toContain('RB-1');
+  });
+});

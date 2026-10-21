@@ -47,11 +47,20 @@ class Sink {
 }
 
 async function repoboard(cwd: string, ...argv: string[]) {
+  return repoboardEnv(cwd, {}, ...argv);
+}
+
+async function repoboardEnv(cwd: string, env: Record<string, string>, ...argv: string[]) {
   const stdout = new Sink();
   const stderr = new Sink();
-  const code = await run(argv, { cwd, stdout, stderr, env: {}, now: () => NOW });
+  const code = await run(argv, { cwd, stdout, stderr, env, now: () => NOW });
   return { code, out: stdout.text, err: stderr.text };
 }
+
+const CUTOFF = new Date(NOW.getTime() - 14 * 86_400_000);
+const LOG_FILE = (root: string) =>
+  join(root, '.repoboard', 'log', `${NOW.toISOString().slice(0, 10)}.md`);
+const blockHeads = (text: string) => text.split('\n').filter((l) => l.startsWith('##### '));
 
 const OLD_UPDATED = '2026-08-01T00:00:00Z'; // well before NOW (2026-09-02T22:41:10Z) - 14d
 const RECENT_UPDATED = '2026-09-02T00:00:00Z'; // within 14d of NOW
@@ -79,7 +88,7 @@ describe('store: selectArchivable / archiveCards', () => {
     const before = await readFile(join(repo.cardsDir, 'RB-1.md'), 'utf8');
     const beforeHash = sha256(before);
     const store = await openStore(repo.root, { watch: false, now: () => NOW });
-    const res = await store.archiveCards(['RB-1'], 'claude/test');
+    const res = await store.archiveCards(['RB-1'], 'claude/test', CUTOFF);
     if (!res.ok) throw new Error(res.error);
     expect(res.archived).toEqual(['RB-1']);
     expect(res.method['RB-1']).toBe('rename');
@@ -120,7 +129,7 @@ describe('store: selectArchivable / archiveCards', () => {
     const beforeHash = sha256(before);
 
     const store = await openStore(root, { watch: false, now: () => NOW });
-    const res = await store.archiveCards(['RB-1'], 'claude/test');
+    const res = await store.archiveCards(['RB-1'], 'claude/test', CUTOFF);
     if (!res.ok) throw new Error(res.error);
     expect(res.method['RB-1']).toBe('git');
 
@@ -133,11 +142,45 @@ describe('store: selectArchivable / archiveCards', () => {
     );
   });
 
+  it('archiving 2 of 3 appends exactly ONE attributed log block naming count, ids, cutoff, method', async () => {
+    const repo = await makeTempRepoboard({
+      'RB-1.md': doneCard('RB-1'),
+      'RB-2.md': doneCard('RB-2'),
+      'RB-3.md': doneCard('RB-3', RECENT_UPDATED),
+    });
+    cleanups.push(repo.cleanup);
+    const store = await openStore(repo.root, { watch: false, now: () => NOW });
+    const res = await store.archiveCards(['RB-1', 'RB-2'], 'acme/owner', CUTOFF);
+    if (!res.ok) throw new Error(res.error);
+    expect(res.log).toEqual({ date: NOW.toISOString().slice(0, 10) });
+    const log = await readFile(LOG_FILE(repo.root), 'utf8');
+    const heads = blockHeads(log);
+    expect(heads).toHaveLength(1);
+    expect(heads[0]).toContain('ACME/OWNER');
+    expect(log).toContain('2 done cards older than');
+    expect(log).toContain(CUTOFF.toISOString().replace('.000Z', 'Z'));
+    expect(log).toContain('RB-1, RB-2');
+    expect(log).toContain('; renamed (not git-tracked)');
+    expect(log).not.toContain('RB-3');
+  });
+
+  it('a log write that fails leaves the moves standing and returns log.error', async () => {
+    const repo = await makeTempRepoboard({ 'RB-1.md': doneCard('RB-1') });
+    cleanups.push(repo.cleanup);
+    await writeFile(join(repo.root, '.repoboard', 'log'), 'not a directory');
+    const store = await openStore(repo.root, { watch: false, now: () => NOW });
+    const res = await store.archiveCards(['RB-1'], 'acme/owner', CUTOFF);
+    if (!res.ok) throw new Error(res.error);
+    expect(res.archived).toEqual(['RB-1']);
+    expect(res.log !== null && 'error' in res.log).toBe(true);
+    await stat(join(repo.root, '.repoboard', 'archive', 'RB-1.md'));
+  });
+
   it('map-only: refuses (readOnly)', async () => {
     const noboard = await makeTempRepoNoBoard({});
     dirs.push(noboard.root);
     const store = await openStore(noboard.root, { watch: false, now: () => NOW });
-    const res = await store.archiveCards(['RB-1'], 'claude/test');
+    const res = await store.archiveCards(['RB-1'], 'claude/test', CUTOFF);
     expect(res.ok).toBe(false);
     if (!res.ok) expect(res.readOnly).toBe(true);
   });
@@ -169,6 +212,46 @@ describe('CLI: repoboard archive', () => {
     const after = await readFile(join(repo.cardsDir, 'RB-1.md'), 'utf8');
     expect(after).toBe(before);
     await expect(stat(join(repo.root, '.repoboard', 'archive', 'RB-1.md'))).rejects.toThrow();
+  });
+
+  it('--as acme-owner attributes the log block to ACME-OWNER', async () => {
+    const repo = await makeTempRepoboard({ 'RB-1.md': doneCard('RB-1') });
+    cleanups.push(repo.cleanup);
+    const res = await repoboard(repo.root, 'archive', '--as', 'acme-owner');
+    expect(res.code).toBe(0);
+    const heads = blockHeads(await readFile(LOG_FILE(repo.root), 'utf8'));
+    expect(heads).toHaveLength(1);
+    expect(heads[0]).toContain('ACME-OWNER');
+  });
+
+  it('without --as and no REPOBOARD_ACTOR, the block is attributed to $USER (DEMO)', async () => {
+    const repo = await makeTempRepoboard({ 'RB-1.md': doneCard('RB-1') });
+    cleanups.push(repo.cleanup);
+    const res = await repoboardEnv(repo.root, { USER: 'demo' }, 'archive');
+    expect(res.code).toBe(0);
+    const heads = blockHeads(await readFile(LOG_FILE(repo.root), 'utf8'));
+    expect(heads).toHaveLength(1);
+    expect(heads[0]).toContain('DEMO');
+  });
+
+  it('--dry-run and nothing-to-archive create no log file', async () => {
+    const repo = await makeTempRepoboard({ 'RB-1.md': doneCard('RB-1') });
+    cleanups.push(repo.cleanup);
+    await repoboard(repo.root, 'archive', '--dry-run');
+    await expect(stat(LOG_FILE(repo.root))).rejects.toThrow();
+    await repoboard(repo.root, 'archive', '--older-than', '1000d');
+    await expect(stat(LOG_FILE(repo.root))).rejects.toThrow();
+  });
+
+  it('a log write that fails: card still moved, stdout unchanged, stderr warns, exit 0', async () => {
+    const repo = await makeTempRepoboard({ 'RB-1.md': doneCard('RB-1') });
+    cleanups.push(repo.cleanup);
+    await writeFile(join(repo.root, '.repoboard', 'log'), 'not a directory');
+    const res = await repoboard(repo.root, 'archive', '--as', 'acme-owner');
+    expect(res.code).toBe(0);
+    expect(res.out).toBe('archived 1: RB-1\n');
+    expect(res.err).toContain('warning: archive log not written: ');
+    await stat(join(repo.root, '.repoboard', 'archive', 'RB-1.md'));
   });
 
   it('a real run archives, and `card show` on the archived id says where it went', async () => {

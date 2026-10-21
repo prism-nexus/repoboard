@@ -1434,9 +1434,13 @@ export async function openRepoContext(key: string, opts: RepoContextOptions): Pr
       const ids = store.selectArchivable(older.cutoff);
       if (dryRun) return sendJson(res, 200, { dryRun: true, ids });
       if (ids.length === 0) return sendJson(res, 200, { dryRun: false, archived: [] });
-      const outcome = await store.archiveCards(ids, actor);
+      const outcome = await store.archiveCards(ids, actor, older.cutoff);
       if (!outcome.ok) throw new HttpError(outcome.readOnly === true ? 409 : 400, outcome.error);
-      return sendJson(res, 200, { dryRun: false, archived: outcome.archived });
+      return sendJson(res, 200, {
+        dryRun: false,
+        archived: outcome.archived,
+        log: outcome.log,
+      });
     }
     if (method === 'POST' && path === '/api/sync-issues') {
       const body = await readBody(req);

@@ -2,7 +2,7 @@ import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import * as YAML from 'yaml';
-import { parseCard, serializeCard } from '../src/card.js';
+import { PrioritySchema, parseCard, priorityRank, prodFirst, serializeCard } from '../src/card.js';
 import type { Card } from '../src/types.js';
 import { rng, sampleCard } from './helpers.js';
 
@@ -466,5 +466,45 @@ describe.skipIf(!existsSync(CARDS_DIR))('this repo’s own cards are unaffected'
       }
     }
     expect(needFallback).toEqual([]);
+  });
+});
+
+describe('RCB-229: priority prod', () => {
+  it('a card file with `priority: prod` parses and round-trips', () => {
+    const text =
+      '---\nid: ACME-1\ntitle: t\nstatus: todo\npriority: prod\ncreated: 2026-01-01T00:00:00Z\nupdated: 2026-01-01T00:00:00Z\n---\nbody\n';
+    const card = mustParse(text);
+    expect(card.priority).toBe('prod');
+    expect(serializeCard(card)).toContain('priority: prod\n');
+    expect(mustParse(serializeCard(card)).priority).toBe('prod');
+  });
+
+  it('PrioritySchema lists prod first and priorityRank follows it (unset last)', () => {
+    expect(PrioritySchema.options).toEqual(['prod', 'high', 'medium', 'low']);
+    expect(
+      ['low', 'prod', undefined, 'high', 'medium'].map((p) => priorityRank(p as never)),
+    ).toEqual([3, 0, 4, 1, 2]);
+  });
+
+  it('prodFirst is a stable partition: prod first, the rest in incoming order', () => {
+    const cards = [
+      sampleCard({ id: 'ACME-1', priority: 'high' }),
+      sampleCard({ id: 'ACME-2', priority: undefined }),
+      sampleCard({ id: 'ACME-3', priority: 'prod' }),
+      sampleCard({ id: 'ACME-4', priority: 'low' }),
+      sampleCard({ id: 'ACME-5', priority: 'prod' }),
+    ];
+    expect(prodFirst(cards).map((c) => c.id)).toEqual([
+      'ACME-3',
+      'ACME-5',
+      'ACME-1',
+      'ACME-2',
+      'ACME-4',
+    ]);
+    expect(prodFirst(cards.filter((c) => c.priority !== 'prod')).map((c) => c.id)).toEqual([
+      'ACME-1',
+      'ACME-2',
+      'ACME-4',
+    ]);
   });
 });

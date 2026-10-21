@@ -14,6 +14,7 @@
  * this package (§0.5).
  */
 import { findColumn } from './board.js';
+import { prodFirst } from './card.js';
 import type { CostReport } from './cost.js';
 import { isOwnerTask, needsDecision } from './decisions.js';
 import {
@@ -137,7 +138,7 @@ export function ownerQueueLine(card: Card): string {
 export function renderOwnerQueue(cards: readonly Card[]): string {
   const open = cards.filter((c) => needsDecision(c));
   if (open.length === 0) return OWNER_QUEUE_PLACEHOLDER;
-  return open.map(ownerQueueLine).join('\n');
+  return prodFirst(open).map(ownerQueueLine).join('\n');
 }
 
 /**

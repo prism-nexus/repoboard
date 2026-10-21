@@ -1851,3 +1851,16 @@ describe('checkFindings: address-to-down-seat (RCB-230)', () => {
     expect(FINDING_KINDS).toContain('address-to-down-seat');
   });
 });
+
+describe('RCB-229: OWNER QUEUE puts prod first', () => {
+  it('a prod decision card with a larger id sorts before lower-id cards; others keep list order', () => {
+    const low = askedCard('ACME-1', 'first?', ['A']);
+    const high = { ...askedCard('ACME-2', 'second?', ['A']), priority: 'high' as const };
+    const prod = { ...askedCard('ACME-9', 'prod down?', ['A']), priority: 'prod' as const };
+    expect(renderOwnerQueue([low, high, prod]).split('\n')).toEqual([
+      'ACME-9 · prod down? · [A]',
+      'ACME-1 · first? · [A]',
+      'ACME-2 · second? · [A]',
+    ]);
+  });
+});

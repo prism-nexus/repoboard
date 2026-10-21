@@ -3073,3 +3073,51 @@ describe('home payload twins (RCB-184 slice 2)', () => {
     expect(homeSeatRowPayloads('(none)', [], 'acme')).toEqual([]);
   });
 });
+
+describe('RCB-229: prod priority in the seat bundle', () => {
+  const input = (cards: Card[]) => ({
+    name: 'builder',
+    now: NOW,
+    seatsSection: null,
+    ownBlock: null,
+    coordinatorBlock: null,
+    cards,
+  });
+
+  it('next card: a prod todo beats an earlier-listed high todo', () => {
+    const bundle = seatBundle(
+      input([
+        card({ id: 'ACME-1', status: 'todo', priority: 'high', title: 'high' }),
+        card({ id: 'ACME-2', status: 'todo', priority: 'prod', title: 'prod' }),
+      ]),
+    );
+    expect(bundle.nextCard?.id).toBe('ACME-2');
+    expect(bundle.nextCardReason).toBe('priority');
+  });
+
+  it('the rendered open decisions list a prod card first', () => {
+    const asked = (id: string, priority?: 'prod'): Card =>
+      card({
+        id,
+        status: 'decide',
+        ...(priority ? { priority } : {}),
+        decision: {
+          question: `q ${id}`,
+          options: [],
+          askedBy: 'claude/coordinator',
+          askedAt: '2026-09-17T20:00:00Z',
+          returnTo: 'doing',
+          chosen: null,
+          words: null,
+          decidedBy: null,
+          decidedAt: null,
+        },
+      });
+    const rendered = renderSeatBundle(
+      seatBundle(input([asked('ACME-1'), asked('ACME-7', 'prod')])),
+      NOW,
+    );
+    expect(rendered.indexOf('ACME-7')).toBeGreaterThan(-1);
+    expect(rendered.indexOf('ACME-7')).toBeLessThan(rendered.indexOf('ACME-1 '));
+  });
+});

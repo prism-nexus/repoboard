@@ -78,7 +78,7 @@ id: RB-12
 title: Treemap view of the repo
 status: doing
 assignee: claude/web-agent
-priority: high          # high | medium | low, optional
+priority: high          # prod | high | medium | low, optional
 size: M  # S | M | L | XL, optional — S ≤2h · M half a day · L days · XL plan-sized
 labels: [web, viz]
 files:

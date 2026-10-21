@@ -26,6 +26,8 @@ export {
   OPTIONAL_CARD_KEYS,
   PrioritySchema,
   parseCard,
+  priorityRank,
+  prodFirst,
   REQUIRED_CARD_KEYS,
   SizeSchema,
   serializeCard,

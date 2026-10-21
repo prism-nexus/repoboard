@@ -47,6 +47,7 @@ import {
   isSiblingUrl,
   needsDecision,
   type Priority,
+  PrioritySchema,
   parseBoard,
   parseSeatHolderLabel,
   parseSystems,
@@ -148,6 +149,9 @@ export class UserError extends Error {}
  */
 export class ParseError extends UserError {}
 
+/** RCB-229: `prod|high|medium|low`, derived from the one list in core. */
+const PRIORITY_BAR = PrioritySchema.options.join('|');
+
 const HELP = `repoboard — Remember · Connect · Build
 
 Usage:
@@ -166,7 +170,7 @@ Usage:
                                         does not exist yet is allowed (repoboard check finds it as
                                         workspace-member-missing) — the output says so. Never reads
                                         or writes anything under a member's own path.
-  repoboard card add "<title>" [options]      --status s --assignee a --priority high|medium|low
+  repoboard card add "<title>" [options]      --status s --assignee a --priority ${PRIORITY_BAR}
                                         --size S|M|L|XL
                                         --label l (repeatable) --file f (repeatable) --ref r (repeatable)
                                         --parent <id> --phase PH.<n> --gate <id|"sentence">
@@ -181,7 +185,7 @@ Usage:
                                         refused: "member <key> is read-only (set writes: cards in
                                         board.yml)" — same resolution/refusal for move/update/ask/
                                         decide/note below
-  repoboard card update <id> [options]        --title t --assignee a --priority high|medium|low
+  repoboard card update <id> [options]        --title t --assignee a --priority ${PRIORITY_BAR}
                                         --size S|M|L|XL
                                         --label l --file f --ref r (repeatable; each one REPLACES
                                         the whole list, it does not append)
@@ -576,7 +580,7 @@ const QUICKSTART = `repoboard quickstart:
   repoboard --help for every command
 `;
 
-const PRIORITIES: ReadonlySet<string> = new Set(['high', 'medium', 'low']);
+const PRIORITIES: ReadonlySet<string> = new Set<string>(PrioritySchema.options);
 const SIZES: ReadonlySet<string> = new Set(['S', 'M', 'L', 'XL']);
 
 type Options = NonNullable<ParseArgsConfig['options']>;
@@ -867,7 +871,10 @@ function sectionNameFrom(v: string): StateSectionName {
 
 function priorityFrom(v: string | undefined): Priority | undefined {
   if (v === undefined) return undefined;
-  if (!PRIORITIES.has(v)) throw new UserError(`priority must be high, medium or low (got "${v}")`);
+  if (!PRIORITIES.has(v))
+    throw new UserError(
+      `priority must be ${PrioritySchema.options.slice(0, -1).join(', ')} or ${PrioritySchema.options.at(-1)} (got "${v}")`,
+    );
   return v as Priority;
 }
 

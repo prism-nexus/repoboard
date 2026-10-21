@@ -25,6 +25,7 @@ import {
   type LeasesDoc,
   liveLeases,
   needsDecision,
+  PrioritySchema,
   renderState,
   resolveOlderThan,
   resolveSince,
@@ -246,7 +247,7 @@ const ACTOR_DESC =
 /** P8.2: the five lease/window tools stay terse (orchestrator note: aim <=700 B each) — no CARD_INTRO. */
 const ACTOR_SHORT = 'Who is acting, e.g. claude/agent. Default: $REPOBOARD_ACTOR, then "mcp".';
 
-const PRIORITY = z.enum(['high', 'medium', 'low']);
+const PRIORITY = z.enum(PrioritySchema.options);
 const SIZE = z.enum(['S', 'M', 'L', 'XL']);
 
 /** Build the server. Call `server.connect(transport)` to serve; tests use an in-memory pair. */

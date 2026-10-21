@@ -4910,3 +4910,57 @@ describe('repoboard inbox (RCB-230)', () => {
     );
   });
 });
+
+describe('repoboard card: priority prod (RCB-229)', () => {
+  const withPriority = (id: string, priority?: string): string => {
+    const text = cardText(id, 'todo', { title: `T ${id}` });
+    return priority
+      ? text.replace('status: todo\n', `status: todo\npriority: ${priority}\n`)
+      : text;
+  };
+
+  it('card add --priority prod writes the file', async () => {
+    const root = await freshRepo({ 'RB-1.md': cardText('RB-1', 'todo') });
+    const res = await repoboard(root, 'card', 'add', 'Prod is down', '--priority', 'prod');
+    expect(res.code).toBe(0);
+    const text = await readFile(join(root, '.repoboard', 'cards', 'RB-2.md'), 'utf8');
+    expect(text).toContain('priority: prod');
+  });
+
+  it('card list puts prod first and keeps id order otherwise (3,1,2,4)', async () => {
+    const root = await freshRepo({
+      'RB-1.md': withPriority('RB-1', 'high'),
+      'RB-2.md': withPriority('RB-2'),
+      'RB-3.md': withPriority('RB-3', 'prod'),
+      'RB-4.md': withPriority('RB-4', 'low'),
+    });
+    const res = await repoboard(root, 'card', 'list', '--json');
+    expect((JSON.parse(res.out) as { id: string }[]).map((c) => c.id)).toEqual([
+      'RB-3',
+      'RB-1',
+      'RB-2',
+      'RB-4',
+    ]);
+  });
+
+  it('card list with no prod card keeps the old id order', async () => {
+    const root = await freshRepo({
+      'RB-1.md': withPriority('RB-1', 'low'),
+      'RB-2.md': withPriority('RB-2', 'high'),
+      'RB-3.md': withPriority('RB-3'),
+    });
+    const res = await repoboard(root, 'card', 'list', '--json');
+    expect((JSON.parse(res.out) as { id: string }[]).map((c) => c.id)).toEqual([
+      'RB-1',
+      'RB-2',
+      'RB-3',
+    ]);
+  });
+
+  it('a bad priority error names prod', async () => {
+    const root = await freshRepo({ 'RB-1.md': cardText('RB-1', 'todo') });
+    const res = await repoboard(root, 'card', 'add', 'x', '--priority', 'urgent');
+    expect(res.code).toBe(1);
+    expect(res.err).toContain('prod, high, medium or low');
+  });
+});

@@ -369,6 +369,7 @@ export {
   staleDetected,
   toSystemId,
   workspaceGlobs,
+  writeSystemsText,
 } from './systems-detect.js';
 export type { SystemsPlan, SystemsPlanCounts, SystemsPlanInput } from './systems-plan.js';
 export { planSystemsMap } from './systems-plan.js';

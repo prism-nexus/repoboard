@@ -521,7 +521,8 @@ Usage:
                                         package.json/workspaces, wrangler.*, compose, CI, .env,
                                         vite/drizzle/prisma configs; dry-run by default (table
                                         only) — --apply merges, stamps provenance, never
-                                        overwrites a hand row (detection proposes; the file is truth)
+                                        overwrites a hand row, or hand text on a detected row;
+                                        keeps the file's layout (detection proposes; the file is truth)
   repoboard archive [--older-than 14d] [--dry-run] [--as actor]
                                         move every \`done\` card whose \`updated\` is older than the
                                         cutoff (duration 14d/2h/90m, or an ISO-8601 datetime) to

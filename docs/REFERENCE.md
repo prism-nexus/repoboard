@@ -961,7 +961,11 @@ workspace glob can never escape `root`.
 written. `--apply` merges the candidates into `.repoboard/systems.yml` (`emptySystemsDoc()` if
 absent) and stamps `source: { detected: <file>, at: <now> }` on every row it touches. **A hand
 row always wins**: a row whose `source` is already `hand` is left byte-for-byte unchanged and
-counted as "kept", never overwritten or deleted. A system or connection named in `rejected:`
+counted as "kept", never overwritten or deleted. **Hand text on a detected row wins too**
+(RCB-232): `name`, `kind`, `layer`, `runtime` text, `via` and hand pointers stay, and a null
+`runtime` env or `via` is filled from the candidate. `--apply` keeps the file's layout (flow
+lists, quoting, comments) by editing only the changed keys in place, and a run that changes
+nothing neither restamps `source.at` nor writes the file. A system or connection named in `rejected:`
 (RCB-162, a hand "no" with a required `why`) is skipped the same way — `detect` never re-adds a
 row the owner turned down. An existing `systems.yml` that fails to parse
 refuses the whole run — errors on stderr, exit 1, nothing written — whether or not `--apply` was

@@ -8,17 +8,18 @@
  */
 import * as YAML from 'yaml';
 import { parseRef, splitLines } from './refs.js';
-import type {
-  Connection,
-  Environment,
-  Rejection,
-  Source,
-  SystemEnv,
-  SystemKind,
-  SystemLayer,
-  SystemRow,
-  SystemStatus,
-  SystemsDoc,
+import {
+  type Connection,
+  type Environment,
+  parseSystems,
+  type Rejection,
+  type Source,
+  type SystemEnv,
+  type SystemKind,
+  type SystemLayer,
+  type SystemRow,
+  type SystemStatus,
+  type SystemsDoc,
 } from './systems.js';
 
 // ---------------------------------------------------------------------------------------------
@@ -1504,6 +1505,25 @@ function mergeDetectedPointers(
   return [...kept, ...fresh.filter((spec) => !kept.includes(spec))];
 }
 
+/** RCB-232: structural equality for plain rows; an `undefined` value is an absent key. */
+function sameValue(a: unknown, b: unknown): boolean {
+  if (a === b) return true;
+  if (Array.isArray(a) || Array.isArray(b)) {
+    return (
+      Array.isArray(a) &&
+      Array.isArray(b) &&
+      a.length === b.length &&
+      a.every((v, i) => sameValue(v, b[i]))
+    );
+  }
+  if (typeof a !== 'object' || typeof b !== 'object' || a === null || b === null) return false;
+  const ao = a as Record<string, unknown>;
+  const bo = b as Record<string, unknown>;
+  const keys = new Set([...Object.keys(ao), ...Object.keys(bo)]);
+  for (const k of keys) if (!sameValue(ao[k], bo[k])) return false;
+  return true;
+}
+
 export function applyDetected(
   doc: SystemsDoc,
   c: Candidates,
@@ -1568,15 +1588,21 @@ export function applyDetected(
       skipped.push(cand.id);
       continue;
     }
-    systems[idx] = {
+    // RCB-232: an updated detected row keeps every hand-edited field — name/kind/layer, runtime
+    // text, pointers — and takes from the candidate only what the row lacks (a null runtime env)
+    // or the RCB-177 rule says is fresh (a `:L` range). K15 still drops a `none` env.
+    const merged: SystemRow = {
       id: cand.id,
-      name: cand.name,
-      kind: cand.kind,
-      layer: cand.layer,
-      env: filterNoneEnvs(doc, cand.env),
-      runtime: { dev: cand.runtime.dev ?? null, prod: cand.runtime.prod ?? null },
+      name: existing.name,
+      kind: existing.kind,
+      layer: existing.layer,
+      env: filterNoneEnvs(doc, existing.env),
+      runtime: {
+        dev: existing.runtime.dev ?? cand.runtime.dev ?? null,
+        prod: existing.runtime.prod ?? cand.runtime.prod ?? null,
+      },
       owner: existing.owner,
-      pointers: cand.pointers,
+      pointers: mergeDetectedPointers(existing.pointers, cand.pointers) ?? [],
       docs: existing.docs,
       // RCB-161 slice 3: `why` fills from the candidate only where the row has none yet — an
       // owner's own why note is never overwritten by a detector's guess.
@@ -1585,8 +1611,11 @@ export function applyDetected(
       // re-detect must never silently clear an owner's "planned, waiting on RCB-9" note.
       status: existing.status,
       unblockedBy: existing.unblockedBy,
-      source: { detected: cand.detected, at },
+      source: existing.source,
     };
+    // RCB-232: nothing changed → keep the existing row, restamp nothing, report nothing.
+    if (sameValue(merged, existing)) continue;
+    systems[idx] = { ...merged, source: { detected: cand.detected, at } };
     updated.push(cand.id);
   }
 
@@ -1625,7 +1654,9 @@ export function applyDetected(
       continue;
     }
     const pointers = mergeDetectedPointers(existing.pointers, cand.pointers);
-    connections[idx] = {
+    // RCB-232: `via` and `env` keep the row's own value (a hand `via` text survives); the
+    // candidate fills a null `via`. An unchanged merge keeps the row and restamps nothing.
+    const merged: Connection = {
       from: cand.from,
       to: cand.to,
       // RCB-173: an updated detected row KEEPS the hand-added id/label/pointers, the same rule as
@@ -1633,12 +1664,14 @@ export function applyDetected(
       ...connectionExtras(existing),
       // RCB-177: ...except that the candidate's fresh `:L` range replaces the stale one.
       ...(pointers !== undefined && pointers.length > 0 ? { pointers } : {}),
-      via: cand.via,
-      env: filterNoneEnvs(doc, cand.env),
+      via: existing.via ?? cand.via,
+      env: filterNoneEnvs(doc, existing.env),
       status: existing.status,
       unblockedBy: existing.unblockedBy,
-      source: { detected: cand.detected, at },
+      source: existing.source,
     };
+    if (sameValue(merged, existing)) continue;
+    connections[idx] = { ...merged, source: { detected: cand.detected, at } };
     updated.push(key);
   }
 
@@ -1731,6 +1764,47 @@ function serializeRejection(r: Rejection): Record<string, unknown> {
   return { from: r.from, to: r.to, why: r.why };
 }
 
+/** The row serializers `serializeSystems` and `writeSystemsText` share (RCB-232): one definition
+ * of which keys a row writes, so the in-place writer cannot drift from the full one. */
+function serializeSystemRow(s: SystemRow): Record<string, unknown> {
+  const runtime: Record<string, string> = {};
+  if (s.runtime.dev !== null && s.runtime.dev !== undefined) runtime.dev = s.runtime.dev;
+  if (s.runtime.prod !== null && s.runtime.prod !== undefined) runtime.prod = s.runtime.prod;
+  const row: Record<string, unknown> = {
+    id: s.id,
+    name: s.name,
+    kind: s.kind,
+    layer: s.layer,
+    env: s.env,
+    runtime,
+  };
+  if (s.owner !== null) row.owner = s.owner;
+  row.pointers = s.pointers;
+  if (s.docs.length > 0) row.docs = s.docs;
+  if (s.why !== null) row.why = s.why;
+  // RCB-161 slice 1: `status`/`unblocked_by` write only when they diverge from the absent-key
+  // default (live/[]) — an old fixture with neither field round-trips byte-identical.
+  if (s.status !== 'live') row.status = s.status;
+  if (s.unblockedBy.length > 0) row.unblocked_by = s.unblockedBy;
+  row.source = serializeSource(s.source);
+  return row;
+}
+
+function serializeConnectionRow(c: Connection): Record<string, unknown> {
+  const row: Record<string, unknown> = { from: c.from, to: c.to };
+  // RCB-173: `id`/`label`/`pointers` write only when present (pointers: non-empty) — an old
+  // file with none of them round-trips byte-identical, and no empty key is ever written.
+  if (c.id !== undefined) row.id = c.id;
+  if (c.label !== undefined) row.label = c.label;
+  if (c.via !== null) row.via = c.via;
+  row.env = c.env;
+  if (c.pointers !== undefined && c.pointers.length > 0) row.pointers = c.pointers;
+  if (c.status !== 'live') row.status = c.status;
+  if (c.unblockedBy.length > 0) row.unblocked_by = c.unblockedBy;
+  row.source = serializeSource(c.source);
+  return row;
+}
+
 /** `YAML.stringify(ordered, { schema: 'core', lineWidth: 0 })`, key order `environments ->
  * systems -> connections -> paths -> rejected` (RCB-162: `rejected` only when non-empty; RCB-180:
  * `paths` likewise), row keys in §3.1 order; omits `owner`/`why`/`via` when null, `docs` when
@@ -1740,43 +1814,8 @@ export function serializeSystems(doc: SystemsDoc): string {
     dev: serializeEnvironment(doc.environments.dev),
     prod: serializeEnvironment(doc.environments.prod),
   };
-  const systems = doc.systems.map((s) => {
-    const runtime: Record<string, string> = {};
-    if (s.runtime.dev !== null && s.runtime.dev !== undefined) runtime.dev = s.runtime.dev;
-    if (s.runtime.prod !== null && s.runtime.prod !== undefined) runtime.prod = s.runtime.prod;
-    const row: Record<string, unknown> = {
-      id: s.id,
-      name: s.name,
-      kind: s.kind,
-      layer: s.layer,
-      env: s.env,
-      runtime,
-    };
-    if (s.owner !== null) row.owner = s.owner;
-    row.pointers = s.pointers;
-    if (s.docs.length > 0) row.docs = s.docs;
-    if (s.why !== null) row.why = s.why;
-    // RCB-161 slice 1: `status`/`unblocked_by` write only when they diverge from the absent-key
-    // default (live/[]) — an old fixture with neither field round-trips byte-identical.
-    if (s.status !== 'live') row.status = s.status;
-    if (s.unblockedBy.length > 0) row.unblocked_by = s.unblockedBy;
-    row.source = serializeSource(s.source);
-    return row;
-  });
-  const connections = doc.connections.map((c: Connection) => {
-    const row: Record<string, unknown> = { from: c.from, to: c.to };
-    // RCB-173: `id`/`label`/`pointers` write only when present (pointers: non-empty) — an old
-    // file with none of them round-trips byte-identical, and no empty key is ever written.
-    if (c.id !== undefined) row.id = c.id;
-    if (c.label !== undefined) row.label = c.label;
-    if (c.via !== null) row.via = c.via;
-    row.env = c.env;
-    if (c.pointers !== undefined && c.pointers.length > 0) row.pointers = c.pointers;
-    if (c.status !== 'live') row.status = c.status;
-    if (c.unblockedBy.length > 0) row.unblocked_by = c.unblockedBy;
-    row.source = serializeSource(c.source);
-    return row;
-  });
+  const systems = doc.systems.map(serializeSystemRow);
+  const connections = doc.connections.map(serializeConnectionRow);
   // RCB-162: `rejected:` written only when non-empty and always after `connections` — an old
   // file with no `rejected` key round-trips byte-identical (no key added when the list is empty).
   const ordered: Record<string, unknown> = { environments, systems, connections };
@@ -1793,4 +1832,147 @@ export function serializeSystems(doc: SystemsDoc): string {
     ordered.rejected = doc.rejected.map(serializeRejection);
   }
   return YAML.stringify(ordered, { schema: 'core', lineWidth: 0 });
+}
+
+/** RCB-232: set `map[key]` to `value` in place. A scalar over a scalar keeps the node (quote
+ * style, comment); a seq over a seq keeps the old node's `flow` and its items' quote style;
+ * anything else is a fresh node. */
+function setNode(doc: YAML.Document, map: YAML.YAMLMap, key: string, value: unknown): void {
+  const old = map.get(key, true);
+  if (YAML.isScalar(old) && (value === null || typeof value !== 'object')) {
+    old.value = value;
+    return;
+  }
+  const node = doc.createNode(value);
+  if (YAML.isSeq(old) && YAML.isSeq(node)) {
+    if (old.flow !== undefined) node.flow = old.flow;
+    const first = old.items[0];
+    const type = YAML.isScalar(first) ? first.type : undefined;
+    if (type !== undefined) {
+      for (const item of node.items) {
+        if (YAML.isScalar(item) && typeof item.value === 'string') item.type = type;
+      }
+    }
+  }
+  map.set(key, node);
+}
+
+function isPlainMap(v: unknown): v is Record<string, unknown> {
+  return typeof v === 'object' && v !== null && !Array.isArray(v);
+}
+
+/** RCB-232: bring `map` (the file's node for a row or a sub-map) from `before` to `after`,
+ * touching only keys whose serialized value differs; recurses into maps (`runtime`, `source`). */
+function syncMap(
+  doc: YAML.Document,
+  map: YAML.YAMLMap,
+  before: Record<string, unknown>,
+  after: Record<string, unknown>,
+): void {
+  for (const [key, value] of Object.entries(after)) {
+    if (sameValue(before[key], value)) continue;
+    const child = map.get(key, true);
+    const prior = before[key];
+    if (YAML.isMap(child) && isPlainMap(prior) && isPlainMap(value)) {
+      syncMap(doc, child, prior, value);
+    } else {
+      setNode(doc, map, key, value);
+    }
+  }
+  for (const key of Object.keys(before)) {
+    if (!(key in after)) map.delete(key);
+  }
+}
+
+function syncRows(
+  doc: YAML.Document,
+  key: 'systems' | 'connections',
+  before: Record<string, unknown>[],
+  after: Record<string, unknown>[],
+): void {
+  let seq = doc.get(key, true);
+  if (!YAML.isSeq(seq)) {
+    if (after.length === 0) return;
+    seq = doc.createNode([]);
+    doc.set(key, seq);
+  }
+  const items = (seq as YAML.YAMLSeq).items;
+  after.forEach((row, i) => {
+    const prior = before[i];
+    const node = items[i];
+    if (prior === undefined || node === undefined) {
+      items.push(doc.createNode(row));
+    } else if (YAML.isMap(node)) {
+      syncMap(doc, node, prior, row);
+    }
+  });
+}
+
+/** RCB-232: `doc.toString` pads flow collections one way for the whole document (`[ a ]` and
+ * `{ a }`), but a hand file may write `{ a }` and `[a]`. Render both ways (the line structure is
+ * identical at `lineWidth: 0`) and take, per line, the variant the file already had; a line that
+ * is new keeps the file's own seq style. */
+function renderKeepingPadding(doc: YAML.Document, original: string): string {
+  const padded = doc.toString({ lineWidth: 0, flowCollectionPadding: true }).split('\n');
+  const tight = doc.toString({ lineWidth: 0, flowCollectionPadding: false }).split('\n');
+  if (padded.length !== tight.length) return padded.join('\n');
+  const had = new Set(original.split('\n'));
+  const seqPadded = original.includes('[ ');
+  return padded
+    .map((line, i) => {
+      const alt = tight[i] ?? line;
+      if (had.has(line)) return line;
+      if (had.has(alt)) return alt;
+      return line.includes('[') && !line.includes('{') && !seqPadded ? alt : line;
+    })
+    .join('\n');
+}
+
+/**
+ * RCB-232: the ONE write path for `systems.yml` after `applyDetected`. `text` is the file as it
+ * is (null: there is none); `before`/`after` are the doc parsed from it and the doc to write.
+ * Rows pair by index (`applyDetected` updates in place and appends). Only the keys of a changed
+ * row whose serialized value differs are touched, so a flow-style file, its quoting and its
+ * comments survive a one-pointer change. If the result does not parse to the same doc as
+ * `serializeSystems(after)`, that full serialization is returned instead.
+ */
+export function writeSystemsText(
+  text: string | null,
+  before: SystemsDoc,
+  after: SystemsDoc,
+): string {
+  const full = serializeSystems(after);
+  if (text === null) return full;
+  try {
+    const rowsBefore = [
+      ...before.systems.map(serializeSystemRow),
+      ...before.connections.map(serializeConnectionRow),
+    ];
+    const rowsAfter = [
+      ...after.systems.map(serializeSystemRow),
+      ...after.connections.map(serializeConnectionRow),
+    ];
+    if (sameValue(rowsBefore, rowsAfter)) return text;
+    const doc = YAML.parseDocument(text, { schema: 'core' });
+    if (doc.errors.length > 0) return full;
+    syncRows(
+      doc,
+      'systems',
+      before.systems.map(serializeSystemRow),
+      after.systems.map(serializeSystemRow),
+    );
+    syncRows(
+      doc,
+      'connections',
+      before.connections.map(serializeConnectionRow),
+      after.connections.map(serializeConnectionRow),
+    );
+    const out = renderKeepingPadding(doc, text);
+    const got = parseSystems(out);
+    const want = parseSystems(full);
+    if (got.ok && want.ok && sameValue(got.doc, want.doc)) return out;
+    return full;
+  } catch {
+    return full;
+  }
 }

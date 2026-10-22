@@ -26,8 +26,8 @@ import {
   mergeCandidates,
   parseSystems,
   type SystemsDoc,
-  serializeSystems,
   workspaceGlobs,
+  writeSystemsText,
 } from '@repoboard/core';
 import { resolveRepoPath } from './refs.js';
 
@@ -248,6 +248,9 @@ export async function runDetect(
     };
   }
 
-  await writeFile(fullPath, serializeSystems(applied.doc));
+  // RCB-232: edit the file's own text in place and skip the write when nothing changed, so a
+  // re-run is byte-identical and leaves the mtime alone.
+  const out = writeSystemsText(existingText, doc, applied.doc);
+  if (out !== existingText) await writeFile(fullPath, out);
   return { files, candidates, plan, applied: true, path, errors: [] };
 }

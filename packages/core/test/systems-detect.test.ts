@@ -25,6 +25,7 @@ import {
   staleDetected,
   toSystemId,
   workspaceGlobs,
+  writeSystemsText,
 } from '../src/index.js';
 import { resolveRefText } from '../src/refs.js';
 import { EVIDENCE_MAX_LINES, lineEvidence, locateEvidence } from '../src/systems-detect.js';
@@ -1016,9 +1017,10 @@ describe('systems detect (RCB-96)', () => {
       });
 
       const gateway = result.doc.systems.find((s) => s.id === 'gateway');
+      // RCB-232: name/kind/layer/runtime keep the row's own text; only the fresh pointer joins.
       expect(gateway).toEqual({
         id: 'gateway',
-        name: 'edge gateway v2',
+        name: 'edge gateway',
         kind: 'worker',
         layer: 'edge',
         env: ['dev', 'prod'],
@@ -1803,7 +1805,7 @@ describe('systems detect (RCB-96)', () => {
       expect(emptyText.slice(emptyText.indexOf('\nconnections:'))).not.toContain('pointers');
     });
 
-    it("a detect apply keeps a detected connection's hand label/pointers/id (updated), and a hand connection's label (skipped)", () => {
+    it("a detect apply keeps a detected connection's hand label/pointers/id/via, restamps nothing when nothing changed, and keeps a hand connection's label (skipped)", () => {
       const before = onDiskDoc();
       const candidates: Candidates = {
         ...emptyCandidates(),
@@ -1811,7 +1813,8 @@ describe('systems detect (RCB-96)', () => {
       };
       const applied = applyDetected(before, candidates, AT);
       expect(applied.skipped).toEqual(['web→gateway']);
-      expect(applied.updated).toEqual(['gateway→api', 'api→postgres']);
+      // RCB-232: the candidate's `via` no longer overwrites the row's own, so nothing differs.
+      expect(applied.updated).toEqual([]);
       expect(applied.added).toEqual([]);
 
       // Through the serializer and back — the real `--apply` path.
@@ -1821,19 +1824,20 @@ describe('systems detect (RCB-96)', () => {
       const find = (from: string, to: string) =>
         after.doc.connections.find((c) => isPair(c, from, to));
       // CONTROL: without `connectionExtras(existing)` in applyDetected's update branch these two
-      // lose their label/pointers/id and fail here; without the serializer writing the keys, all
+      // lose their label/pointers/id, the merge differs from the row, and they fail here (as
+      // `updated` and as a restamped `source`); without the serializer writing the keys, all
       // three fail.
       expect(find('gateway', 'api')).toMatchObject({
         id: 'edge-call',
         label: 'internal call',
         pointers: ['apps/gateway/src/index.ts'],
-        via: 'detected via',
-        source: { detected: 'wrangler.jsonc@v2', at: AT },
+        via: 'HTTP internal',
+        source: { detected: 'wrangler.jsonc', at: '2026-09-22T00:00:00Z' },
       });
       expect(find('api', 'postgres')).toMatchObject({
         label: 'via hyperdrive',
         pointers: ['src/api/index.ts', 'src/db.ts:L1-L5'],
-        via: 'detected via',
+        via: 'Hyperdrive binding HYPERDRIVE',
       });
       expect('id' in (find('api', 'postgres') ?? {})).toBe(false);
       // the hand row is byte-for-byte what it was.
@@ -2012,6 +2016,8 @@ describe('systems detect (RCB-96)', () => {
             via: 'detected via',
             env: ['dev', 'prod'],
             detected: 'wrangler.jsonc@v2',
+            // RCB-232: a fresh pointer is what makes this an update (`via` no longer overwrites).
+            pointers: ['wrangler.jsonc:L1-L2'],
           },
           {
             from: 'api',
@@ -2631,6 +2637,238 @@ describe('systems detect (RCB-96)', () => {
           doc.connections.find((c) => isPair(c, 'web', 'gateway')),
         );
       });
+    });
+  });
+
+  // -----------------------------------------------------------------------------------------
+  // RCB-232: an update keeps hand text and the file's layout
+  // -----------------------------------------------------------------------------------------
+  describe('RCB-232: applyDetected keeps hand text on a detected row; writeSystemsText keeps the layout', () => {
+    const AT = '2026-10-21T00:00:00Z';
+    const OLD = '2026-09-01T00:00:00Z';
+
+    const FLOW = [
+      '# acme systems map: hand comment',
+      'environments:',
+      '  dev: { note: "local" }',
+      '  prod: { note: "workers" }',
+      'systems:',
+      '  - id: web',
+      '    name: "acme web"',
+      '    kind: client',
+      '    layer: client',
+      '    env: [dev, prod]',
+      '    runtime: { dev: "vite dev", prod: "static" }',
+      '    pointers: ["apps/web/src"]',
+      `    source: { detected: "package.json", at: "${OLD}" }`,
+      '  - id: api',
+      '    name: "acme api"',
+      '    kind: service',
+      '    layer: app',
+      '    env: [dev, prod]',
+      '    runtime: { dev: "node server", prod: "workers" }',
+      '    pointers: ["apps/api/src"]',
+      `    source: { detected: "package.json", at: "${OLD}" }`,
+      '  - id: db',
+      '    name: "acme db"',
+      '    kind: db',
+      '    layer: data',
+      '    env: [dev]',
+      '    runtime: { dev: "postgres" }',
+      '    pointers: ["docker-compose.yml"]',
+      `    source: { detected: "docker-compose.yml", at: "${OLD}" }`,
+      'connections:',
+      '  - from: web',
+      '    to: api',
+      '    via: "HTTPS"',
+      '    env: [dev, prod]',
+      '    pointers: ["apps/web/src/api.ts:L1-L4"]',
+      `    source: { detected: "package.json", at: "${OLD}" }`,
+      '',
+    ].join('\n');
+
+    const flowDoc = (): SystemsDoc => {
+      const r = parseSystems(FLOW);
+      if (!r.ok) throw new Error(`flow fixture failed to parse: ${r.errors.join('; ')}`);
+      return r.doc;
+    };
+
+    /** The candidates the FLOW file was written from: applying them changes nothing. */
+    const sameCandidates = (): Candidates => ({
+      ...emptyCandidates(),
+      systems: flowDoc().systems.map((r) => ({
+        id: r.id,
+        name: r.name,
+        kind: r.kind,
+        layer: r.layer,
+        env: r.env,
+        runtime: r.runtime,
+        pointers: r.pointers,
+        detected: 'package.json',
+      })),
+      connections: [
+        {
+          from: 'web',
+          to: 'api',
+          via: 'HTTPS',
+          env: ['dev', 'prod'],
+          detected: 'package.json',
+          pointers: ['apps/web/src/api.ts:L1-L4'],
+        },
+      ],
+    });
+
+    /** Lines of `b` with no equal line left in `a` (a multiset diff: enough for "what moved"). */
+    const changedLines = (a: string, b: string): number => {
+      const pool = new Map<string, number>();
+      for (const l of a.split('\n')) pool.set(l, (pool.get(l) ?? 0) + 1);
+      let n = 0;
+      for (const l of b.split('\n')) {
+        const left = pool.get(l) ?? 0;
+        if (left > 0) pool.set(l, left - 1);
+        else n += 1;
+      }
+      return n;
+    };
+
+    const handRow = (): SystemRow => ({
+      id: 'svc',
+      name: 'Hand Name',
+      kind: 'worker',
+      layer: 'edge',
+      env: ['dev', 'prod'],
+      runtime: { dev: 'my dev box', prod: 'my prod box' },
+      owner: null,
+      pointers: ['docs/svc.md#Heading', 'apps/svc/src'],
+      docs: [],
+      why: null,
+      status: 'live',
+      unblockedBy: [],
+      source: { detected: 'package.json', at: OLD },
+    });
+
+    const docWith = (rows: SystemRow[]): SystemsDoc => ({
+      environments: { dev: { note: null }, prod: { note: null } },
+      systems: rows,
+      connections: [],
+      rejected: [],
+    });
+
+    const candFor = (over: Partial<Candidates['systems'][number]>): Candidates => ({
+      ...emptyCandidates(),
+      systems: [
+        {
+          id: 'svc',
+          name: 'service',
+          kind: 'service',
+          layer: 'app',
+          env: ['dev', 'prod'],
+          runtime: { dev: null, prod: null },
+          pointers: ['apps/svc/src'],
+          detected: 'package.json@svc',
+          ...over,
+        },
+      ],
+    });
+
+    it('a detected row keeps its hand runtime, name, kind, layer and hand pointer against a null/different candidate', () => {
+      const result = applyDetected(
+        docWith([handRow()]),
+        candFor({ runtime: { dev: 'docker', prod: null } }),
+        AT,
+      );
+      // CONTROL: `runtime: { dev: cand.runtime.dev ?? null, ... }` (the old overwrite) turns
+      // dev into 'docker' and prod into null, and name/kind/layer into the candidate's.
+      expect(result.updated).toEqual([]);
+      const row = result.doc.systems[0];
+      expect(row?.runtime).toEqual({ dev: 'my dev box', prod: 'my prod box' });
+      expect(row?.name).toBe('Hand Name');
+      expect(row?.kind).toBe('worker');
+      expect(row?.layer).toBe('edge');
+      expect(row?.pointers).toEqual(['docs/svc.md#Heading', 'apps/svc/src']);
+      expect(row?.source).toEqual({ detected: 'package.json', at: OLD });
+    });
+
+    it('a null runtime env is filled from the candidate; the other env keeps its hand text, and the row is restamped', () => {
+      const base = handRow();
+      const result = applyDetected(
+        docWith([{ ...base, runtime: { dev: 'my dev box', prod: null } }]),
+        candFor({ runtime: { dev: 'docker', prod: 'workers' } }),
+        AT,
+      );
+      expect(result.updated).toEqual(['svc']);
+      const row = result.doc.systems[0];
+      expect(row?.runtime).toEqual({ dev: 'my dev box', prod: 'workers' });
+      expect(row?.source).toEqual({ detected: 'package.json@svc', at: AT });
+    });
+
+    it('the same candidates over the flow-style file: updated [], doc unchanged, text byte-identical', () => {
+      const before = flowDoc();
+      const applied = applyDetected(before, sameCandidates(), AT);
+      expect(applied.updated).toEqual([]);
+      expect(applied.added).toEqual([]);
+      expect(writeSystemsText(FLOW, before, applied.doc)).toBe(FLOW);
+    });
+
+    it('one changed pointer: writeSystemsText changes only that row, serializeSystems rewrites the layout', () => {
+      const before = flowDoc();
+      const cands = sameCandidates();
+      const web = cands.systems[0];
+      if (!web) throw new Error('fixture missing web');
+      web.pointers = ['apps/web/src', 'apps/web/vite.config.ts'];
+      const applied = applyDetected(before, cands, AT);
+      expect(applied.updated).toEqual(['web']);
+
+      const inPlace = writeSystemsText(FLOW, before, applied.doc);
+      const full = serializeSystems(applied.doc);
+      const inPlaceChanged = changedLines(FLOW, inPlace);
+      const fullChanged = changedLines(FLOW, full);
+      // CONTROL: routing the write through serializeSystems gives `fullChanged`, far above 3.
+      expect(inPlaceChanged).toBeLessThanOrEqual(3);
+      expect(fullChanged).toBeGreaterThan(inPlaceChanged);
+      expect(inPlace).toContain('# acme systems map: hand comment');
+      expect(inPlace).toContain('    env: [dev, prod]');
+      expect(inPlace).toContain('"apps/web/vite.config.ts"');
+      expect(inPlace).toContain(`at: "${AT}"`);
+      // the other two rows and the connection are untouched lines.
+      expect(inPlace).toContain('    name: "acme db"');
+      // same document as the full serialization.
+      const a = parseSystems(inPlace);
+      const b = parseSystems(full);
+      expect(a.ok && b.ok && JSON.stringify(a.doc) === JSON.stringify(b.doc)).toBe(true);
+    });
+
+    it('applying twice: the second text is byte-identical to the first', () => {
+      const cands = sameCandidates();
+      const web = cands.systems[0];
+      if (!web) throw new Error('fixture missing web');
+      web.pointers = ['apps/web/src', 'apps/web/vite.config.ts'];
+      const before = flowDoc();
+      const applied = applyDetected(before, cands, AT);
+      const first = writeSystemsText(FLOW, before, applied.doc);
+      const reparsed = parseSystems(first);
+      if (!reparsed.ok) throw new Error('first write failed to reparse');
+      const again = applyDetected(reparsed.doc, cands, '2026-10-22T00:00:00Z');
+      expect(again.updated).toEqual([]);
+      expect(writeSystemsText(first, reparsed.doc, again.doc)).toBe(first);
+    });
+
+    it('writeSystemsText: null text is the full serialization; a new row is appended; a missing connections key is added', () => {
+      const empty = emptySystemsDoc();
+      expect(writeSystemsText(null, empty, empty)).toBe(serializeSystems(empty));
+
+      const text = ['environments:', '  dev: { note: null }', '  prod: { note: null }', ''].join(
+        '\n',
+      );
+      const before = parseSystems(text);
+      if (!before.ok) throw new Error('fixture failed to parse');
+      const applied = applyDetected(before.doc, sameCandidates(), AT);
+      const out = writeSystemsText(text, before.doc, applied.doc);
+      expect(out.startsWith('environments:\n  dev: { note: null }')).toBe(true);
+      const a = parseSystems(out);
+      expect(a.ok && a.doc.systems.map((r) => r.id)).toEqual(['web', 'api', 'db']);
+      expect(a.ok && a.doc.connections.length).toBe(1);
+      expect(out).toContain('connections:');
     });
   });
 });

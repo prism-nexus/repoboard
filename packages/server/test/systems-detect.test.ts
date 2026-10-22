@@ -4,7 +4,7 @@
  * candidate-file list through `resolveRepoPath`, and `runDetect` dry-runs by default, merging
  * into `.repoboard/systems.yml` with provenance only when `--apply` is given (non-negotiable 5).
  */
-import { mkdir, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import { mkdir, readdir, readFile, rm, stat, utimes, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { parseSystems } from '@repoboard/core';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -390,6 +390,56 @@ describe('systems detect (RCB-96)', () => {
 
       const ids = parsed.doc.systems.map((s) => s.id).sort();
       expect(ids).toEqual(EXPECTED_IDS); // worker kept (hand), the rest added around it
+    } finally {
+      await repo.cleanup();
+    }
+  });
+
+  it('RCB-232 --apply keeps hand text on a detected row and the flow-style layout; a second --apply writes nothing (mtime unchanged)', async () => {
+    const repo = await fixtureRepo();
+    try {
+      const path = join(repo.root, '.repoboard', 'systems.yml');
+      const handDoc = [
+        '# hand comment: stays',
+        'environments:',
+        '  dev: { note: null }',
+        '  prod: { note: null }',
+        'systems:',
+        '  - id: web',
+        '    name: "Hand Web"',
+        '    kind: client',
+        '    layer: client',
+        '    env: [dev, prod]',
+        '    runtime: { dev: "my vite box", prod: "my cdn" }',
+        '    pointers: ["docs/web.md#Heading"]',
+        '    source: { detected: "packages/web/package.json", at: "2026-01-01T00:00:00.000Z" }',
+        'connections: []',
+        '',
+      ].join('\n');
+      await writeFile(path, handDoc);
+
+      const res = await repoboard(repo.root, 'systems', 'detect', '--apply');
+      expect(res.code).toBe(0);
+      const text1 = await readFile(path, 'utf8');
+      // CONTROL: writing `serializeSystems(applied.doc)` turns these into block style and drops
+      // the comment; the old overwrite replaced the runtime text and the name.
+      expect(text1).toContain('# hand comment: stays');
+      expect(text1).toContain('    env: [dev, prod]');
+      expect(text1).toContain('    name: "Hand Web"');
+      expect(text1).toContain('    runtime: { dev: "my vite box", prod: "my cdn" }');
+      expect(text1).toContain('"docs/web.md#Heading"');
+      const parsed = parseSystems(text1);
+      expect(parsed.ok).toBe(true);
+      if (!parsed.ok) throw new Error('unreachable');
+      expect(parsed.doc.systems.map((r) => r.id).sort()).toEqual(EXPECTED_IDS);
+
+      // Nothing new: the second run neither changes the text nor touches the file.
+      const old = new Date('2026-01-02T00:00:00.000Z');
+      await utimes(path, old, old);
+      const res2 = await repoboard(repo.root, 'systems', 'detect', '--apply');
+      expect(res2.code).toBe(0);
+      expect(await readFile(path, 'utf8')).toBe(text1);
+      expect((await stat(path)).mtimeMs).toBe(old.getTime());
     } finally {
       await repo.cleanup();
     }

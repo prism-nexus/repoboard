@@ -657,6 +657,7 @@ estimate. Motivating measurement (plan §5 P8.4): a member repo's own `CLAUDE.md
 32,620 B — loaded into every turn of every subagent, including ones that never needed 151 lines
 of verification catalogue — before anyone measured it; it was cut to 4,996 B by hand on
 2026-09-17, the same day this task landed.
+What a seat then reads in its first tool calls, and how to cut it: docs/STARTUP-COST.md.
 
 Core (`packages/core/src/cost.ts`, pure — §0.5) does the extraction rule and the arithmetic;
 `packages/server/src/cost.ts` does the one `stat`/`readFile` per candidate, through the same

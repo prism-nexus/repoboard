@@ -285,6 +285,9 @@ NO `## Log` line, so the same event is never recorded twice.
 > subagents, `docs/SUBAGENTS.md` is the brief-and-control practice this board expects.
 > Architecture: `.repoboard/systems.yml` — `repoboard systems` lists it, `repoboard systems show
 > <id>` resolves a system's pointers; don't paste the file.
+> At start-up, read only your part (`repoboard seat <name>`, `repoboard inbox <name>`, the
+> broadcast lines) and open a decisions, log or memory file only when the task needs it —
+> `docs/STARTUP-COST.md`.
 
 ## 8. Everything else
 
@@ -319,6 +322,8 @@ Everything below is wire shapes, byte tables and RCB-nn history — read the mat
 - State, log, check — the full command table and `repoboard check`'s findings (P8.3) —
   docs/REFERENCE.md §3
 - Cost — what a cold agent loads, against a budget (P8.4) — docs/REFERENCE.md §4
+- Start-up cost — what a seat reads before its first answer, four trims, the measuring recipe —
+  docs/STARTUP-COST.md
 - Archive and issue sync — `repoboard archive`, `repoboard sync-issues` (P8.5) —
   docs/REFERENCE.md §5
 - Systems and the Flow view — `systems`, `systems show`, `systems detect`, the seat line, `check`'s

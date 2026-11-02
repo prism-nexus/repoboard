@@ -1065,6 +1065,31 @@ describe('repoboard mcp: get_state / set_state_section / append_repo_log / check
     expect(after).toContain('second entry');
   });
 
+  it('append_repo_log (RCB-233): a clean write has no `warnings` key; a far typed time returns them; timezone prefixes the title', async () => {
+    const repo = await makeTempRepoboard({});
+    cleanups.push(repo.cleanup);
+    await writeFile(
+      join(repo.root, '.repoboard', 'board.yml'),
+      `${serializeBoard(defaultBoardConfig())}timezone: America/Los_Angeles\n`,
+    );
+    const r = await rigOn(repo);
+    // NOW is 2026-09-02T22:41:10Z: 3:41 pm PDT on 09-02.
+    const clean = await r.json<Record<string, unknown>>('append_repo_log', {
+      seat: 'ops',
+      text: 'body',
+      title: 'kickoff',
+    });
+    expect(Object.keys(clean).sort()).toEqual(['block', 'date', 'restamped']);
+    expect((clean.block as { title: string }).title).toBe('3:41 pm PDT 09-02 \u00b7 kickoff');
+
+    const far = await r.json<{ warnings: string[] }>('append_repo_log', {
+      seat: 'ops',
+      text: 'body',
+      title: 'stand-up 22:10Z',
+    });
+    expect(far.warnings).toEqual(['title time 22:10Z is 31 min from the stamp 22:41:10Z']);
+  });
+
   it('empty seat/text is an error result', async () => {
     const r = await rig();
     expect((await r.call('append_repo_log', { seat: '  ', text: 'x' })).isError).toBe(true);

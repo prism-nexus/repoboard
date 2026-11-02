@@ -188,6 +188,11 @@ export interface BoardConfig {
    * today's behaviour, byte-identical; a configured path that does not exist reads as empty,
    * never an error. */
   logDir?: string;
+  /** RCB-233: the board's IANA time zone (`America/Los_Angeles`). With it, `repoboard log` puts the
+   * board's local time at the front of every NEW heading title (`8:07 pm PST 11-01 · …`), so a
+   * seat never types it. An unknown zone name is dropped by `parseBoard` with one warning (it
+   * reads as absent). Absent means today's heading, byte-identical. */
+  timezone?: string;
   /** P8.4: `repoboard cost`'s budget for the root `CLAUDE.md`, in bytes. A CLI `--budget` flag
    * wins over this; absent here AND on the flag means `DEFAULT_CLAUDE_MD_BUDGET_BYTES` (cost.ts). */
   claudeMdBudgetBytes?: number;

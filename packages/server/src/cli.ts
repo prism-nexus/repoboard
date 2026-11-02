@@ -282,7 +282,13 @@ Usage:
                                         RCB-198: with a local layer, refused (exit 1, nothing
                                         written) from a pane that does not hold <seat>, naming
                                         both panes, unless --force (audited in the log); a seat
-                                        with no recorded holder is writable by anyone
+                                        with no recorded holder is writable by anyone;
+                                        RCB-233: with board.yml \`timezone: <IANA zone>\` (e.g.
+                                        America/Los_Angeles) the heading title starts with the
+                                        board's local time ("8:07 pm PST 11-01 · …") — do not
+                                        type it; a typed H:MMZ / H:MxZ (or, with timezone, h:mm
+                                        am|pm) in the title more than 5 min from the stamp prints
+                                        \`warning: …\` on stderr, exit 0, the block still written
   repoboard log show [--date YYYY-MM-DD] [--seat s] [--since ts] [--tail n] [--json]
                                         print a day's log (default today); --seat narrows to one
                                         seat, --since to blocks whose ts >= ts (full ISO-8601, or
@@ -2207,6 +2213,9 @@ async function cmdLogAppend(args: string[], io: CliIO): Promise<number> {
     if (res.refused === true) return refuseWith(io, res.error);
     throw new UserError(res.error);
   }
+  // RCB-233: a typed title time far from the stamp, or a `timezone:` the board could not use. The
+  // block is written; this is the writer's chance to correct the title with a second block.
+  for (const w of res.warnings) (io.stderr ?? io.stdout).write(`warning: ${w}\n`);
   // RCB-83: same rule as `seat --up/--down` — sync .repoboard/local/ after the write, a no-op
   // when there is no local layer.
   if (await hasLocal(root)) {

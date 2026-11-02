@@ -156,6 +156,7 @@ export {
   formatLogLine,
   formatNoteLine,
 } from './log.js';
+export { isValidTimeZone, localTitleStamp, titleTimeWarnings } from './log-time.js';
 export type { AddNoteOptions, AddNoteResult } from './notes.js';
 export { addNote } from './notes.js';
 export type { GateMemberFacts, GateState } from './phases.js';

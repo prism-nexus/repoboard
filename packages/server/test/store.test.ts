@@ -1226,6 +1226,110 @@ describe('appendSeatLog (RCB-127): log --as <seat> restamps STATE.md when that s
   // fails once the restamp fixes the stamp too). See cli.test.ts for the CLI-facing half.
 });
 
+describe('log title: board.yml timezone (RCB-233)', () => {
+  // NOW is 2026-09-02T22:41:10Z: 3:41 pm PDT on 09-02 in America/Los_Angeles.
+  const LOCAL = '3:41 pm PDT 09-02';
+
+  /** A repo whose board.yml carries `extra` (raw YAML text) on top of the defaults. */
+  async function repoWithBoard(extra: string): Promise<TempRepo> {
+    const repo = await repoWith({});
+    await writeFile(
+      join(repo.root, '.repoboard', 'board.yml'),
+      `${serializeBoard(defaultBoardConfig())}${extra}`,
+    );
+    return repo;
+  }
+
+  it('with a timezone the heading title starts with the local time, typed title or first line', async () => {
+    const repo = await repoWithBoard('timezone: America/Los_Angeles\n');
+    const store = await open(repo, false);
+    const tag = repoName(repo);
+    const typed = await store.appendRepoLog('ops', 'body', 'kickoff');
+    expect(typed.ok).toBe(true);
+    if (!typed.ok) return;
+    expect(typed.text).toBe(
+      `# Log — 2026-09-02\n\n##### [${tag}] OPS 2026-09-02T22:41:10Z: ${LOCAL} · kickoff\n\nbody\n`,
+    );
+    expect(typed.block.title).toBe(`${LOCAL} · kickoff`);
+    expect(typed.warnings).toEqual([]);
+
+    const untitled = await store.appendRepoLog('ops', 'first line\nsecond line', undefined);
+    expect(untitled.ok).toBe(true);
+    if (!untitled.ok) return;
+    const onDisk = await readFile(join(repo.root, '.repoboard', 'log', '2026-09-02.md'), 'utf8');
+    expect(onDisk).toContain(
+      `OPS 2026-09-02T22:41:10Z: ${LOCAL} · first line\n\nfirst line\nsecond line`,
+    );
+    expect(untitled.block.title).toBe(`${LOCAL} · first line`);
+  });
+
+  it('without a timezone the heading is byte-identical to before, and a clean title warns nothing', async () => {
+    const repo = await repoWith({});
+    const store = await open(repo, false);
+    const tag = repoName(repo);
+    const res = await store.appendRepoLog('ops', 'body', 'kickoff');
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    expect(res.text).toBe(
+      `# Log — 2026-09-02\n\n##### [${tag}] OPS 2026-09-02T22:41:10Z: kickoff\n\nbody\n`,
+    );
+    expect(res.warnings).toEqual([]);
+    const untitled = await store.appendRepoLog('ops', 'only line', undefined);
+    expect(untitled.ok && untitled.block.title).toBe('only line');
+  });
+
+  it('a typed time far from the stamp is a warning on the outcome, and the block is still written', async () => {
+    const repo = await repoWithBoard('timezone: America/Los_Angeles\n');
+    const store = await open(repo, false);
+    const res = await store.appendSeatLog('ops', 'body', 'stand-up 22:10Z');
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    expect(res.warnings).toEqual(['title time 22:10Z is 31 min from the stamp 22:41:10Z']);
+    const onDisk = await readFile(join(repo.root, '.repoboard', 'log', '2026-09-02.md'), 'utf8');
+    expect(onDisk).toContain(`${LOCAL} · stand-up 22:10Z`);
+  });
+
+  it("warnings read the title as TYPED: the tool's own local-time prefix never stands in for it", async () => {
+    const repo = await repoWithBoard('timezone: America/Los_Angeles\n');
+    const store = await open(repo, false);
+    // A typed local time far from 3:41 pm. If the prefix were read first, it would match itself.
+    const res = await store.appendRepoLog('ops', 'body', 'stand-up 9:30 am');
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    expect(res.warnings).toHaveLength(1);
+    expect(res.warnings[0]).toMatch(
+      /^title time 9:30 am is \d+ min from the stamp 3:41:10 pm PDT$/,
+    );
+  });
+
+  it('without a timezone only the UTC form is judged, and a title read from the text counts', async () => {
+    const repo = await repoWith({});
+    const store = await open(repo, false);
+    const local = await store.appendRepoLog('ops', 'body', 'stand-up 9:30 am');
+    expect(local.ok && local.warnings).toEqual([]);
+    const fromText = await store.appendRepoLog('ops', '22:10Z\nmore', undefined);
+    expect(fromText.ok && fromText.warnings).toEqual([
+      'title time 22:10Z is 31 min from the stamp 22:41:10Z',
+    ]);
+  });
+
+  it('an unknown timezone reads as absent: heading unprefixed, one warning on every log write', async () => {
+    const repo = await repoWithBoard('timezone: Mars/Olympus_Mons\n');
+    const store = await open(repo, false);
+    expect(store.config.timezone).toBeUndefined();
+    const tag = repoName(repo);
+    const res = await store.appendRepoLog('ops', 'body', 'kickoff');
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    expect(res.text).toContain(`##### [${tag}] OPS 2026-09-02T22:41:10Z: kickoff\n`);
+    expect(res.warnings).toHaveLength(1);
+    expect(res.warnings[0]).toContain('board.yml');
+    expect(res.warnings[0]).toContain('Mars/Olympus_Mons');
+    const again = await store.appendRepoLog('ops', 'body', 'again');
+    expect(again.ok && again.warnings).toEqual(res.warnings);
+  });
+});
+
 describe('RCB-171: a checkout whose gitignored local layer is missing (git worktree / fresh clone)', () => {
   // The hazard: the root `.gitignore` says `.repoboard/local/` is private, but that directory is
   // absent here, so a write that CREATES STATE.md / the log directory would put private state into

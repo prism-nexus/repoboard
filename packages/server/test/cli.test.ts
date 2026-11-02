@@ -2623,6 +2623,80 @@ describe('repoboard log', () => {
     expect(shown2.out).toContain('first entry');
   });
 
+  // RCB-233. NOW is 2026-09-02T22:41:10Z: 3:41 pm PDT on 09-02 in America/Los_Angeles.
+  describe("RCB-233: the board's local time in the title, and a warning for a far typed time", () => {
+    async function repoWithTimezone(): Promise<string> {
+      const root = await freshRepo({});
+      await writeFile(
+        join(root, '.repoboard', 'board.yml'),
+        `${serializeBoard(defaultBoardConfig())}timezone: America/Los_Angeles\n`,
+      );
+      return root;
+    }
+
+    it('with timezone: the heading title starts with the local time; no warning, stderr empty', async () => {
+      const root = await repoWithTimezone();
+      const tag = repoTagFor(root);
+      const res = await repoboard(root, 'log', '--as', 'ops', '--title', 'kickoff', 'entry');
+      expect(res.code).toBe(0);
+      expect(res.err).toBe('');
+      const shown = await repoboard(root, 'log', 'show');
+      expect(shown.out).toContain(
+        `##### [${tag}] OPS 2026-09-02T22:41:10Z: 3:41 pm PDT 09-02 \u00b7 kickoff`,
+      );
+    });
+
+    it('without timezone: the heading is exactly the typed title, stderr empty', async () => {
+      const root = await freshRepo({});
+      const tag = repoTagFor(root);
+      const res = await repoboard(root, 'log', '--as', 'ops', '--title', 'kickoff', 'entry');
+      expect(res.code).toBe(0);
+      expect(res.err).toBe('');
+      const shown = await repoboard(root, 'log', 'show');
+      expect(shown.out).toContain(`##### [${tag}] OPS 2026-09-02T22:41:10Z: kickoff\n`);
+    });
+
+    it('a typed time far from the stamp: warning on stderr, exit 0, block written', async () => {
+      const root = await repoWithTimezone();
+      const res = await repoboard(
+        root,
+        'log',
+        '--as',
+        'ops',
+        '--title',
+        'stand-up 22:10Z',
+        'entry',
+      );
+      expect(res.code).toBe(0);
+      expect(res.err).toBe('warning: title time 22:10Z is 31 min from the stamp 22:41:10Z\n');
+      expect(res.out).toBe(`logged 2026-09-02 [${repoTagFor(root)}] ops\n`);
+      const shown = await repoboard(root, 'log', 'show');
+      expect(shown.out).toContain('3:41 pm PDT 09-02 \u00b7 stand-up 22:10Z');
+    });
+
+    it('an unknown timezone: one warning on stderr per write, exit 0, heading unprefixed', async () => {
+      const root = await freshRepo({});
+      await writeFile(
+        join(root, '.repoboard', 'board.yml'),
+        `${serializeBoard(defaultBoardConfig())}timezone: Mars/Olympus_Mons\n`,
+      );
+      const res = await repoboard(root, 'log', '--as', 'ops', '--title', 'kickoff', 'entry');
+      expect(res.code).toBe(0);
+      expect(res.err).toMatch(/^warning: \.repoboard\/board\.yml: timezone: "Mars\/Olympus_Mons" /);
+      expect(res.err.trim().split('\n')).toHaveLength(1);
+      const shown = await repoboard(root, 'log', 'show');
+      expect(shown.out).toContain(
+        `##### [${repoTagFor(root)}] OPS 2026-09-02T22:41:10Z: kickoff\n`,
+      );
+    });
+
+    it('--help names the timezone: key', async () => {
+      const root = await freshRepo({});
+      const help = await repoboard(root, '--help');
+      expect(help.out).toContain('timezone: <IANA zone>');
+    });
+  });
+
   it('--stdin reads the text from stdin', async () => {
     const root = await freshRepo({});
     const res = await repoboardStdin(root, 'from stdin', 'log', '--as', 'ops', '--stdin');

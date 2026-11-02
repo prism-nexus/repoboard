@@ -1193,7 +1193,13 @@ export function createMcpServer(opts: McpServerOptions): McpServer {
       // refuses a seat another pane holds without it, naming both labels.
       const res = await store.appendSeatLog(named.name, text, title, holder, { force });
       if (!res.ok) return fail(res.error);
-      return ok({ date: res.date, block: res.block, restamped: res.restamped });
+      // RCB-233: `warnings` only when there are some, so a clean write answers exactly as before.
+      return ok({
+        date: res.date,
+        block: res.block,
+        restamped: res.restamped,
+        ...(res.warnings.length > 0 ? { warnings: res.warnings } : {}),
+      });
     },
   );
 

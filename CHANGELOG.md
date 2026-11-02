@@ -39,6 +39,16 @@ All notable changes to this project are documented in this file. The format is b
   and comments survive. A run that changes nothing restamps nothing and does not write the file.
   On a 12-detected-row file the first apply changed 77 lines, where a full re-serialize changes 788.
 
+### Security
+
+- **`dompurify` raised to 3.4.17 (RCB-234)** in the web bundle, for GHSA-cg2g-xh64-v4q7,
+  GHSA-mrv2-3pqr-j5jr and GHSA-c6gr-qvv4-5v3f.
+- **`zod` raised to 4.6.6 or later (RCB-234)** in `repoboard` and `@repoboard/core`, for
+  GHSA-mrhx-c7xc-m3w5.
+- Dev-only dependencies raised: `vite`, `vitest` and `@vitest/coverage-v8`,
+  `@modelcontextprotocol/sdk` and its `body-parser`, `ip-address`, `fast-uri` and `qs`, and
+  `undici` (the RCB-189 override floor, now `^8.12.2`). None ships in the published package.
+
 ## [0.3.3] — 2026-10-06
 
 ### Changed

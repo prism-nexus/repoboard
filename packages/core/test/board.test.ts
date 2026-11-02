@@ -454,3 +454,39 @@ describe('workspace: key (RCB-184)', () => {
     if (!parsed.ok) expect(parsed.error).toMatch(/^workspace: /);
   });
 });
+
+describe('timezone: key (RCB-233)', () => {
+  it("absent: no key in the config, no warnings field, none written back — today's board byte for byte", () => {
+    const parsed = parseBoard('prefix: RB\n');
+    expect(parsed.ok && 'warnings' in parsed).toBe(false);
+    expect(parsed.ok && parsed.config.timezone).toBeUndefined();
+    expect(serializeBoard(defaultBoardConfig())).not.toContain('timezone');
+  });
+
+  it('a known zone parses, trims, round-trips, and is written after logDir', () => {
+    const parsed = parseBoard('prefix: RB\ntimezone: " America/Los_Angeles "\nlogDir: docs/log\n');
+    if (!parsed.ok) throw new Error(parsed.error);
+    expect(parsed.config.timezone).toBe('America/Los_Angeles');
+    expect('warnings' in parsed).toBe(false);
+    const text = serializeBoard(parsed.config);
+    expect(text).toContain('timezone: America/Los_Angeles\n');
+    expect(text.indexOf('logDir:')).toBeLessThan(text.indexOf('timezone:'));
+    const again = parseBoard(text);
+    expect(again.ok && again.config.timezone).toBe('America/Los_Angeles');
+  });
+
+  it('an unknown zone reads as absent, with exactly one warning that names it; the board still loads', () => {
+    const parsed = parseBoard('prefix: RB\ntimezone: Mars/Olympus_Mons\nlogDir: docs/log\n');
+    if (!parsed.ok) throw new Error(parsed.error);
+    expect('timezone' in parsed.config).toBe(false);
+    expect(parsed.config.logDir).toBe('docs/log');
+    expect(parsed.warnings).toHaveLength(1);
+    expect(parsed.warnings?.[0]).toContain('Mars/Olympus_Mons');
+  });
+
+  it('an empty value is an error naming the key, like every other string key', () => {
+    const parsed = parseBoard('prefix: RB\ntimezone: ""\n');
+    expect(parsed.ok).toBe(false);
+    if (!parsed.ok) expect(parsed.error).toMatch(/^timezone: /);
+  });
+});

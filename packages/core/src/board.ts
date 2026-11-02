@@ -1,6 +1,7 @@
 import * as YAML from 'yaml';
 import { z } from 'zod';
 import { DEFAULT_IDENTITY_ENV } from './holder.js';
+import { isValidTimeZone } from './log-time.js';
 import type { BoardConfig, Column, Sibling, WorkspaceRepo } from './types.js';
 
 export const ColumnSchema = z.looseObject({
@@ -108,6 +109,10 @@ export const BoardConfigSchema = z
     /** P8.6: an extra daily-log directory `check` reads alongside `.repoboard/log/`, relative to
      * the repo root (e.g. `docs/log`). Absent = today's behaviour, unchanged. */
     logDir: z.string().trim().min(1, 'must not be empty').optional(),
+    /** RCB-233: the board's IANA time zone, for the local time `repoboard log` puts in a heading
+     * title. Only "is it a string" is the schema's; whether the runtime knows the NAME is
+     * `parseBoard`'s warn-and-drop, so a typo costs the prefix, not the whole board. */
+    timezone: z.string().trim().min(1, 'must not be empty').optional(),
     /** RCB-153 W1: member boards this one coordinates. Absent = not a workspace. */
     repos: z.array(WorkspaceRepoSchema).optional(),
     /** RCB-184: this member's home board — its root relative to this repo's root. Absent = none. */
@@ -145,7 +150,13 @@ export const BoardConfigSchema = z
     });
   });
 
-export type BoardParseResult = { ok: true; config: BoardConfig } | { ok: false; error: string };
+/**
+ * `warnings` is present only when there is one (RCB-233: a `timezone:` this runtime does not know,
+ * dropped from `config`), so a result with none is byte-for-byte what it was before.
+ */
+export type BoardParseResult =
+  | { ok: true; config: BoardConfig; warnings?: string[] }
+  | { ok: false; error: string };
 
 function formatIssue(issue: z.core.$ZodIssue): string {
   const path = issue.path.map(String).join('.');
@@ -168,6 +179,15 @@ export function parseBoard(text: string): BoardParseResult {
   if (!result.success) {
     return { ok: false, error: result.error.issues.map(formatIssue).join('; ') };
   }
+  const { timezone, ...rest } = result.data;
+  if (timezone !== undefined && !isValidTimeZone(timezone)) {
+    // RCB-233: an unknown zone reads as absent, with one warning — the board still loads.
+    return {
+      ok: true,
+      config: rest,
+      warnings: [`timezone: "${timezone}" is not a time zone this runtime knows; ignored`],
+    };
+  }
   return { ok: true, config: result.data };
 }
 
@@ -181,6 +201,7 @@ const CONFIG_ORDER = [
   'activeWindowMinutes',
   'claudeMdBudgetBytes',
   'logDir',
+  'timezone',
   'seats',
   'columns',
 ] as const;

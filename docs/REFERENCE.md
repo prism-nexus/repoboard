@@ -320,6 +320,7 @@ block below — the three surfaces cannot disagree on the format. `repoboard sta
 A log block is `##### <SEAT-UPPERCASED> <ISO>: <title or first line>`, a blank line, then the text
 verbatim — append-only, so a hand `sed` can add to it but core exposes no rewrite. `--as` on `log`
 uses the same actor chain as everywhere else (`$REPOBOARD_ACTOR`, then `$USER`, then `cli`).
+`board.yml`'s `timezone:` (RCB-233; IANA, e.g. `America/Los_Angeles`) makes `log` start every new heading title with the board's local time (`8:07 pm PST 11-01 · …`) so nobody types it; a typed `H:MMZ`/`H:MxZ` (with `timezone:`, also `h:mm am|pm`) in the title more than 5 minutes from the stamp prints `warning: …` on stderr (MCP: `warnings`), exit 0, block written; an unknown zone reads as absent with one warning.
 
 Rig facts — the vitest lock protocol, the port map, the restart rule, seat names and `--as`
 values, subagent policy, the per-landing gate — live in one place, written once: `.repoboard/local/RIG.md` (the local layer, RCB-83)

@@ -69,6 +69,7 @@ import {
   type LogFileInfo,
   lastBlockFor,
   listSeats,
+  localTitleStamp,
   moveCard,
   NO_PANE_TAG,
   normalizeSeatName,
@@ -117,6 +118,7 @@ import {
   systemsSummary,
   type TakeLeaseInput,
   takeLease,
+  titleTimeWarnings,
   toIso,
   unackedAddresses,
   updateCard,
@@ -347,16 +349,27 @@ export type SetColumnsOutcome =
   | { ok: true; config: BoardConfig }
   | { ok: false; error: string; readOnly?: boolean };
 
-/** P8.3: `appendRepoLog` outcome. */
+/**
+ * P8.3: `appendRepoLog` outcome. RCB-233: `warnings` are lines for the writer — a typed time in
+ * the title far from the stamp, or a `timezone:` the board could not use — and the block is
+ * written either way; `[]` when there is nothing to say.
+ */
 export type AppendRepoLogOutcome =
-  | { ok: true; date: string; text: string; block: LogBlock }
+  | { ok: true; date: string; text: string; block: LogBlock; warnings: string[] }
   | { ok: false; error: string; readOnly?: boolean };
 
 /** RCB-127: `appendSeatLog` outcome — `AppendRepoLogOutcome`'s ok branch plus whether STATE.md
  * got restamped (only when `seat` had an UP bullet in SEATS at the moment of the call). RCB-198:
  * `refused` marks the holder-only refusal, as in `SetSeatOutcome`. */
 export type AppendSeatLogOutcome =
-  | { ok: true; date: string; text: string; block: LogBlock; restamped: boolean }
+  | {
+      ok: true;
+      date: string;
+      text: string;
+      block: LogBlock;
+      restamped: boolean;
+      warnings: string[];
+    }
   | { ok: false; error: string; readOnly?: boolean; refused?: boolean };
 
 /** RCB-132: `state --trim-landings --archive <path>` outcome — `path` is relative to `root`. */
@@ -702,6 +715,9 @@ export class CardStore extends EventEmitter<StoreEvents> {
   private linkedWorktreeCheck: Promise<void> | null = null;
 
   private cfg: BoardConfig = defaultBoardConfig();
+  /** RCB-233: what `parseBoard` said about the `board.yml` now in `cfg` (an unknown `timezone:`),
+   * kept so a log write — which has no listener on `'warning'` — can hand it to its writer. */
+  private configWarnings: string[] = [];
   private leasesDoc: LeasesDoc = { leases: [], windows: [] };
   private stateDoc: StateDoc | null = null;
   /** RCB-97: `.repoboard/systems.yml`'s parsed doc, `null` when absent OR invalid — an invalid
@@ -1931,7 +1947,18 @@ export class CardStore extends EventEmitter<StoreEvents> {
     const date = toIso(now).slice(0, 10);
     const ts = toIso(now);
     const repo = boardDisplayName(this.cfg, this.root);
-    const block = formatLogBlock({ seat, ts, title, text: line, repo });
+    // RCB-233: the title as the seat TYPED it (`formatLogBlock`'s own rule: an explicit non-empty
+    // title, else the text's first line). It is what `titleTimeWarnings` reads, before any prefix.
+    const given = title?.trim();
+    const typedTitle =
+      given !== undefined && given.length > 0 ? given : (line.split('\n', 1)[0] ?? '').trim();
+    const timezone = this.cfg.timezone;
+    // RCB-233: with a `timezone:`, the board's local time leads every NEW heading title. No
+    // `timezone:` hands `title` on untouched — the heading is byte-identical to before this card.
+    const writtenTitle =
+      timezone !== undefined ? `${localTitleStamp(ts, timezone)} · ${typedTitle}` : title;
+    const warnings = [...this.configWarnings, ...titleTimeWarnings(typedTitle, ts, timezone)];
+    const block = formatLogBlock({ seat, ts, title: writtenTitle, text: line, repo });
     // RCB-196: the day's file is READ inside `writeLog`'s cross-process lock, so a block another
     // process appended a moment ago is never overwritten by a stale copy read out here.
     const next = await this.writeLog(date, (existing) =>
@@ -1946,10 +1973,11 @@ export class CardStore extends EventEmitter<StoreEvents> {
       block: parsedBlock ?? {
         seat: seat.toUpperCase(),
         ts,
-        title: title ?? line,
+        title: writtenTitle ?? line,
         text: line,
         repo,
       },
+      warnings,
     };
   }
 
@@ -2791,6 +2819,7 @@ export class CardStore extends EventEmitter<StoreEvents> {
       await writeFile(tmp, text, 'utf8');
       await rename(tmp, this.boardPath);
       this.cfg = parsed.config;
+      this.configWarnings = [];
       this.boardHash = sha1(text);
       this.emit('config', this.cfg);
       const event: Event = {
@@ -3224,6 +3253,7 @@ export class CardStore extends EventEmitter<StoreEvents> {
     } catch (e) {
       if ((e as NodeJS.ErrnoException).code !== 'ENOENT') throw e;
       this.cfg = defaultBoardConfig();
+      this.configWarnings = [];
       this.boardHash = null;
       return { changed: true };
     }
@@ -3233,6 +3263,10 @@ export class CardStore extends EventEmitter<StoreEvents> {
     const res = parseBoard(text);
     if (res.ok) {
       this.cfg = res.config;
+      this.configWarnings = (res.warnings ?? []).map(
+        (w) => `${relative(this.root, this.boardPath)}: ${w}`,
+      );
+      for (const w of this.configWarnings) this.emit('warning', w);
     } else {
       // Keep the last good config rather than turning the board into nothing.
       this.emit('warning', `${relative(this.root, this.boardPath)}: ${res.error}`);

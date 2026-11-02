@@ -5,6 +5,40 @@ All notable changes to this project are documented in this file. The format is b
 
 ## [Unreleased]
 
+## [0.3.4] — 2026-11-02
+
+### Added
+
+- **A card priority `prod`, above `high` (RCB-229).** `card list`, the OWNER QUEUE, `state` and
+  the seat bundle's next card and open decisions put `prod` cards first, in a stable partition,
+  so with no `prod` card every order is unchanged. The CLI, MCP and HTTP priority lists all derive
+  from core's one `PrioritySchema`. The dashboard marks a `prod` card with a filled chip.
+- **`repoboard inbox <seat>` (RCB-230)** lists the log lines that address a seat (`TO <SEAT>`,
+  anywhere in a line) which that seat has not ACKed, across days, over a 48 h default window
+  (`--since` to widen it, `--json`). Exit 0 when nothing is pending, 3 when something is. `check`
+  gains the warning `address-to-down-seat` for a DOWN seat with unacked addresses.
+- **Log titles can carry the board's local time (RCB-233).** With a new `board.yml` key,
+  `timezone:` (IANA), every new `repoboard log` / `append_repo_log` title starts with the local
+  time (`10:15 pm PST 11-01 · <title>`). With or without the key, a typed `H:MMZ` in a title more
+  than 5 min from the block's stamp prints one `warning:` line; the block is still written. Without
+  `timezone:` the heading is byte-identical to before.
+
+### Changed
+
+- **`archive` appends one log block (RCB-231)**, attributed to the actor (`--as`,
+  `$REPOBOARD_ACTOR`, `$USER`, `cli`) and naming the count, the cutoff and every archived id. A
+  failed log write leaves the moves standing and prints a warning. `--dry-run` and a run that
+  moves nothing write no log.
+
+### Fixed
+
+- **`systems detect --apply` keeps hand text on a detected row and the file's layout (RCB-232).**
+  An updated detected row used to take `runtime`, `name`, `kind`, `layer`, `env` and `pointers`
+  from the candidate, so hand-written runtime text became `null`. It now keeps them, and only
+  fills a null `runtime` env or `via`. The file is edited in place, so flow-style lists, quoting
+  and comments survive. A run that changes nothing restamps nothing and does not write the file.
+  On a 12-detected-row file the first apply changed 77 lines, where a full re-serialize changes 788.
+
 ## [0.3.3] — 2026-10-06
 
 ### Changed
